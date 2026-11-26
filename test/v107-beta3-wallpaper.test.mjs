@@ -1809,12 +1809,16 @@ test('red-team #229 [P1-2] & #230 [P0-1, P1-7, P2-3, P2-4]: no bootWpCfg token i
   assert.ok(getConfigCalls > prevCalls, 'sync() must always call refresh() when bridge is online even if bootCfg has mediaUrl');
   assert.equal(client.getState().rev, 3);
 
-  // blurPx === 0 sets --ag-prism-wp-filter: none; blurPx === 8 sets blur(8px)
-  assert.equal(env.html.style.getPropertyValue('--ag-prism-wp-filter'), 'none');
+  // blurPx === 0 sets --ag-prism-wp-filter: none; blurPx === 8 sets blur(8px) on #ag-prism-wallpaper-root (0 writes to html.style)
+  const wpRootNode = env.doc.getElementById('ag-prism-wallpaper-root');
+  assert.ok(wpRootNode, 'Wallpaper root element must exist');
+  assert.equal(env.html.style.getPropertyValue('--ag-prism-wp-filter'), '', 'Must not write --ag-prism-wp-filter to html.style');
+  assert.equal(wpRootNode.style.getPropertyValue('--ag-prism-wp-filter'), 'none');
   client.previewVisualVars({ blurPx: 8 });
-  assert.equal(env.html.style.getPropertyValue('--ag-prism-wp-filter'), 'blur(8px)');
+  assert.equal(env.html.style.getPropertyValue('--ag-prism-wp-filter'), '', 'previewVisualVars must not touch html.style');
+  assert.equal(wpRootNode.style.getPropertyValue('--ag-prism-wp-filter'), 'blur(8px)');
   client.previewVisualVars({ blurPx: 0 });
-  assert.equal(env.html.style.getPropertyValue('--ag-prism-wp-filter'), 'none');
+  assert.equal(wpRootNode.style.getPropertyValue('--ag-prism-wp-filter'), 'none');
 
   // doc.hasFocus() === false at init pauses video; passive pointerdown resets winBlurred = false and resumes playback
   const vid = env.doc.querySelector('#ag-prism-wallpaper-root video');

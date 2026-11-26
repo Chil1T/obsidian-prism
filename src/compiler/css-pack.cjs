@@ -592,9 +592,96 @@ function applyBatchPhraseReplacements(work, freq, freeTokens, dict, tokChars, co
   return { work: curWork, added: accepted.length };
 }
 
+const CSS_BUCKET_ORDER = Object.freeze([
+  'core', 'paletteWarm', 'paletteHost', 'accentCustom', 'convRipple', 'thoughtExt', 'viewHome', 'viewSidebar', 'viewSettings', 'motionOff', 'motionSubtle', 'motionFull', 'themeLight',
+]);
+const CSS_BUCKET_MARK_PREFIX = '/*@ag:';
+const VIEW_HOME_RE = /(?:\.agy-home\b|\.ag-cs-home-|\.ag-cs-quota-|\.ag-cs-qbar-|\[data-ag-cs-home=)/;
+const VIEW_SIDEBAR_RE = /(?:\[data-ag-cs-sidebar="on"\]|\.ag-cs-sb-more-|\[data-ag-sb-more-)/;
+const VIEW_SETTINGS_RE = /(?:#ag-cs-settings-sec\b|\[data-ag-cs-settings-dlg="1"\]|\bdiv\[role="dialog"\]|\.agy-dialog\b)/;
+const THOUGHT_EXT_RE = /(?:\.ag-prism-thought-|\[data-ag-prism-thought-view=)/;
+
+// 词法安全地切分顶层 CSS 规则并按主题/视图/动效归类分片
+function splitTopLevelCssRules(css) {
+  const rules = [];
+  for (let i = 0, st = 0, d = 0, n = css.length; i < n; i++) {
+    const c = css[i];
+    if (c === '\\') { i++; continue; }
+    if (c === '"' || c === "'") { for (i++; i < n && css[i] !== c; i++) if (css[i] === '\\') i++; continue; }
+    if (c === '/' && css[i + 1] === '*') { for (i += 2; i < n && !(css[i] === '*' && css[i + 1] === '/'); i++); i++; continue; }
+    if (c === '{') d++;
+    else if (c === '}') { if (d > 0) d--; if (d === 0) { const s = css.slice(st, i + 1).trim(); if (s) rules.push(s); st = i + 1; } }
+    else if (c === ';' && d === 0) { const s = css.slice(st, i + 1).trim(); if (s) rules.push(s); st = i + 1; }
+    if (i === n - 1 && st < n) { const t = css.slice(st).trim(); if (t) rules.push(t); }
+  }
+  return rules;
+}
+
+function stripNotPseudos(sel) {
+  let out = '';
+  for (let i = 0; i < sel.length; i++) {
+    if (sel.startsWith(':not(', i)) {
+      for (let d = 1, j = i + 5; j < sel.length && d > 0; j++) {
+        if (sel[j] === '\\') { j++; continue; }
+        if (sel[j] === '(') d++; else if (sel[j] === ')') d--;
+        i = j;
+      }
+      continue;
+    }
+    out += sel[i];
+  }
+  return out;
+}
+
+function splitSelectorTopCommas(sel) {
+  const parts = [];
+  for (let i = 0, st = 0, d = 0, n = sel.length; i <= n; i++) {
+    const c = i < n ? sel[i] : ',';
+    if (c === '\\') { i++; continue; }
+    if (c === '"' || c === "'") { for (i++; i < n && sel[i] !== c; i++) if (sel[i] === '\\') i++; continue; }
+    if (c === '(' || c === '[') d++;
+    else if ((c === ')' || c === ']') && d > 0) d--;
+    else if (c === ',' && d === 0) { const p = sel.slice(st, i).trim(); if (p) parts.push(p); st = i + 1; }
+  }
+  return parts;
+}
+
+function classifyCssRule(rule) {
+  if (rule[0] === '@') return (rule.startsWith('@media') || rule.startsWith('@supports')) && rule.includes('.ag-cs-home-') ? 'viewHome' : 'core';
+  const brace = rule.indexOf('{'), rawSel = brace > 0 ? rule.slice(0, brace) : rule, posSel = stripNotPseudos(rawSel);
+  if (posSel.includes('[data-ag-cs-theme="light"]')) return 'themeLight';
+  if (posSel.includes('[data-ag-cs-palette="warm"]') && !posSel.includes('[data-ag-cs-palette="obsidian"]') && !posSel.includes('[data-ag-cs-palette="host"]')) return 'paletteWarm';
+  if (posSel.includes('[data-ag-cs-palette="host"]') && !posSel.includes('[data-ag-cs-palette="obsidian"]') && !posSel.includes('[data-ag-cs-palette="warm"]')) return 'paletteHost';
+  if (posSel.includes('[data-ag-cs-motion="subtle"]')) return 'motionSubtle';
+  if (posSel.includes('[data-ag-cs-motion="standard"]') || posSel.includes('[data-ag-cs-motion="ultra"]')) return 'motionFull';
+  if (posSel.includes('[data-ag-cs-motion="off"]') && !posSel.includes('[data-ag-cs-win-blur="1"]')) return 'motionOff';
+  if (posSel.includes('[data-ag-cs-conv-ripple="1"]')) return 'convRipple';
+  if (posSel.includes('[data-ag-cs-accent') && !posSel.includes('[data-ag-cs-sonar="1"]')) return 'accentCustom';
+  const parts = splitSelectorTopCommas(rawSel);
+  if (parts.length > 0) {
+    if (parts.every((p) => VIEW_HOME_RE.test(p))) return 'viewHome';
+    if (parts.every((p) => VIEW_SIDEBAR_RE.test(p))) return 'viewSidebar';
+    if (parts.every((p) => VIEW_SETTINGS_RE.test(p))) return 'viewSettings';
+    if (parts.every((p) => THOUGHT_EXT_RE.test(p))) return 'thoughtExt';
+  }
+  return 'core';
+}
+
+function splitCssIntoBuckets(flatCss) {
+  const lists = Object.fromEntries(CSS_BUCKET_ORDER.map((k) => [k, []]));
+  for (const r of splitTopLevelCssRules(flatCss)) lists[classifyCssRule(r)].push(r);
+  return Object.fromEntries(CSS_BUCKET_ORDER.map((k) => [k, lists[k].join('')]));
+}
+
+function assembleBucketedCss(buckets) {
+  return CSS_BUCKET_ORDER.map((k) => (buckets[k] ? `${CSS_BUCKET_MARK_PREFIX}${k}*/${buckets[k]}` : '')).join('');
+}
+
 function packCssJsExpr(css, options = null) {
   const shouldFlatten = !(options && options.flatten === false);
-  const preparedCss = shouldFlatten ? minifyCss(flattenNestedCss(css)) : css;
+  const flatMin = shouldFlatten ? minifyCss(flattenNestedCss(css)) : css;
+  const shouldBucket = shouldFlatten && !(options && options.bucketize === false) && flatMin.includes('html[data-ag-cs-style]');
+  const preparedCss = shouldBucket ? assembleBucketedCss(splitCssIntoBuckets(flatMin)) : flatMin;
   const lzPacked = packLzssJsExpr(preparedCss, PROTECTED_CSS_LITERALS);
   if (lzPacked && Buffer.byteLength(lzPacked, 'utf8') + 12 < Buffer.byteLength(serializeJsValue(preparedCss), 'utf8')) {
     return lzPacked;
@@ -679,6 +766,12 @@ module.exports = {
   serializeJsValue,
   serializeStringListExpr,
   PROTECTED_CSS_LITERALS,
+  CSS_BUCKET_ORDER,
+  CSS_BUCKET_MARK_PREFIX,
+  splitTopLevelCssRules,
+  classifyCssRule,
+  splitCssIntoBuckets,
+  assembleBucketedCss,
   packLzssJsExpr,
   collectWindowFrequencies,
   applyBatchPhraseReplacements,

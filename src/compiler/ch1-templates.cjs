@@ -172,6 +172,7 @@ function createCh1Templates({
           else if (de && pm) de.setAttribute('data-ag-cs-perf-mode', pm === 'eco' ? 'performance' : pm === 'auto' ? 'balanced' : pm);
           W.__agPrismApplyIgnoreReducedMotion?.(!!e?.ignoreReducedMotion);
           W.__agPrismFontCustomizer?.applyCustomFonts?.(e, D);
+          W.__agPrismCssMgr?.sync?.(e);
         });
         return { refreshed: true, version: api.version };
       }
@@ -217,22 +218,186 @@ function createCh1Templates({
           }
         } catch {}
       };
-      const applyStyle = () => {
+      const ORDER = 'core,paletteWarm,paletteHost,accentCustom,convRipple,thoughtExt,viewHome,viewSidebar,viewSettings,motionOff,motionSubtle,motionFull,themeLight'.split(',');
+      const parseBuckets = (raw) => {
+        const b = {};
+        const pfx = '/*@ag:';
+        let pos = raw.indexOf(pfx);
+        if (pos < 0) { b.core = raw; return b; }
+        if (pos > 0) b.core = raw.slice(0, pos);
+        while (pos >= 0) {
+          const endM = raw.indexOf('*/', pos + 6);
+          if (endM < 0) break;
+          const k = raw.slice(pos + 6, endM);
+          const next = raw.indexOf(pfx, endM + 2);
+          const val = next < 0 ? raw.slice(endM + 2) : raw.slice(endM + 2, next);
+          b[k] = (b[k] || '') + val;
+          pos = next;
+        }
+        return b;
+      };
+      const ensureCssMgr = () => {
+        const fk = __AG_INJ_CSSHASH__;
+        const prev = W.__agPrismCssMgr;
+        if (prev && prev.cssHash === fk && !prev._disposed) return prev;
+        try { prev?.destroy?.(); } catch {}
+        const buckets = parseBuckets(getCss());
+        const SheetCtor = W.CSSStyleSheet || (typeof CSSStyleSheet === 'function' ? CSSStyleSheet : null);
+        const canAdopt = () => {
+          try {
+            return Boolean(SheetCtor && isF(SheetCtor.prototype?.replaceSync) && D.adoptedStyleSheets && isF(D.adoptedStyleSheets[Symbol.iterator]));
+          } catch { return false; }
+        };
+        const sheets = new Map();
+        const owned = new Set();
+        let lastSig = '';
+        let htmlMo = null;
+        let lastCfg = null;
+        const calcKeys = (cfg, hints) => {
+          const de = D.documentElement;
+          const hasCfg = Boolean(cfg && typeof cfg === 'object');
+          const c = hasCfg ? cfg : lastCfg || (isF(W.__agPrism?.getState) ? W.__agPrism.getState()?.cfg : null) || {};
+          const h = hints && typeof hints === 'object' ? hints : {};
+          const pal = h.palette || (hasCfg && cfg.palette) || de?.getAttribute?.('data-ag-cs-palette') || c.palette || 'obsidian';
+          const acc = h.accent || (hasCfg && cfg.accentTone) || de?.getAttribute?.('data-ag-cs-accent') || c.accentTone || 'follow';
+          const mot = h.motion || (hasCfg && cfg.motionLevel) || de?.getAttribute?.('data-ag-cs-motion') || c.motionLevel || 'standard';
+          const thAttr = de?.getAttribute?.('data-ag-cs-theme');
+          const th = h.theme || (thAttr === 'light' || thAttr === 'dark' ? thAttr : (/\b(?:theme-light|light-theme|light)\b/.test(String(D.body?.className || '')) ? 'light' : 'dark'));
+          const sbAttr = de?.getAttribute?.('data-ag-cs-sidebar');
+          const homeAttr = de?.getAttribute?.('data-ag-cs-home');
+          const crAttr = de?.getAttribute?.('data-ag-cs-conv-ripple');
+          const tvAttr = de?.getAttribute?.('data-ag-prism-thought-view');
+          const ks = ['core'];
+          if (pal === 'warm') ks.push('paletteWarm');
+          if (pal === 'host') ks.push('paletteHost');
+          if (acc && acc !== 'follow') ks.push('accentCustom');
+          if (h.convRipple === true || (h.convRipple !== false && (crAttr === '1' || (c.convRipple && c.convRipple !== 'off')))) ks.push('convRipple');
+          if (h.thought === true || (h.thought !== false && (Boolean(tvAttr) || (c.thoughtTranslate && c.thoughtTranslate !== 'off')))) ks.push('thoughtExt');
+          if (h.home === true || (h.home !== false && homeAttr !== 'off' && c.homeLayout !== 'off' && Boolean(D.querySelector?.('.agy-home,.ag-cs-home-panel')))) ks.push('viewHome');
+          if (h.sidebar === true || (h.sidebar !== false && sbAttr !== 'off' && c.sidebarRestyle !== false)) ks.push('viewSidebar');
+          if (h.settings === true || (h.settings !== false && Boolean(D.getElementById?.('ag-cs-settings-sec') || D.querySelector?.('div[role="dialog"],.agy-dialog,[data-ag-cs-settings-dlg="1"]')))) ks.push('viewSettings');
+          if (mot === 'off') ks.push('motionOff');
+          else if (mot === 'subtle') ks.push('motionSubtle');
+          else ks.push('motionFull');
+          if (th === 'light') ks.push('themeLight');
+          return ks.filter((k) => Boolean(buckets[k]));
+        };
+        const ensureSentinel = (text, adopted) => {
+          const p = D.head || D.documentElement;
+          if (!p) return;
+          let st = D.getElementById?.(SID);
+          if (!st) { st = D.createElement('style'); st.id = SID; }
+          if (adopted) {
+            if (st.textContent) st.textContent = '';
+            st.setAttribute?.('data-ag-cs-adopted', '1');
+            st.setAttribute?.('data-ag-cs-css-hash', fk);
+            st.setAttribute?.('data-ag-cs-flat', fk + ':0');
+          } else {
+            st.removeAttribute?.('data-ag-cs-adopted');
+            if (st.textContent !== text) st.textContent = text;
+            st.setAttribute?.('data-ag-cs-css-hash', fk);
+            st.setAttribute?.('data-ag-cs-flat', fk + ':' + text.length);
+          }
+          if (st.parentNode !== p || p.lastElementChild !== st) p.appendChild(st);
+        };
+        const mgr = {
+          cssHash: fk,
+          mode: canAdopt() ? 'adopted' : 'style',
+          buckets,
+          activeKeys: [],
+          activeBytes: 0,
+          _disposed: false,
+          sync(cfg, hints) {
+            if (mgr._disposed) return mgr;
+            if (cfg && typeof cfg === 'object') lastCfg = cfg;
+            const keys = calcKeys(cfg, hints);
+            const sig = keys.join(',');
+            const useAdopt = canAdopt();
+            mgr.mode = useAdopt ? 'adopted' : 'style';
+            let bytes = 0;
+            for (let i = 0; i < keys.length; i++) bytes += buckets[keys[i]].length;
+            mgr.activeKeys = keys;
+            mgr.activeBytes = bytes;
+            if (useAdopt) {
+              const cur = Array.from(D.adoptedStyleSheets);
+              const stillMounted = owned.size > 0 && cur.some((s) => owned.has(s));
+              if (sig !== lastSig || !stillMounted) {
+                const next = [];
+                for (let i = 0; i < keys.length; i++) {
+                  const k = keys[i];
+                  let sh = sheets.get(k);
+                  if (!sh) { sh = new SheetCtor(); sh.replaceSync(buckets[k]); sheets.set(k, sh); }
+                  next.push(sh);
+                }
+                const kept = cur.filter((s) => !owned.has(s));
+                owned.clear();
+                for (let i = 0; i < next.length; i++) owned.add(next[i]);
+                D.adoptedStyleSheets = kept.concat(next);
+                lastSig = sig;
+              }
+              ensureSentinel('', true);
+            } else {
+              const st = D.getElementById?.(SID);
+              if (sig !== lastSig || !st || !(st.textContent || '').length) {
+                const text = keys.map((k) => buckets[k]).join('');
+                ensureSentinel(text, false);
+                lastSig = sig;
+              }
+            }
+            return mgr;
+          },
+          _armObserver() {
+            if (mgr._disposed || htmlMo || !canAdopt() || !D.documentElement || typeof W.MutationObserver !== 'function') return;
+            try {
+              htmlMo = new W.MutationObserver(() => { try { mgr.sync(null); } catch {} });
+              htmlMo.observe(D.documentElement, {
+                attributes: true,
+                attributeFilter: ['data-ag-cs-theme', 'data-ag-cs-palette', 'data-ag-cs-light-preset', 'data-ag-cs-accent', 'data-ag-cs-motion', 'data-ag-cs-sidebar', 'data-ag-cs-home', 'data-ag-cs-conv-ripple', 'data-ag-prism-thought-view'],
+              });
+            } catch { htmlMo = null; }
+          },
+          destroy(opts) {
+            if (mgr._disposed) return;
+            mgr._disposed = true;
+            try { htmlMo?.disconnect?.(); } catch {}
+            htmlMo = null;
+            if (owned.size > 0 && D.adoptedStyleSheets && isF(D.adoptedStyleSheets[Symbol.iterator])) {
+              try { D.adoptedStyleSheets = Array.from(D.adoptedStyleSheets).filter((s) => !owned.has(s)); } catch {}
+            }
+            owned.clear();
+            sheets.clear();
+            lastSig = '';
+            mgr.activeKeys = [];
+            mgr.activeBytes = 0;
+            try {
+              const sEl = D.getElementById?.(SID);
+              if (sEl) {
+                if (opts?.keepStyleNode) sEl.textContent = '';
+                else sEl.remove?.();
+              }
+            } catch {}
+          },
+        };
+        W.__agPrismCssMgr = mgr;
+        G.__agPrismCssMgr = mgr;
+        return mgr;
+      };
+      const applyStyle = (cfg, hints) => {
         const p = D.head || D.documentElement;
         if (!p) return;
         cleanOld();
-        let st = D.getElementById(SID);
-        if (!st) { st = D.createElement('style'); st.id = SID; }
-        const fk = __AG_INJ_CSSHASH__, flatOk = st.getAttribute?.('data-ag-cs-flat') === fk + ':' + (st.textContent || '').length;
-        const rawOk = st.getAttribute?.('data-ag-cs-css-hash') === fk && (st.textContent || '').length > 0 && typeof CSS !== 'undefined' && CSS.supports?.('selector(&)');
-        if (!flatOk && !rawOk) {
-          const c = getCss();
-          if (st.textContent !== c) st.textContent = c;
-          st.setAttribute?.('data-ag-cs-css-hash', fk);
-          st.setAttribute?.('data-ag-cs-flat', fk + ':' + c.length);
-        }
-        if (st.parentNode !== p || p.lastElementChild !== st) p.appendChild(st);
-        try { W.__agPrism?.flattenCss?.(); } catch {}
+        ensureCssMgr().sync(cfg, hints);
+        try { if (W.__agPrismCssMgr?.mode !== 'adopted') W.__agPrism?.flattenCss?.(); } catch {}
+      };
+      const hookApiCssMgr = (api) => {
+        if (!api || api.__agCssMgrHooked) return;
+        api.__agCssMgrHooked = true;
+        const origRef = isF(api.refreshConfig) ? api.refreshConfig.bind(api) : null;
+        if (origRef) api.refreshConfig = (n) => { const r = origRef(n); try { W.__agPrismCssMgr?.sync?.(api.getState?.()?.cfg || n); } catch {} return r; };
+        const origSync = isF(api.sync) ? api.sync.bind(api) : null;
+        if (origSync) api.sync = (...a) => { const r = origSync(...a); try { W.__agPrismCssMgr?.sync?.(api.getState?.()?.cfg); } catch {} return r; };
+        const origDes = isF(api.destroy) ? api.destroy.bind(api) : null;
+        if (origDes) api.destroy = (...a) => { try { W.__agPrismCssMgr?.destroy?.({ keepStyleNode: true }); } catch {} return origDes(...a); };
       };
 
       const mkRpc = (bk, lim, onTo, onErr, disp) => {
@@ -368,9 +533,10 @@ function createCh1Templates({
           });
         } catch {}
         for (const k of '__agPrismRepoBridge,__agPrismThoughtBridge,__agPrismUsageBridge,__agPrismOmniBridge'.split(',')) { try { W[k]?.dispose?.(); } catch {} }
+        try { W.__agPrismCssMgr?.destroy?.(); } catch {}
         for (const id of [SID, LSID, 'ag-prism-settings-v101-css', 'ag-prism-studio-v101-css', 'ag-prism-omni-css', 'ag-prism-inline-diff-css']) { try { D.getElementById(id)?.remove(); } catch {} }
         try { D.querySelectorAll?.('[data-testid="prism-thought-ai-config"],[data-testid="prism-thought-general-config"],.ag-cs-ctx-menu,.ag-cs-ctx-toast,.ag-cs-inline-diff-box,.ag-cs-diff-ctx-menu')?.forEach?.((el) => el.remove()); } catch {}
-        for (const k of '__agPrismThought,__agPrismThoughtSettingsUi,__agPrismInlineDiff,__agPrismInlineDiffFactory,__agPrismInlineDiffResolve,__agPrismOmni,__agPrismContextMenu,__agPrism,__agClaudeStyle'.split(',')) {
+        for (const k of '__agPrismCssMgr,__agPrismThought,__agPrismThoughtSettingsUi,__agPrismInlineDiff,__agPrismInlineDiffFactory,__agPrismInlineDiffResolve,__agPrismOmni,__agPrismContextMenu,__agPrism,__agClaudeStyle'.split(',')) {
           delete W[k];
           delete G[k];
         }
@@ -419,9 +585,9 @@ function createCh1Templates({
           ensureRepo();
           ensureThought();
           ensureUsage();
-          if (D.head) applyStyle();
-          else D.addEventListener('DOMContentLoaded', applyStyle, { once: true });
           const bootCfg = __AG_INJ_BOOTCFG__;
+          if (D.head) applyStyle(bootCfg);
+          else D.addEventListener('DOMContentLoaded', () => applyStyle(bootCfg), { once: true });
           const cur = W.__agPrism || W.__agClaudeStyle;
           if (cur && cur.version === VER && cur.codeHash === __AG_INJ_CODEHASH__) {
             cur.refreshConfig(bootCfg);
@@ -433,7 +599,9 @@ function createCh1Templates({
           }
           if (W.__agClaudeStyle && !W.__agPrism) W.__agPrism = W.__agClaudeStyle;
           else if (W.__agPrism) W.__agClaudeStyle = W.__agPrism;
+          hookApiCssMgr(W.__agPrism);
           const eCfg = (isF(W.__agPrism?.getState) ? W.__agPrism.getState()?.cfg : null) || bootCfg;
+          try { W.__agPrismCssMgr?.sync?.(eCfg); W.__agPrismCssMgr?._armObserver?.(); } catch {}
           if (eCfg?.omniModule === 'off') { try { W.__agPrismOmni?.destroy?.(); } catch {} }
           else { try { W.__agPrismOmni?.sync?.(eCfg, W.__agPrismOmniServerMeta || null); } catch {} }
           const de = D.documentElement;
@@ -462,7 +630,7 @@ function createCh1Templates({
         D.addEventListener('DOMContentLoaded', onR);
       }
       const api = W.__agPrism || W.__agClaudeStyle;
-      return { version: VER, status, state: isF(api?.getState) ? api.getState() : null };
+      return { version: VER, status, codeHash: api?.codeHash || __AG_INJ_CODEHASH__ };
     })()`;
     _injectWrapperTemplate = minifySingleSource(rawTpl);
     return _injectWrapperTemplate;
