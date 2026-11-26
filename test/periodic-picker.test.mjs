@@ -1851,7 +1851,7 @@ test('V2 Host bottom trigger .ag-pp-mini-keycap badge sync preserves React HostT
   assert.equal(env.getCounts().activeTimers, 0);
 });
 
-test('V5 3D Renderer & pbr-grain-assets.js: 128x128 RG8 grain + 128x64 RGB8 metalEnv (24,576 B), 4 wallpapers/novelties, DESKMAT_TOPO, 5 textures + 1 Shadow FBO, and 90/90 pick()', () => {
+test('V5 3D Renderer & pbr-grain-assets.js: 128x128 RG8 grain + 64x32 RGB8 metalEnv (6,144 B), 4 wallpapers/novelties, DESKMAT_TOPO, 5 textures + 1 Shadow FBO, and 90/90 pick()', () => {
   const { ELEMENTS_90 } = require(PERIODIC_PICKER_FILE);
   const env = createPeriodicSandbox({ mock2d: true, mockWebGL2: true });
   const grainAssetsApi = loadGrainAssetsInSandbox(env);
@@ -1860,10 +1860,10 @@ test('V5 3D Renderer & pbr-grain-assets.js: 128x128 RG8 grain + 128x64 RGB8 meta
 
   assert.equal(typeof oledScreenApi?.createOledScreenPainter, 'function');
 
-  // 1) Verify V5 pbr-grain-assets.js contract: TILE_SIZE=128, metalEnvRGB (24,576 B), 4 OLED_WALLPAPERS, 4 NOVELTY_ICONS, DESKMAT_TOPO
+  // 1) Verify V5 pbr-grain-assets.js contract: TILE_SIZE=128, metalEnvRGB (64x32 = 6,144 B), 4 OLED_WALLPAPERS, 4 NOVELTY_ICONS, DESKMAT_TOPO
   assert.equal(grainAssetsApi.TILE_SIZE, 128);
-  assert.equal(grainAssetsApi.ENV_W, 128);
-  assert.equal(grainAssetsApi.ENV_H, 64);
+  assert.equal(grainAssetsApi.ENV_W, 64);
+  assert.equal(grainAssetsApi.ENV_H, 32);
   assert.equal(grainAssetsApi.EMBLEM_VIEWBOX, 2048);
   assert.equal(Array.isArray(grainAssetsApi.EMBLEM_PATHS) && grainAssetsApi.EMBLEM_PATHS.length, 22);
   const expectedBannerKeys = ['1', '10', '18', '6', 'claude', 'flash', 'gpt', 'orchestrator', 'standby'];
@@ -1887,9 +1887,9 @@ test('V5 3D Renderer & pbr-grain-assets.js: 128x128 RG8 grain + 128x64 RGB8 meta
   assert.equal(grainTex.aluHeight.length, 128 * 128);
   assert.equal(grainTex.combinedRG.length, 128 * 128 * 2);
   assert.ok(grainTex.combinedRG.some((v) => v > 0), 'Decoded RG8 combined grain buffer must be non-zero');
-  assert.equal(grainTex.envW, 128);
-  assert.equal(grainTex.envH, 64);
-  assert.equal(grainTex.metalEnvRGB.length, 24576);
+  assert.equal(grainTex.envW, 64);
+  assert.equal(grainTex.envH, 32);
+  assert.equal(grainTex.metalEnvRGB.length, 6144);
   assert.ok(grainTex.metalEnvRGB.some((v) => v > 0), 'Decoded RGB8 metalEnvRGB buffer must be non-zero');
 
   const canvas = env.makeElement('canvas');
@@ -1921,9 +1921,9 @@ test('V5 3D Renderer & pbr-grain-assets.js: 128x128 RG8 grain + 128x64 RGB8 meta
   );
   assert.ok(
     glStats.rgb8TexAllocations.some(
-      (t) => t.width === 128 && t.height === 64 && t.byteLength === 24576
+      (t) => t.width === 64 && t.height === 32 && t.byteLength === 6144
     ),
-    'V5 must upload 128x64 RGB8 metalEnvTex (24,576 B) from pbr-grain-assets.js'
+    'V5 must upload 64x32 RGB8 metalEnvTex (6,144 B) from pbr-grain-assets.js'
   );
 
   const setDeckLevels = (levels) => {

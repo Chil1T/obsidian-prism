@@ -847,125 +847,49 @@
     }
 
     function drawRoundRectPath(ctx, x, y, w, h, r) {
-      var rw = Math.max(0, w);
-      var rh = Math.max(0, h);
-      var rr = Math.max(0, Math.min(r, rw * 0.5, rh * 0.5));
-      ctx.beginPath();
-      ctx.moveTo(x + rr, y);
-      ctx.arcTo(x + rw, y, x + rw, y + rh, rr);
-      ctx.arcTo(x + rw, y + rh, x, y + rh, rr);
-      ctx.arcTo(x, y + rh, x, y, rr);
-      ctx.arcTo(x, y, x + rw, y, rr);
-      ctx.closePath();
+      var rw = Math.max(0, w), rh = Math.max(0, h), rr = Math.max(0, Math.min(r, rw * 0.5, rh * 0.5));
+      ctx.beginPath(); ctx.moveTo(x + rr, y); ctx.arcTo(x + rw, y, x + rw, y + rh, rr); ctx.arcTo(x + rw, y + rh, x, y + rh, rr); ctx.arcTo(x, y + rh, x, y, rr); ctx.arcTo(x, y, x + rw, y, rr); ctx.closePath();
     }
-
     function drawEllipseArcSafe(ctx, cx, cy, rx, ry, rot, a0, a1, ccw) {
-      var safeRx = Math.max(0.5, rx);
-      var safeRy = Math.max(0.5, ry);
-      if (typeof ctx.ellipse === 'function') {
-        ctx.ellipse(cx, cy, safeRx, safeRy, rot || 0, a0, a1, Boolean(ccw));
-        return;
-      }
-      ctx.save();
-      ctx.translate(cx, cy);
-      if (rot) ctx.rotate(rot);
-      ctx.scale(safeRx, safeRy);
-      ctx.arc(0, 0, 1, a0, a1, Boolean(ccw));
-      ctx.restore();
+      var sx = Math.max(0.5, rx), sy = Math.max(0.5, ry);
+      if (typeof ctx.ellipse === 'function') { ctx.ellipse(cx, cy, sx, sy, rot || 0, a0, a1, Boolean(ccw)); return; }
+      ctx.save(); ctx.translate(cx, cy); if (rot) ctx.rotate(rot); ctx.scale(sx, sy); ctx.arc(0, 0, 1, a0, a1, Boolean(ccw)); ctx.restore();
     }
-
-    function setCompositeSafe(ctx, mode) {
-      if (!ctx) return;
-      try {
-        ctx.globalCompositeOperation = mode;
-      } catch (_e) {}
-    }
-
-    function measureTextSafe(ctx, str) {
-      var text = String(str || '');
-      if (!ctx || typeof ctx.measureText !== 'function') {
-        return text.length * 14;
-      }
-      var m = ctx.measureText(text);
-      return m && typeof m.width === 'number' ? m.width : text.length * 14;
-    }
-
+    function setCompositeSafe(ctx, mode) { if (ctx) try { ctx.globalCompositeOperation = mode; } catch (_e) {} }
+    var _tc = new Map(), _tf = null;
+    function _tg(c, k) { var f = c && c.measureText; if (f !== _tf) { _tc.clear(); _tf = f; return; } if (!_tc.has(k)) return; var v = _tc.get(k); _tc.delete(k); _tc.set(k, v); return v; }
+    function _ts(k, v) { if (_tc.size >= 16) _tc.delete(_tc.keys().next().value); _tc.set(k, v); return v; }
+    function measureTextSafe(ctx, str) { var t = String(str || ''); if (!ctx || typeof ctx.measureText !== 'function') return t.length * 14; var m = ctx.measureText(t); return m && typeof m.width === 'number' ? m.width : t.length * 14; }
     function truncateText(ctx, text, maxW) {
-      var str = String(text || '');
-      if (!str || maxW <= 0) return '';
-      if (measureTextSafe(ctx, str) <= maxW) return str;
-      var lo = 0;
-      var hi = str.length;
-      while (lo < hi) {
-        var mid = Math.ceil((lo + hi) * 0.5);
-        if (measureTextSafe(ctx, str.slice(0, mid) + '…') <= maxW) {
-          lo = mid;
-        } else {
-          hi = mid - 1;
-        }
-      }
-      return str.slice(0, Math.max(1, lo)) + '…';
+      var s = String(text || ''); if (!s || maxW <= 0) return '';
+      var k = 'T|' + (ctx && ctx.font || '') + '|' + Math.round(maxW) + '|' + s, h = _tg(ctx, k);
+      if (h !== undefined) return h;
+      if (measureTextSafe(ctx, s) <= maxW) return _ts(k, s);
+      var lo = 0, hi = s.length;
+      while (lo < hi) { var mid = Math.ceil((lo + hi) * 0.5); if (measureTextSafe(ctx, s.slice(0, mid) + '…') <= maxW) lo = mid; else hi = mid - 1; }
+      return _ts(k, s.slice(0, Math.max(1, lo)) + '…');
     }
-
     function fitSingleLineFontSize(ctx, text, weight, family, maxPx, minPx, maxWidth) {
-      var px = maxPx;
-      var step = 2;
-      while (px > minPx) {
-        ctx.font = weight + ' ' + px + 'px ' + family;
-        if (measureTextSafe(ctx, text) <= maxWidth) {
-          return px;
-        }
-        px = Math.max(minPx, px - step);
-      }
-      ctx.font = weight + ' ' + minPx + 'px ' + family;
-      return minPx;
+      var k = 'F|' + weight + '|' + family + '|' + maxPx + '|' + minPx + '|' + Math.round(maxWidth) + '|' + text, h = _tg(ctx, k);
+      if (h !== undefined) { ctx.font = weight + ' ' + h + 'px ' + family; return h; }
+      for (var px = maxPx; px > minPx; px = Math.max(minPx, px - 2)) { ctx.font = weight + ' ' + px + 'px ' + family; if (measureTextSafe(ctx, text) <= maxWidth) return _ts(k, px); }
+      ctx.font = weight + ' ' + minPx + 'px ' + family; return _ts(k, minPx);
     }
-
-    function makeLinearGrad(ctx, x0, y0, x1, y1, stops, fallbackCss) {
-      if (!ctx || typeof ctx.createLinearGradient !== 'function') {
-        return fallbackCss || '#000000';
-      }
-      var g = ctx.createLinearGradient(x0, y0, x1, y1);
-      if (!g || typeof g.addColorStop !== 'function') return fallbackCss || '#000000';
-      for (var i = 0; i < stops.length; i++) {
-        g.addColorStop(clamp(stops[i][0], 0, 1), stops[i][1]);
-      }
+    function makeLinearGrad(ctx, x0, y0, x1, y1, stops, fb) {
+      if (!ctx || typeof ctx.createLinearGradient !== 'function') return fb || '#000000';
+      var g = ctx.createLinearGradient(x0, y0, x1, y1); if (!g || typeof g.addColorStop !== 'function') return fb || '#000000';
+      for (var i = 0; i < stops.length; i++) g.addColorStop(clamp(stops[i][0], 0, 1), stops[i][1]);
       return g;
     }
-
-    function makeRadialGrad(ctx, x0, y0, r0, x1, y1, r1, stops, fallbackCss) {
-      if (!ctx || typeof ctx.createRadialGradient !== 'function') {
-        return fallbackCss || 'rgba(0,0,0,0)';
-      }
-      var g = ctx.createRadialGradient(x0, y0, Math.max(0, r0), x1, y1, Math.max(0.1, r1));
-      if (!g || typeof g.addColorStop !== 'function') return fallbackCss || 'rgba(0,0,0,0)';
-      for (var i = 0; i < stops.length; i++) {
-        g.addColorStop(clamp(stops[i][0], 0, 1), stops[i][1]);
-      }
+    function makeRadialGrad(ctx, x0, y0, r0, x1, y1, r1, stops, fb) {
+      if (!ctx || typeof ctx.createRadialGradient !== 'function') return fb || 'rgba(0,0,0,0)';
+      var g = ctx.createRadialGradient(x0, y0, Math.max(0, r0), x1, y1, Math.max(0.1, r1)); if (!g || typeof g.addColorStop !== 'function') return fb || 'rgba(0,0,0,0)';
+      for (var i = 0; i < stops.length; i++) g.addColorStop(clamp(stops[i][0], 0, 1), stops[i][1]);
       return g;
     }
-
-    function setShadow(ctx, color, blur, ox, oy) {
-      ctx.shadowColor = color;
-      ctx.shadowBlur = blur || 0;
-      ctx.shadowOffsetX = ox || 0;
-      ctx.shadowOffsetY = oy || 0;
-    }
-
-    function clearShadow(ctx) {
-      ctx.shadowColor = 'rgba(0,0,0,0)';
-      ctx.shadowBlur = 0;
-      ctx.shadowOffsetX = 0;
-      ctx.shadowOffsetY = 0;
-    }
-
-    function setLetterSpacingSafe(ctx, spacingCss) {
-      if (ctx && 'letterSpacing' in ctx) {
-        try {
-          ctx.letterSpacing = spacingCss;
-        } catch (_e) {}
-      }
-    }
+    function setShadow(ctx, col, blur, ox, oy) { ctx.shadowColor = col; ctx.shadowBlur = blur || 0; ctx.shadowOffsetX = ox || 0; ctx.shadowOffsetY = oy || 0; }
+    function clearShadow(ctx) { ctx.shadowColor = 'rgba(0,0,0,0)'; ctx.shadowBlur = 0; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0; }
+    function setLetterSpacingSafe(ctx, sp) { if (ctx && 'letterSpacing' in ctx) try { ctx.letterSpacing = sp; } catch (_e) {} }
 
     function resolveGrainAssetsPackage(runtimeRoot) {
       return (
