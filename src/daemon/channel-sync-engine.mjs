@@ -33,6 +33,47 @@ const PERSISTENT_SPECS = Object.freeze(
   CHANNEL_STATIC_SPECS.filter((s) => s.injectMode === 'main-page-persistent').sort((a, b) => a.order - b.order)
 );
 
+export async function evalChannelExpressionSafe(session, expr, timeoutMs) {
+  try {
+    return timeoutMs > 0 ? await session.evaluate(expr, false, timeoutMs) : await session.evaluate(expr);
+  } catch (err) {
+    return {
+      ok: false,
+      status: 'eval-error',
+      error: String(err && err.message ? err.message : err || 'evaluate-threw').slice(0, 300),
+      stack: String(err && err.stack ? err.stack : '').slice(0, 600),
+    };
+  }
+}
+
+export function extractChannelFailureDetail(evalRes) {
+  if (!evalRes || typeof evalRes !== 'object') {
+    return { error: 'empty-eval-result', stack: '', hasCrashDetail: false };
+  }
+  const errStr = typeof evalRes.error === 'string' && evalRes.error.trim() ? evalRes.error.trim() : '';
+  const statusStr = typeof evalRes.status === 'string' && evalRes.status.trim() ? evalRes.status.trim() : '';
+  const stackStr = typeof evalRes.stack === 'string' && evalRes.stack.trim() ? evalRes.stack.trim() : '';
+  const hasCrashDetail = Boolean(errStr || statusStr === 'error' || statusStr === 'eval-error');
+  return {
+    error: errStr || statusStr || 'channel-eval-failed',
+    stack: stackStr,
+    hasCrashDetail,
+  };
+}
+
+export function recordChannelEvalFailure(orch, entry, channelId, evalRes, { now = Date.now(), stage = '' } = {}) {
+  const detail = extractChannelFailureDetail(evalRes);
+  const redactedErr = typeof orch?.redact === 'function' ? orch.redact(detail.error) : detail.error;
+  const st = recordChannelFailure(entry, channelId, { now, error: redactedErr, stage });
+  if (detail.hasCrashDetail && typeof orch?.log === 'function') {
+    const stackPreview = detail.stack
+      ? ` | ${String(typeof orch.redact === 'function' ? orch.redact(detail.stack) : detail.stack).replace(/[\r\n]+/g, ' ').slice(0, 220)}`
+      : '';
+    orch.log(`[!] Channel "${channelId}" failed [${stage || 'unknown'}] (fails=${st?.failCount || 1}): ${st?.lastError || redactedErr}${stackPreview}`);
+  }
+  return st;
+}
+
 export async function ensureChannelBinding(orch, entry, channelId, timeoutMs = 2600, force = false) {
   const meta = BINDING_BY_CHANNEL[channelId];
   if (!meta || !entry || entry.session.closed) return false;
@@ -86,7 +127,7 @@ export async function syncPersistentNewDocScript(entry, enabled, source, scriptP
   }
 }
 
-export async function recordTrackableSkipOutcome(orch, entry, spec, evalRes, hash, now = Date.now()) {
+export async function recordTrackableSkipOutcome(orch, entry, spec, evalRes, hash, now = Date.now(), stage = 'apply') {
   const f = spec.fields;
   const isSkipped = Boolean(evalRes && typeof evalRes.status === 'string' && evalRes.status.startsWith('skipped-'));
   if (evalRes && evalRes.ok) {
@@ -104,7 +145,7 @@ export async function recordTrackableSkipOutcome(orch, entry, spec, evalRes, has
     entry[f.mountedField] = false;
     entry[f.skippedField] = false;
     entry[f.sigField] = '';
-    recordChannelFailure(entry, spec.id, { now });
+    recordChannelEvalFailure(orch, entry, spec.id, evalRes, { now, stage });
   }
 }
 
@@ -227,17 +268,18 @@ export async function healSingleChannelOnEntry(orch, entry, spec, cfg, probe, { 
   if (!needsEval || entry.session.closed) return;
 
   const evalTimeoutMs = id === 'omni' || id === 'sidebar' ? 3500 : 4500;
-  const evalRes = await entry.session.evaluate(activeExpr, false, evalTimeoutMs).catch(() => null);
+  const evalRes = await evalChannelExpressionSafe(entry.session, activeExpr, evalTimeoutMs);
 
   // 5) 统一结果记录与 Per-Channel 熔断状态更新
   if (spec.tracksSkippedNonHost) {
-    await recordTrackableSkipOutcome(orch, entry, spec, evalRes, chHash, now);
+    await recordTrackableSkipOutcome(orch, entry, spec, evalRes, chHash, now, 'heal');
   } else if (id === 'omni') {
     if (evalRes && evalRes.ok !== false) recordChannelSuccess(entry, 'omni', { scriptId: entry.omniScriptId });
-    else recordChannelFailure(entry, 'omni', { now });
+    else recordChannelEvalFailure(orch, entry, 'omni', evalRes, { now, stage: 'heal' });
   } else if (id === 'sidebar') {
-    if (evalRes === null) recordChannelFailure(entry, 'sidebar', { now });
-    else {
+    if (evalRes === null || evalRes?.status === 'error' || evalRes?.status === 'eval-error' || (evalRes?.ok === false && evalRes?.error)) {
+      recordChannelEvalFailure(orch, entry, 'sidebar', evalRes, { now, stage: 'heal' });
+    } else {
       entry.sidebarMounted = true;
       recordChannelSuccess(entry, 'sidebar', { scriptId: entry.sidebarScriptId });
     }
@@ -256,7 +298,7 @@ export async function healSingleChannelOnEntry(orch, entry, spec, cfg, probe, { 
       entry.thoughtMounted = false;
       entry.lastThoughtSig = '';
     }
-    recordChannelFailure(entry, id, { now });
+    recordChannelEvalFailure(orch, entry, id, evalRes, { now, stage: 'heal' });
   }
 }
 
@@ -356,16 +398,20 @@ export async function applyAllChannelsToEntry(orch, entry) {
           const chSig = id === 'omni' ? activeExpr : orch.getChannelCfgSig(spec, cfgNow, activeExpr);
           const addedId = f.scriptField ? await replaceEntryNewDocScript(entry, f.scriptField, activeExpr) : null;
           if (f.scriptSigField) entry[f.scriptSigField] = addedId ? chSig : '';
-          const evalRes = await entry.session.evaluate(activeExpr).catch(() => null);
+          const evalRes = await evalChannelExpressionSafe(entry.session, activeExpr, 0);
 
           if (spec.tracksSkippedNonHost) {
-            await recordTrackableSkipOutcome(orch, entry, spec, evalRes, chHash);
+            await recordTrackableSkipOutcome(orch, entry, spec, evalRes, chHash, Date.now(), 'apply');
           } else if (id === 'omni') {
             if (evalRes && evalRes.ok !== false) recordChannelSuccess(entry, 'omni', { scriptId: addedId });
-            else recordChannelFailure(entry, 'omni');
+            else recordChannelEvalFailure(orch, entry, 'omni', evalRes, { stage: 'apply' });
           } else if (id === 'sidebar') {
-            entry.sidebarMounted = true;
-            recordChannelSuccess(entry, 'sidebar', { scriptId: addedId });
+            if (evalRes === null || evalRes?.status === 'error' || evalRes?.status === 'eval-error' || (evalRes?.ok === false && evalRes?.error)) {
+              recordChannelEvalFailure(orch, entry, 'sidebar', evalRes, { stage: 'apply' });
+            } else {
+              entry.sidebarMounted = true;
+              recordChannelSuccess(entry, 'sidebar', { scriptId: addedId });
+            }
           } else if (id === 'hostI18n') {
             if (evalRes?.skippedByLiveCfg) {
               entry.hostI18nMounted = false;
@@ -378,7 +424,7 @@ export async function applyAllChannelsToEntry(orch, entry) {
               entry.lastHostI18nSig = chSig;
               recordChannelSuccess(entry, 'hostI18n', { codeHash: chSig, scriptId: addedId });
             } else {
-              recordChannelFailure(entry, 'hostI18n');
+              recordChannelEvalFailure(orch, entry, 'hostI18n', evalRes, { stage: 'apply' });
             }
           } else if (evalRes && evalRes.ok) {
             if (spec.respectSkippedByLiveCfg && evalRes.skippedByLiveCfg) {
@@ -395,7 +441,7 @@ export async function applyAllChannelsToEntry(orch, entry) {
               entry.thoughtMounted = false;
               entry.lastThoughtSig = '';
             }
-            recordChannelFailure(entry, id);
+            recordChannelEvalFailure(orch, entry, id, evalRes, { stage: 'apply' });
           }
         } else {
           if (hadBefore) await cleanupChannelOnEntry(orch, entry, spec, { forceSidebarCleanup: hadBefore, timeoutMs: 0 });
@@ -574,9 +620,13 @@ export async function runBroadcastConfigRefresh(orch) {
                   if (!skippedStale && !entry.session.closed) {
                     await ensureChannelBinding(orch, entry, 'sidebar');
                     if (snap && !entry.session.closed) {
-                      await entry.session.evaluate(snap).catch(() => {});
-                      entry.sidebarMounted = true;
-                      recordChannelSuccess(entry, 'sidebar', { scriptId: entry.sidebarScriptId });
+                      const sbRes = await evalChannelExpressionSafe(entry.session, snap, 0);
+                      if (sbRes === null || sbRes?.status === 'error' || sbRes?.status === 'eval-error' || (sbRes?.ok === false && sbRes?.error)) {
+                        recordChannelEvalFailure(orch, entry, 'sidebar', sbRes, { stage: 'broadcast' });
+                      } else {
+                        entry.sidebarMounted = true;
+                        recordChannelSuccess(entry, 'sidebar', { scriptId: entry.sidebarScriptId });
+                      }
                     }
                   }
                 } else {
@@ -599,7 +649,7 @@ export async function runBroadcastConfigRefresh(orch) {
                 if (enabled && snap) {
                   let evaluatedFresh = false;
                   if (!skippedStale && !entry.session.closed && (!refreshedFast || changed)) {
-                    const evalRes = await entry.session.evaluate(snap).catch(() => null);
+                    const evalRes = await evalChannelExpressionSafe(entry.session, snap, 0);
                     if (evalRes?.skippedByLiveCfg) {
                       entry.hostI18nMounted = false;
                       entry.hostI18nSkippedByLiveCfg = true;
@@ -612,7 +662,7 @@ export async function runBroadcastConfigRefresh(orch) {
                       evaluatedFresh = !evalRes.reused;
                       recordChannelSuccess(entry, 'hostI18n', { codeHash: sig, scriptId: entry.hostI18nScriptId });
                     } else {
-                      recordChannelFailure(entry, 'hostI18n');
+                      recordChannelEvalFailure(orch, entry, 'hostI18n', evalRes, { stage: 'broadcast' });
                     }
                   }
                   if (hostI18nOffNow && isoPauseRes && isoPauseRes.newlyPaused && !evaluatedFresh && !skippedStale && !entry.session.closed) {
@@ -645,12 +695,12 @@ export async function runBroadcastConfigRefresh(orch) {
               if (enabled && snap) {
                 if (!skippedStale && !entry.session.closed && !isSkipped && (!refreshedFast || changed)) {
                   if (BINDING_BY_CHANNEL[id]) await ensureChannelBinding(orch, entry, id);
-                  const evalRes = await entry.session.evaluate(snap).catch(() => null);
+                  const evalRes = await evalChannelExpressionSafe(entry.session, snap, 0);
                   if (spec.tracksSkippedNonHost) {
-                    await recordTrackableSkipOutcome(orch, entry, spec, evalRes, hash);
+                    await recordTrackableSkipOutcome(orch, entry, spec, evalRes, hash, Date.now(), 'broadcast');
                   } else if (id === 'omni') {
                     if (evalRes && evalRes.ok !== false) recordChannelSuccess(entry, 'omni', { scriptId: entry.omniScriptId });
-                    else recordChannelFailure(entry, 'omni');
+                    else recordChannelEvalFailure(orch, entry, 'omni', evalRes, { stage: 'broadcast' });
                   } else if (evalRes && evalRes.ok) {
                     if (spec.respectSkippedByLiveCfg && evalRes.skippedByLiveCfg) {
                       entry[f.mountedField] = false;
@@ -662,7 +712,7 @@ export async function runBroadcastConfigRefresh(orch) {
                       recordChannelSuccess(entry, id, { codeHash: hash || sig, scriptId: entry[f.scriptField] });
                     }
                   } else {
-                    recordChannelFailure(entry, id);
+                    recordChannelEvalFailure(orch, entry, id, evalRes, { stage: 'broadcast' });
                   }
                 }
               } else if ((hadBefore || (!spec.tracksSkippedNonHost && id !== 'omni' && id !== 'thought' && !orch.isChannelEnabled(spec, currentCfg))) && !skippedStale && !entry.session.closed) {

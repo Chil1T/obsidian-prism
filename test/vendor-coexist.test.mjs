@@ -331,23 +331,30 @@ test('Obsidian Prism brand compliance, GPL-3.0 LICENSE, NOTICE, CITATION.cff, TH
     assert.ok(contributorsTxt.includes(contributor), `CONTRIBUTORS.md must credit v1.0.8 contributor ${contributor}`);
   }
 
-  // Verify absorbed upstream sources exist in vendor/
+  // Verify active absorbed upstream sources exist in vendor/, and pruned orphan dead files stay absent
   const requiredVendorFiles = [
-    'vendor/pulse-dashboard/compat/runtime-ui.mjs',
-    'vendor/pulse-dashboard/compat/inline-widget.cjs',
     'vendor/pulse-dashboard/sidecars/panel/store.mjs',
     'vendor/pulse-dashboard/sidecars/panel/usage.mjs',
     'vendor/pulse-dashboard/sidecars/panel/metrics.mjs',
     'vendor/pulse-dashboard/sidecars/panel/discovery.mjs',
     'vendor/pulse-dashboard/sidecars/panel/context.mjs',
     'vendor/pulse-dashboard/sidecars/panel/rate-quality.mjs',
-    'vendor/pulse-dashboard/sidecars/panel/format.mjs',
     'vendor/pulse-dashboard/inline-fallback.js',
     'vendor/effort-slider/upstream-client.js',
     'vendor/effort-slider/slider-coexist.js',
   ];
   for (const rel of requiredVendorFiles) {
     assert.ok(fs.existsSync(path.join(ROOT_DIR, rel)), `Missing absorbed vendor file: ${rel}`);
+  }
+  const prunedDeadVendorFiles = [
+    'vendor/pulse-dashboard/sidecars/panel/sdk.mjs',
+    'vendor/pulse-dashboard/sidecars/panel/format.mjs',
+    'vendor/pulse-dashboard/compat/inline-widget.cjs',
+    'vendor/pulse-dashboard/compat/usage-ui.cjs',
+    'vendor/pulse-dashboard/compat/runtime-ui.mjs',
+  ];
+  for (const rel of prunedDeadVendorFiles) {
+    assert.equal(fs.existsSync(path.join(ROOT_DIR, rel)), false, `Pruned dead vendor file must stay absent: ${rel}`);
   }
 });
 

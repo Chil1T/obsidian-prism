@@ -128,6 +128,9 @@ export function buildSidebarCleanupExpression(force = false) {
         }
         try { window.__agPrismSidebar?.destroy?.({ preserveRuntimeState: false }); } catch {}
         try { delete window.__agPrismSidebar; } catch {}
+        for (const k of ['__agPrismSidebarHostOps', '__agPrismSidebarLastSendError', '__agPrismSidebarLastStartStage', '__agPrismSidebarLastStartFallback', '__agPrismSidebarLastSendFallback']) {
+          try { delete window[k]; delete globalThis[k]; } catch {}
+        }
         try { delete window.${SIDEBAR_BINDING}; } catch {}
         document.getElementById('ag-prism-sidebar-studio-css')?.remove();
         document.querySelectorAll('[data-ag-prism-sidebar-owned="1"], .ag-prism-sidebar-studio, .ag-prism-sidebar-rail, .ag-prism-sidebar-popover, .ag-prism-sidebar-modal').forEach((n) => n.remove());

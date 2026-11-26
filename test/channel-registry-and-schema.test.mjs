@@ -381,3 +381,124 @@ test('Bundle source hash and channel cache automatically invalidate on 1-byte ed
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('Phase 4D: settings-panel schema aligns with schema.cjs, cdp.js prunes 8 zombie exports, install-plugin decouples patch-asar, and teardown cleans all 16 audited globals safely', () => {
+  const settingsPanel = require(path.join(ROOT, 'settings-panel.js'));
+  const processProbe = require(path.join(ROOT, 'src', 'platform', 'process-probe.cjs'));
+
+  // 1) settings-panel.js language & mascot enums/defaults aligned with src/config/schema.cjs
+  assert.deepEqual([...settingsPanel.PRISM_SETTINGS_SCHEMA.language.allowed], [...cdp.CONFIG_SCHEMA.language.values]);
+  assert.equal(settingsPanel.PRISM_SETTINGS_SCHEMA.language.default, cdp.CONFIG_SCHEMA.language.default);
+  assert.equal(settingsPanel.getDefaultSettingsPatch().language, 'auto');
+  assert.ok(settingsPanel.PRISM_SETTINGS_SCHEMA.mascot.allowed.includes('minis'), 'mascot enum must include minis');
+  assert.equal(settingsPanel.PRISM_SETTINGS_SCHEMA.mascot.default, cdp.CONFIG_SCHEMA.mascot.default);
+
+  // 2) PRISM_STORAGE_KEYS + dynamic prefix sweep
+  for (const k of [
+    'ag-prism:homeSessionScope.v1',
+    'ag_prism_pp_muted',
+    'ag.prism.effortMemory.v1',
+    'ag.codexEffortSlider.settings.v1',
+  ]) {
+    assert.ok(settingsPanel.PRISM_STORAGE_KEYS.includes(k), `PRISM_STORAGE_KEYS missing ${k}`);
+  }
+  const map = new Map([
+    ['ag-prism:homeSessionScope.v1', 'local'],
+    ['ag_prism_pp_muted', '1'],
+    ['ag.prism.effortMemory.v1', '{}'],
+    ['ag.codexEffortSlider.settings.v1', '{}'],
+    ['ag-prism:trajRollup.v1:ws1', '{}'],
+    ['ag-prism:trajRollup.v1:ws2', '{}'],
+    ['ag-pulse-enabled', '1'],
+  ]);
+  const mockStore = {
+    get length() { return map.size; },
+    key: (i) => Array.from(map.keys())[i] ?? null,
+    removeItem: (k) => map.delete(k),
+  };
+  settingsPanel.clearPrismLocalStorage(mockStore);
+  assert.equal(map.has('ag-prism:homeSessionScope.v1'), false);
+  assert.equal(map.has('ag_prism_pp_muted'), false);
+  assert.equal(map.has('ag.prism.effortMemory.v1'), false);
+  assert.equal(map.has('ag.codexEffortSlider.settings.v1'), false);
+  assert.equal(map.has('ag-prism:trajRollup.v1:ws1'), false);
+  assert.equal(map.has('ag-prism:trajRollup.v1:ws2'), false);
+  assert.equal(map.has('ag-pulse-enabled'), true, 'External Pulse key must remain untouched');
+
+  // 3) cdp.js removes 8 zero-caller zombie exports while preserving CHANNEL_REGISTRY teardowns
+  for (const zombie of [
+    'setChannelMemCache',
+    'TELEMETRY_REMOVE_EXPRESSION',
+    'EFFORT_SLIDER_REMOVE_EXPRESSION',
+    'WORKBENCH_ENHANCER_REMOVE_EXPRESSION',
+    'CONTEXT_MENU_REMOVE_EXPRESSION',
+    'getChannelTeardownExpression',
+    'getChannelsByTier',
+    'getChannelsByInjectMode',
+  ]) {
+    assert.equal(Object.prototype.hasOwnProperty.call(cdp, zombie), false, `cdp.js must no longer export zombie symbol ${zombie}`);
+  }
+  for (const chId of ['telemetry', 'effortSlider', 'workbenchEnhancer', 'contextMenu']) {
+    assert.ok(cdp.findChannel(chId)?.teardown?.length > 0, `CHANNEL_REGISTRY.${chId}.teardown must remain intact`);
+  }
+
+  // 4) tools/install-plugin.cjs decouples from tools/patch-asar.cjs via src/platform/process-probe.cjs
+  assert.equal(typeof processProbe.spawnBreakawayNodeProcess, 'function');
+  assert.equal(typeof processProbe.isPidAlive, 'function');
+  assert.equal(processProbe.isPidAlive(process.pid), true);
+  assert.equal(processProbe.isPidAlive(-1), false);
+  const installPluginSrc = fs.readFileSync(path.join(ROOT, 'tools', 'install-plugin.cjs'), 'utf8');
+  assert.equal(installPluginSrc.includes('patch-asar.cjs'), false, 'tools/install-plugin.cjs must not require patch-asar.cjs');
+  assert.ok(installPluginSrc.includes('src/platform/process-probe.cjs'));
+
+  // 5) REMOVE_EXPRESSION cleans all 16 audited globals + data-ag-prism-lang, preserves host data-theme, and drops 5 zombie deletes
+  for (const zombieDel of ['__agCsCrabAssets', '__agCsEffortCore', '__agCsMascotCore', '__agCsPerfAssets', '__opChromaGatesSession']) {
+    assert.equal(cdp.REMOVE_EXPRESSION.includes(zombieDel), false, `REMOVE_EXPRESSION must drop obsolete zombie delete ${zombieDel}`);
+  }
+  const rootAttrs = new Map([
+    ['data-ag-prism-lang', 'zh-CN'],
+    ['data-theme', 'dark'],
+  ]);
+  const remDoc = {
+    documentElement: {
+      getAttribute: (k) => rootAttrs.get(k) ?? null,
+      removeAttribute: (k) => rootAttrs.delete(k),
+      style: { removeProperty() {} },
+    },
+    getElementById: () => null,
+    querySelector: () => null,
+    querySelectorAll: () => [],
+  };
+  let bridgeDisposed = false;
+  const auditedGlobals = [
+    '__agPrismSidebarHostOps',
+    '__agPrismSidebarLastSendError',
+    '__agPrismSidebarLastStartStage',
+    '__agPrismSidebarLastStartFallback',
+    '__agPrismSidebarLastSendFallback',
+    '__agPulseExternalBridge',
+    '__agPulseRuntimeBridge',
+    '__agPulseRuntimeOwner',
+    '__agPrismMetricsBridge',
+    '__agPrismSvgUtil',
+    '__agPrismRipple',
+    '__agRippleForce2D',
+    '__agPeriodicMockHost',
+    '__agPrismOmniBootCfg',
+    '__agPrismOmniDisableAutoBoot',
+    '__agPrismResolveInlineDiff',
+  ];
+  const remWin = { document: remDoc };
+  for (const k of auditedGlobals) {
+    remWin[k] = k === '__agPulseRuntimeBridge' ? { dispose() { bridgeDisposed = true; } } : 'active';
+  }
+  remWin.window = remWin;
+  remWin.globalThis = remWin;
+  vm.runInNewContext(cdp.REMOVE_EXPRESSION, remWin);
+  assert.equal(bridgeDisposed, true, 'REMOVE_EXPRESSION must dispose __agPulseRuntimeBridge when no external Pulse owns it');
+  for (const k of auditedGlobals) {
+    assert.equal(remWin[k], undefined, `REMOVE_EXPRESSION must clean ${k}`);
+  }
+  assert.equal(rootAttrs.has('data-ag-prism-lang'), false, 'REMOVE_EXPRESSION must remove data-ag-prism-lang');
+  assert.equal(rootAttrs.get('data-theme'), 'dark', 'REMOVE_EXPRESSION must NEVER delete host documentElement[data-theme]');
+});

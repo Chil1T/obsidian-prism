@@ -104,6 +104,7 @@ function createI18nChannelBuilders({ rootDir, readConfig, detectSystemUiLocale, 
     const hashJson = serializeJsonForEval(codeHash);
 
     return `(() => {
+  try {
 ${CHANNEL_MAIN_FRAME_HOST_GUARD}
 
     let targetMode = ${modeJson};
@@ -187,6 +188,9 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
       return { ok: true, status: 'deferred', codeHash: targetHash };
     }
     return mountOrReuse();
+  } catch (err) {
+    return { ok: false, status: 'error', channel: 'hostI18n', error: String(err && err.message || err).slice(0, 300), stack: String(err && err.stack || '').slice(0, 600) };
+  }
   })()`;
   }
 
@@ -264,6 +268,7 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
     const hashJson = serializeJsonForEval(codeHash);
 
     return `(() => {
+  try {
     try {
       const loc = typeof window !== 'undefined' && window.location;
       if (
@@ -317,6 +322,9 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
       return { ok: true, status: 'deferred', codeHash: targetHash };
     }
     return mountOrReuse();
+  } catch (err) {
+    return { ok: false, status: 'error', channel: 'swarmI18n', error: String(err && err.message || err).slice(0, 300), stack: String(err && err.stack || '').slice(0, 600) };
+  }
   })()`;
   }
 

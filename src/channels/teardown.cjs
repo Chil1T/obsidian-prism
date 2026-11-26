@@ -135,11 +135,18 @@ const REMOVE_EXPRESSION = `(() => {
   delete window.__agPrismOmniBridge;
   delete window.__agPrismOmniResolve;
   delete window.__agPrismOmniServerMeta;
+  try { delete window.__agPrismOmniBootCfg; delete globalThis.__agPrismOmniBootCfg; } catch {}
+  try { delete window.__agPrismOmniDisableAutoBoot; delete globalThis.__agPrismOmniDisableAutoBoot; } catch {}
   delete window.__agPrismSidebar;
   delete window.__agPrismSidebarBridge;
   delete window.__agPrismSidebarResolve;
   delete window.__agPrismSidebarMeta;
+  for (const k of ['__agPrismSidebarHostOps', '__agPrismSidebarLastSendError', '__agPrismSidebarLastStartStage', '__agPrismSidebarLastStartFallback', '__agPrismSidebarLastSendFallback']) {
+    try { delete window[k]; } catch {}
+    try { delete globalThis[k]; } catch {}
+  }
   delete window.__agPrismMetricsResolve;
+  try { delete window.__agPrismMetricsBridge; delete globalThis.__agPrismMetricsBridge; } catch {}
   delete window.__agPrismRepoBridge;
   delete window.__agPrismRepoResolve;
   delete window.__agPrismThoughtBridge;
@@ -150,6 +157,7 @@ const REMOVE_EXPRESSION = `(() => {
   try { delete window.__agPrismInlineDiff; } catch {}
   try { delete window.__agPrismInlineDiffFactory; } catch {}
   try { delete window.__agPrismInlineDiffResolve; } catch {}
+  try { delete window.__agPrismResolveInlineDiff; delete globalThis.__agPrismResolveInlineDiff; } catch {}
   try { delete window.__agPrismWallpaper; } catch {}
   try { delete window.__agPrismWallpaperFactory; } catch {}
   try { delete window.__agPrismWallpaperSettingsUi; } catch {}
@@ -171,7 +179,7 @@ const REMOVE_EXPRESSION = `(() => {
   delete window.__agPrismPeriodicKeyboard3D;
   delete window.__agPrismOledScreen;
   delete window.__agPrismGrainAssets;
-  for (const k of ['__agPeriodicAudioFx', '__agPeriodicModelCatalog', '__agPeriodicHostBridge', '__agPeriodicBentoUi', '__agPeriodicPbrGrainAssets', '__agPeriodicOledScreen', '__agPeriodicKeyboard3D']) {
+  for (const k of ['__agPeriodicAudioFx', '__agPeriodicModelCatalog', '__agPeriodicHostBridge', '__agPeriodicMockHost', '__agPeriodicBentoUi', '__agPeriodicPbrGrainAssets', '__agPeriodicOledScreen', '__agPeriodicKeyboard3D']) {
     try { delete window[k]; } catch {}
     try { delete globalThis[k]; } catch {}
   }
@@ -223,7 +231,10 @@ const REMOVE_EXPRESSION = `(() => {
   delete globalThis.__agPrismHostEnhancer;
   delete globalThis.__agPrismConvAura;
   delete globalThis.__agPrismSmoothCaret;
-  delete globalThis.__opChromaGatesSession;
+  for (const k of ['__agPrismSvgUtil', '__agPrismRipple', '__agRippleForce2D', '__agPulseExternalBridge']) {
+    try { delete window[k]; } catch {}
+    try { delete globalThis[k]; } catch {}
+  }
   delete globalThis.AntigravityCodexEffortSlider;
   delete globalThis.__agCodexEffortSliderDisableAutoBoot;
   delete globalThis.__agCsUiMain;
@@ -234,12 +245,8 @@ const REMOVE_EXPRESSION = `(() => {
   delete globalThis.__agMotionEngine;
   delete globalThis.__agAnimatedIcons;
   delete globalThis.__agCsPulseVialBridge;
-  delete globalThis.__agCsCrabAssets;
-  delete globalThis.__agCsMascotCore;
   delete globalThis.__agCsRippleCore;
   delete globalThis.__agCsUsageCore;
-  delete globalThis.__agCsEffortCore;
-  delete globalThis.__agCsPerfAssets;
   delete globalThis.__agCsI18nCore;
   delete globalThis.__agCsLocales;
   const root = document.documentElement;
@@ -268,6 +275,8 @@ const REMOVE_EXPRESSION = `(() => {
       'data-ag-cs-model-menu',
       'data-ag-cs-takeover-open',
       'data-ag-cs-lang',
+      'data-ag-prism-lang',
+      'data-ag-prism-lang-owned',
       'data-ag-cs-cjk',
       'data-ag-cs-effort-accent',
       'data-ag-cs-perf-backdrop',
@@ -286,8 +295,11 @@ const REMOVE_EXPRESSION = `(() => {
       'data-ag-prism-periodic-picker',
       'data-ag-pp-open',
       'data-ag-prism-mode',
+      'data-ag-prism-chat-kind',
+      'data-ag-prism-chat-telemetry',
       'data-ag-prism-sidebar-host-sync',
       'data-ag-prism-sidebar-space',
+      'data-ag-prism-scope',
       'data-ag-cs-space',
       'data-ag-cs-space-palette',
       'data-ag-cs-space-accent',
@@ -299,6 +311,7 @@ const REMOVE_EXPRESSION = `(() => {
       'data-ag-prism-wallpaper-hole',
       'data-ag-prism-suggester',
     ].forEach((attr) => root.removeAttribute(attr));
+    // Note: Intentionally do NOT remove documentElement[data-theme] — Prism only reads it for host light/dark detection and never writes it to <html>.
     if (root.getAttribute('data-ag-cjk') === '1') root.removeAttribute('data-ag-cjk');
     if (root.style && typeof root.style.removeProperty === 'function') {
       root.style.removeProperty('--ag-spring-sidebar-ease');
@@ -432,8 +445,15 @@ const REMOVE_EXPRESSION = `(() => {
   });
   // Only remove Prism-owned fallback nodes & styles; NEVER touch external Pulse or external Effort Slider instances!
   document.querySelectorAll('[data-ag-prism-fallback="1"]').forEach((n) => n.remove());
-  if (typeof window !== 'undefined' && window && !window.__agPulseDispose && window.__agPulseInlineInstalled === true) {
-    window.__agPulseInlineInstalled = false;
+  if (typeof window !== 'undefined' && window && !window.__agPulseDispose) {
+    if (window.__agPulseInlineInstalled === true) {
+      window.__agPulseInlineInstalled = false;
+    }
+    try { window.__agPulseRuntimeBridge?.dispose?.(); } catch {}
+    try { delete window.__agPulseRuntimeBridge; } catch {}
+    try { delete globalThis.__agPulseRuntimeBridge; } catch {}
+    try { delete window.__agPulseRuntimeOwner; } catch {}
+    try { delete globalThis.__agPulseRuntimeOwner; } catch {}
   }
   document.querySelectorAll('[data-ag-prism-hidden="1"]').forEach((hiddenExtPulse) => {
     hiddenExtPulse.removeAttribute('data-ag-prism-hidden');

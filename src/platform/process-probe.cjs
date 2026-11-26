@@ -4,8 +4,53 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { execFileSync } = require('child_process');
+const { execFileSync, spawn } = require('child_process');
 const { PORT_FILE } = require('../utils/fs-safe.cjs');
+
+const DEFAULT_ROOT_DIR = path.resolve(__dirname, '..', '..');
+
+function isPidAlive(pid) {
+  const num = Number(pid);
+  if (!Number.isInteger(num) || num <= 0) return false;
+  try {
+    process.kill(num, 0);
+    return true;
+  } catch (err) {
+    return Boolean(err && err.code === 'EPERM');
+  }
+}
+
+/**
+ * 使用 Node 原生 detached + windowsHide 派生独立后台无窗子进程（0 黑框、零 PowerShell、零 WMI）。
+ */
+function spawnBreakawayNodeProcess(nodeArgs, opts = {}) {
+  const exe = process.execPath;
+  const cwd = opts.cwd || DEFAULT_ROOT_DIR;
+
+  try {
+    const spawnOpts = {
+      cwd,
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+    };
+    if (opts.env && typeof opts.env === 'object') {
+      spawnOpts.env = opts.env;
+    }
+    const child = spawn(exe, nodeArgs, spawnOpts);
+    if (child && typeof child.on === 'function') {
+      child.on('error', () => {});
+    }
+    if (child && Number.isInteger(child.pid) && child.pid > 0) {
+      child.unref();
+      return { spawned: true, pid: child.pid, method: 'node-detached-windowshide' };
+    }
+  } catch {
+    // Ignore
+  }
+
+  return { spawned: false, pid: null, method: null };
+}
 
 function readPort(portFile = PORT_FILE) {
   if (process.env.AG_CDP_PORT) return parseInt(process.env.AG_CDP_PORT, 10);
@@ -351,6 +396,8 @@ function createProcessProbe({ rootDir = path.resolve(__dirname, '..', '..'), por
 }
 
 module.exports = {
+  isPidAlive,
+  spawnBreakawayNodeProcess,
   readPort,
   readPidFromLockFile,
   matchesExpectedDaemonSignature,

@@ -99,6 +99,21 @@ const channelRegistry = createChannelRegistry({
   readConfig: configStore.readConfig,
 });
 
+const { setChannelMemCache: _dropSetChannelMemCache, ...publicBundleCache } = bundleCache;
+const {
+  TELEMETRY_REMOVE_EXPRESSION: _dropTelemetryRemove,
+  EFFORT_SLIDER_REMOVE_EXPRESSION: _dropEffortRemove,
+  WORKBENCH_ENHANCER_REMOVE_EXPRESSION: _dropWorkbenchRemove,
+  CONTEXT_MENU_REMOVE_EXPRESSION: _dropContextMenuRemove,
+  getChannelTeardownExpression: _dropGetChannelTeardown,
+  ...publicTeardown
+} = teardown;
+const {
+  getChannelsByTier: _dropGetChannelsByTier,
+  getChannelsByInjectMode: _dropGetChannelsByInjectMode,
+  ...publicChannelRegistry
+} = channelRegistry;
+
 module.exports = {
   STYLE_ID: schema.STYLE_ID,
   LEGACY_STYLE_ID: schema.LEGACY_STYLE_ID,
@@ -208,7 +223,7 @@ module.exports = {
   computeHash: fsSafe.computeHash,
   buildConfigRefreshExpression: ch1Templates.buildConfigRefreshExpression,
   buildInjectExpression: bundleCache.buildInjectExpression,
-  ...bundleCache,
+  ...publicBundleCache,
   ...coreBuilders,
   ...i18nBuilders,
   ...studioBuilders,
@@ -219,9 +234,9 @@ module.exports = {
   _setWindowsUiLocaleReaderForTest: localeDialog._setWindowsUiLocaleReaderForTest,
   buildRelaunchDialogCopy: localeDialog.buildRelaunchDialogCopy,
   DEFERRED_ROOT_MODULES: partPreprocess.DEFERRED_ROOT_MODULES,
-  ...teardown,
+  ...publicTeardown,
   ...runtimeBuilders,
-  ...channelRegistry,
+  ...publicChannelRegistry,
 };
 
 if (require.main === module) {
