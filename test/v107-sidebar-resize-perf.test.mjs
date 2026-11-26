@@ -798,10 +798,12 @@ test('P0-2 pulse inline-fallback: tierRo uses entry.contentRect.width without ex
   assert.equal(footer._rectReads, 0, 'tierRo with contentRect.width must perform 0 getBoundingClientRect calls');
   assert.equal(footer.getAttribute('data-t'), '0');
 
-  // Verify narrow width transitions to tier 5 and 0-width entry skips getBoundingClientRect
+  // Verify narrow width transitions outer footer to '1 2' and inner bar to tier 5 ('1 2 3 4 5'), and 0-width entry skips getBoundingClientRect
   roCb([{ target: footer, contentRect: { width: 300, height: 32 } }]);
   env.flushRafs(16);
-  assert.equal(footer.getAttribute('data-t'), '1 2 3 4 5');
+  assert.equal(footer.getAttribute('data-t'), '1 2');
+  const mountedBar = sb.__agPrismTelemetry.getPrimaryBar();
+  assert.equal(mountedBar?.getAttribute('data-t'), '1 2 3 4 5');
   roCb([{ target: footer, contentRect: { width: 0, height: 0 } }]);
   env.flushRafs(16);
   assert.equal(footer._rectReads, 0, '0-width contentRect must NOT fall back to getBoundingClientRect');

@@ -365,15 +365,31 @@ test('W5-1 (PR #115 + beta.4 cold-start): standalone chooseQuotaGroupFallback wo
     assert.equal(kids[1], wChip, 'weekly chip must sit second in .bar');
     assert.equal(kids[2], sChip, 'speed chip follows weekly chip');
 
+    // Default telemetryQuotaMode='compact': 5h=91% vs weekly=33% -> only tighter weekly chip is shown in bar
+    assert.equal(ctrl.getState().quotaMode, 'compact');
+    assert.equal(fChip.hidden, true, 'compact mode hides looser 5h chip when weekly is tighter');
+    assert.equal(sr.getElementById('five-balance').textContent, '91%');
+    assert.equal(wChip.hidden, false, 'compact mode shows tighter weekly chip');
+    assert.equal(sr.getElementById('week-balance').textContent, '33%');
+    assert.equal(wChip.getAttribute('data-warn'), '1', '<=35% must set data-warn="1"');
+    assert.ok((wChip.getAttribute('title') || '').includes('Wk 33%'));
+
+    // Detail card (#context-card) always presents full 5h + weekly + countdown + speed + cache
+    assert.match(sr.getElementById('context-five-quota').textContent, /^91% · /);
+    assert.match(sr.getElementById('context-week-quota').textContent, /^33% · /);
+    assert.equal(sr.getElementById('context-week-quota').getAttribute('data-warn'), '1');
+    assert.match(sr.getElementById('context-speed').textContent, /58\.4 tok\/s · TTFT 0\.65s/);
+    assert.equal(sr.getElementById('context-cache').textContent, '91.0%');
+
+    // Switch to telemetryQuotaMode='both' -> both 5h and weekly chips are visible simultaneously
+    ctrl.sync({ telemetryModule: 'on', telemetryQuotaMode: 'both', language: 'en' });
+    assert.equal(ctrl.getState().quotaMode, 'both');
     assert.equal(fChip.hidden, false);
     assert.equal(sr.getElementById('five-balance').textContent, '91%');
     assert.equal(fChip.getAttribute('data-warn'), null);
     assert.ok((fChip.getAttribute('title') || '').includes('Gemini · 5h 91%'));
-
     assert.equal(wChip.hidden, false);
     assert.equal(sr.getElementById('week-balance').textContent, '33%');
-    assert.equal(wChip.getAttribute('data-warn'), '1', '<=35% must set data-warn="1"');
-    assert.ok((wChip.getAttribute('title') || '').includes('Wk 33%'));
 
     // Click 5h chip -> opens #context-card
     const xCard = sr.getElementById('context-card');
@@ -383,14 +399,17 @@ test('W5-1 (PR #115 + beta.4 cold-start): standalone chooseQuotaGroupFallback wo
     assert.equal(fChip.getAttribute('aria-expanded'), 'true');
     assert.equal(wChip.getAttribute('aria-expanded'), 'false');
 
-    // Switch to Claude without __agCsUsageCore -> critical 14% warn="2", unavailable weekly hidden
+    // Switch back to compact & Claude without __agCsUsageCore -> only available 5h (14%, warn="2") shown, unavailable weekly hidden
+    ctrl.sync({ telemetryModule: 'on', telemetryQuotaMode: 'compact', language: 'en' });
     activeModel = 'Claude Opus 5.5';
     await ctrl.refresh();
+    assert.equal(fChip.hidden, false, 'compact mode shows sole available 5h window');
     assert.equal(sr.getElementById('five-balance').textContent, '14%');
     assert.equal(fChip.getAttribute('data-warn'), '2', '<=15% must set data-warn="2"');
     assert.equal(wChip.hidden, true);
+    assert.equal(sr.getElementById('context-week-quota').textContent, '—');
 
-    // When __agCsUsageCore IS loaded later, delegate to it first
+    // When __agCsUsageCore IS loaded later, delegate to it first (Argon: 5h=77%, weekly=55% -> compact shows weekly 55%)
     let usageCoreCalls = 0;
     env.win.__agCsUsageCore = {
       chooseQuotaGroup(gs, m) {
@@ -401,6 +420,9 @@ test('W5-1 (PR #115 + beta.4 cold-start): standalone chooseQuotaGroupFallback wo
     await ctrl.refresh();
     assert.ok(usageCoreCalls >= 1, 'must prefer __agCsUsageCore.chooseQuotaGroup when available');
     assert.equal(sr.getElementById('five-balance').textContent, '77%');
+    assert.equal(sr.getElementById('week-balance').textContent, '55%');
+    assert.equal(fChip.hidden, true);
+    assert.equal(wChip.hidden, false);
   } finally {
     ctrl.destroy();
   }
@@ -621,5 +643,186 @@ test('W5-4 (Issue #110 i18n): periodic-picker 8-locale tierNonPlanner & unrelNon
         assert.equal(CJK_RE.test(val), false, `PP_I18N[${loc}].${key} must have 0 CJK chars (got "${val}")`);
       }
     }
+  }
+});
+
+test('W6-Footer-UX: decoupled footerTier/barTier 6-tier layout, compact vs both quota mode, 180ms hover preview + click pin coexistence, 9-locale settings & 0 leaks', async () => {
+  const cdp = require(path.join(ROOT, 'cdp.js'));
+  const i18nExt = require(path.join(ROOT, 'src', 'runtime', 'i18n-ext-beta4.js'));
+  const settingsExt = require(path.join(ROOT, 'src', 'runtime', 'settings-ext-beta4.js'));
+  const inlineSrc = fs.readFileSync(path.join(ROOT, 'vendor', 'pulse-dashboard', 'inline-fallback.js'), 'utf8');
+
+  // 1) Hygiene & schema/i18n contracts
+  assert.equal(/\.\s*innerHTML\s*=/.test(inlineSrc), false, 'inline-fallback.js must have 0 innerHTML writes');
+  assert.equal(/:has\(/.test(inlineSrc), false, 'inline-fallback.js must have 0 :has(');
+  assert.equal(cdp.DEFAULT_CONFIG.telemetryQuotaMode, 'compact');
+  assert.equal(cdp.validateConfigEntry('telemetryQuotaMode', 'compact'), true);
+  assert.equal(cdp.validateConfigEntry('telemetryQuotaMode', 'both'), true);
+  assert.equal(cdp.validateConfigEntry('telemetryQuotaMode', 'invalid'), false);
+
+  const CANONICAL_9 = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de', 'tr'];
+  const NON_CJK = new Set(['en', 'ko', 'es', 'fr', 'de', 'tr']);
+  const CJK_RE = /[\u3400-\u9FFF\uF900-\uFAFF]/;
+  for (const loc of CANONICAL_9) {
+    const d = i18nExt.getStrings(loc);
+    for (const k of ['setTelemetryQuotaModeTitle', 'setTelemetryQuotaModeDesc', 'optQuotaCompact', 'optQuotaBoth']) {
+      assert.ok(typeof d[k] === 'string' && d[k].trim().length > 0, `i18n-ext-beta4[${loc}].${k} must be non-empty`);
+      if (NON_CJK.has(loc)) assert.equal(CJK_RE.test(d[k]), false, `i18n-ext-beta4[${loc}].${k} leaked CJK: ${d[k]}`);
+    }
+  }
+
+  // 2) Decoupled footerTier (>=440 => '0', 360-439 => '1', <360 => '1 2') vs barTier (880/660/530/440/360)
+  const env = createSwitchMockEnv({ initialCid: CID_A });
+  let footerW = 900;
+  env.footer.getBoundingClientRect = () => ({ left: 0, top: 0, width: footerW, height: 32, right: footerW, bottom: 32 });
+  env.win.__agPrismMetricsCall = (payloadStr) => {
+    const req = JSON.parse(payloadStr);
+    const s = makeSnap({ model: 'Gemini 4 Neon Extra High', usedFraction: 0.88, tps: 73.5 });
+    s.speed.cacheHitRate = 0.969;
+    s.speed.taskUsage = { subagents: 24, total: { totalTokens: 180000 } };
+    env.win.__agPrismMetricsResolve?.(req.id, s);
+  };
+
+  const ctrl = inlineMod.createTelemetryController({ window: env.win, document: env.doc });
+  try {
+    ctrl.sync({ telemetryModule: 'on', language: 'zh-CN' });
+    await ctrl.refresh();
+
+    const bar = env.doc.getElementById('ag-prism-pulse-bar');
+    const sr = bar.shadowRoot;
+    const ro = env.ros[0];
+    assert.ok(ro, 'ResizeObserver must observe composer footer');
+
+    const resizeTo = (w) => {
+      footerW = w;
+      ro.cb([{ borderBoxSize: [{ inlineSize: w }] }]);
+    };
+
+    // 900px: full bar, model name intact
+    assert.equal(env.footer.getAttribute('data-t'), '0');
+    assert.equal(bar.getAttribute('data-t'), '0');
+    assert.equal(bar.getAttribute('data-wide'), null);
+
+    // 1120px: ultra-wide allows sub-badge
+    resizeTo(1120);
+    assert.equal(bar.getAttribute('data-wide'), '1');
+
+    // 720px (primary width 660-879px): outer stays '0' (model name intact!), bar enters tier '1' (hides speed & sub-badge)
+    resizeTo(720);
+    assert.equal(env.footer.getAttribute('data-t'), '0', '720px outer footer must stay data-t="0" so model name never truncates');
+    assert.equal(bar.getAttribute('data-t'), '1', '720px bar must enter tier 1 to hide tok/s and sub-badge');
+    assert.equal(bar.getAttribute('data-wide'), null);
+
+    // 600px (530-659px): outer still '0', bar enters '1 2' (also hides cache)
+    resizeTo(600);
+    assert.equal(env.footer.getAttribute('data-t'), '0');
+    assert.equal(bar.getAttribute('data-t'), '1 2');
+
+    // 480px (440-529px): outer STILL '0' (model name intact!), bar enters '1 2 3' (hides quota, keeps 88% ring)
+    resizeTo(480);
+    assert.equal(env.footer.getAttribute('data-t'), '0', '480px outer footer must still stay data-t="0"');
+    assert.equal(bar.getAttribute('data-t'), '1 2 3');
+
+    // 400px (360-439px): outer folds model name ('1'), bar enters '1 2 3 4'
+    resizeTo(400);
+    assert.equal(env.footer.getAttribute('data-t'), '1');
+    assert.equal(bar.getAttribute('data-t'), '1 2 3 4');
+
+    // 340px (<360px): outer folds model+permissions ('1 2'), bar enters '1 2 3 4 5' (26px pill)
+    resizeTo(340);
+    assert.equal(env.footer.getAttribute('data-t'), '1 2');
+    assert.equal(bar.getAttribute('data-t'), '1 2 3 4 5');
+
+    // Verify upgraded #context-card detail rows (5h + weekly + countdown + speed + cache+subagents + context)
+    assert.match(sr.getElementById('context-five-quota').textContent, /^88% · /);
+    assert.match(sr.getElementById('context-week-quota').textContent, /^62% · /);
+    assert.match(sr.getElementById('context-speed').textContent, /73\.5 tok\/s · TTFT 0\.65s/);
+    assert.equal(sr.getElementById('context-cache').textContent, '96.9% · 24代理');
+    assert.equal(sr.getElementById('context-percent').textContent, '88%');
+
+    // 3) Hover preview (180ms open / 220ms leave close) + click pin coexistence
+    const xCard = sr.getElementById('context-card');
+    const wChip = sr.querySelector('[data-card="week"]');
+    const fChip = sr.querySelector('[data-card="five"]');
+    const cChip = sr.querySelector('[data-card="cache"]');
+    assert.equal(xCard.hidden, true);
+
+    // Quick pass-through (<180ms) must NOT open card
+    wChip.dispatchEvent({ type: 'pointerenter' });
+    await new Promise((r) => setTimeout(r, 60));
+    wChip.dispatchEvent({ type: 'pointerleave' });
+    await new Promise((r) => setTimeout(r, 170));
+    assert.equal(xCard.hidden, true, 'quick hover <180ms must not open detail card');
+
+    // Hover >= 180ms opens detail card in preview mode
+    wChip.dispatchEvent({ type: 'pointerenter' });
+    await new Promise((r) => setTimeout(r, 220));
+    assert.equal(xCard.hidden, false, 'hover >=180ms must open detail card');
+
+    // Moving pointer from chip into #context-card cancels close timer and keeps card open
+    wChip.dispatchEvent({ type: 'pointerleave' });
+    await new Promise((r) => setTimeout(r, 60));
+    xCard.dispatchEvent({ type: 'pointerenter' });
+    await new Promise((r) => setTimeout(r, 240));
+    assert.equal(xCard.hidden, false, 'entering #context-card must keep preview card open');
+
+    // Leaving #context-card closes preview after ~220ms
+    xCard.dispatchEvent({ type: 'pointerleave' });
+    await new Promise((r) => setTimeout(r, 270));
+    assert.equal(xCard.hidden, true, 'leaving #context-card must close unpinned preview card');
+
+    // Hover open -> click chip upgrades preview into pinned mode (leaving does NOT close!)
+    cChip.dispatchEvent({ type: 'pointerenter' });
+    await new Promise((r) => setTimeout(r, 220));
+    assert.equal(xCard.hidden, false);
+    cChip.dispatchEvent({ type: 'click' });
+    assert.equal(xCard.hidden, false, 'clicking chip while hover-previewing must pin card open instead of closing');
+    cChip.dispatchEvent({ type: 'pointerleave' });
+    await new Promise((r) => setTimeout(r, 270));
+    assert.equal(xCard.hidden, false, 'pinned card must stay open after pointerleave');
+
+    // Clicking pinned chip again closes it cleanly
+    cChip.dispatchEvent({ type: 'click' });
+    assert.equal(xCard.hidden, true, 'second click on pinned chip closes card');
+
+    // 4) Settings panel telemetryQuotaMode switch updates html attr, persists & live-syncs bar to both mode
+    const sec = env.doc.createElement('div');
+    sec.setAttribute('data-body-built', '1');
+    const modGroup = env.doc.createElement('div');
+    const telRow = env.doc.createElement('div');
+    telRow.setAttribute('data-ag-cs-row', 'telemetryModule');
+    modGroup.appendChild(telRow);
+    sec.appendChild(modGroup);
+    env.body.appendChild(sec);
+    env.win.__agPrismTelemetry = ctrl;
+    const saved = [];
+    const cfgState = { telemetryModule: 'on', telemetryQuotaMode: 'compact' };
+    settingsExt.sync(sec, {
+      doc: env.doc,
+      win: env.win,
+      lang: 'zh-CN',
+      ui: {},
+      effVal: (k) => cfgState[k],
+      saveSetting: (k, v) => { cfgState[k] = v; saved.push([k, v]); },
+      runGuardedMut: (fn) => fn(),
+    });
+    const qmRow = sec.querySelector('[data-ag-cs-row="telemetryQuotaMode"]');
+    assert.ok(qmRow, 'settings-ext-beta4 must mount telemetryQuotaMode row under telemetryModule');
+    const bothBtn = qmRow.querySelector('button[data-ag-cs-ext-qmode="both"]');
+    assert.ok(bothBtn);
+    bothBtn.dispatchEvent({ type: 'click' });
+    assert.deepEqual(saved, [['telemetryQuotaMode', 'both']]);
+    assert.equal(env.html.getAttribute('data-ag-cs-telemetry-quota'), 'both');
+    assert.equal(ctrl.getState().quotaMode, 'both');
+    assert.equal(fChip.hidden, false, 'live switch to both must immediately reveal 5h chip');
+    assert.equal(wChip.hidden, false, 'live switch to both must immediately keep weekly chip visible');
+
+    // Trigger pending hover timer right before destroy() -> verify 0 leak / 0 crash after timer elapses
+    wChip.dispatchEvent({ type: 'pointerenter' });
+    ctrl.destroy();
+    await new Promise((r) => setTimeout(r, 230));
+    assert.equal(xCard.hidden, true, 'destroy() must cancel pending hover timers cleanly');
+  } finally {
+    ctrl.destroy();
   }
 });

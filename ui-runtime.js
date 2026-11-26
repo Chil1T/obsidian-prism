@@ -104,7 +104,7 @@ for (const k of ['chatFontCustom', 'codeFontCustom']) out[k] = typeof out[k] ===
 out.ambientIntensity = pickOf(String(out.ambientIntensity ?? '100'), '0|35|70|100', '100');
 out.darkAura = pickOf(out.darkAura, 'subtle|balanced|vivid', 'balanced');
 for (const k of ['omniModule', 'effortMemory', 'periodicModelPicker']) out[k] = out[k] === 'off' || out[k] === false ? 'off' : 'on';
-for (const [k, a, b] of [['lightPreset','alabaster','crystal'],['darkAuraStyle','neon','prism'],['thoughtTrigger','expand','preload'],['scrollBottomMotion','instant','smooth'],['thoughtView','bilingual','immersive'],['linkTarget','external','builtin'],['updateChannel','beta','stable']]) out[k] = out[k] === a ? a : b;
+for (const [k, a, b] of [['lightPreset','alabaster','crystal'],['darkAuraStyle','neon','prism'],['thoughtTrigger','expand','preload'],['scrollBottomMotion','instant','smooth'],['thoughtView','bilingual','immersive'],['linkTarget','external','builtin'],['updateChannel','beta','stable'],['telemetryQuotaMode','both','compact']]) out[k] = out[k] === a ? a : b;
 const mig = (v) => { if (typeof v !== 'string') return ''; const t = v.trim(); if (!t) return ''; const low = t.toLowerCase().replace(/_/g, '-'); return low === 'yue' || low.startsWith('yue-') || low === 'zh-yue' || low.includes('cantonese') ? 'zh-CN' : t; };
 const rawLang = (out.language && out.language !== 'auto' ? mig(out.language) : '') || (out.lang && out.lang !== 'auto' ? mig(out.lang) : '');
 if (rawLang) out.language = out.lang = rawLang;
@@ -809,7 +809,7 @@ const omni = W.__agPrismOmni, meta = W.__agPrismOmniServerMeta || null, sb = W._
 const ctxMenu = W.__agPrismContextMenu || GT.__agPrismContextMenu, hiInst = W.__agPrismHostI18n;
 ownedCtxMenu = ctxMenu || null;
 const motionLv = getMotionLevel(), ctxEnabled = isContextMenuEnabled() && !destroyed, hiMode = getHostLocalizationMode(), curLang = getLang();
-const key = [VERSION, curLang, motionLv, getTelemetryMode(), getEffortSliderMode(), getEffortMemoryMode(), hiMode, getThoughtTranslateMode(), getThoughtTriggerTiming(), getThoughtView(), getOmniMode(), getLinkTarget(), +(cfg.sidebarStudio === 'on'), +ctxEnabled, meta?.baseUrl || '', sbMeta?.version || '', +!!sbMeta?.serviceReady, +!!tel, +!!eff, +!!hiInst, +!!th, +!!thUi, +!!omni, +!!sb, +!!ctxMenu].join('|');
+const key = [VERSION, curLang, motionLv, getTelemetryMode(), cfg.telemetryQuotaMode, getEffortSliderMode(), getEffortMemoryMode(), hiMode, getThoughtTranslateMode(), getThoughtTriggerTiming(), getThoughtView(), getOmniMode(), getLinkTarget(), +(cfg.sidebarStudio === 'on'), +ctxEnabled, meta?.baseUrl || '', sbMeta?.version || '', +!!sbMeta?.serviceReady, +!!tel, +!!eff, +!!hiInst, +!!th, +!!thUi, +!!omni, +!!sb, +!!ctxMenu].join('|');
 if (!force && key === lastAbsorbedSyncKey) return;
 lastAbsorbedSyncKey = key;
 const run = (fn) => { try { fn(); } catch {} };
@@ -829,28 +829,29 @@ const targetFps = getTargetFps(), telemetryMod = getTelemetryMode(), effortSlide
 runGuardedMut(() => {
 const csA = {
 style: '1', theme: dark ? 'dark' : 'light', palette, 'light-preset': lightPreset, motion: motionLv,
-'perf-mode': normPerfMode(cfg.performanceMode), 'target-fps': targetFps, telemetry: telemetryMod, 'effort-slider': effortSliderMod,
+'perf-mode': normPerfMode(cfg.performanceMode), 'target-fps': targetFps, telemetry: telemetryMod, 'telemetry-quota': cfg.telemetryQuotaMode, 'effort-slider': effortSliderMod,
 'thought-translate': getThoughtTranslateMode(), accent: getAccentTone(), corners: getCornerStyle(),
 'scroll-bottom': cfg.scrollBottomMotion, 'code-font': getCodeFont(), ligatures: isCodeLigaturesEnabled() ? '1' : '0',
 ambient: getAmbientCssValue(), 'dark-aura': cfg.darkAura, 'dark-aura-style': cfg.darkAuraStyle, home: cfg.homeLayout,
 composer: cfg.composer, 'logo-ink': cfg.logoInk === 'foreground' ? 'foreground' : 'accent',
 sidebar: cfg.sidebar, 'sidebar-compact': cfg.sidebarCompact ? 'on' : 'off', 'sb-fold': cfg.sidebarNavFold, lang,
 };
+const clrA = (k) => { if (ha(html, k)) ra(html, k); };
 for (const [k, v] of O.entries(csA)) setAttrIfChanged(html, 'data-ag-cs-' + k, v);
 for (const [k, v] of [['', VERSION], ['-omni', getOmniMode()], ['-link-target', getLinkTarget()], ['-sidebar-studio', cfg.sidebarStudio]]) setAttrIfChanged(html, 'data-ag-prism' + k, v);
-if (cfg.sidebarRestyle === false) { if (ha(html, 'data-ag-cs-sidebar-collapsed')) ra(html, 'data-ag-cs-sidebar-collapsed'); qa(D, '.ag-cs-sidebar-glide-pill').forEach((n) => n.remove()); }
+if (cfg.sidebarRestyle === false) { clrA('data-ag-cs-sidebar-collapsed'); qa(D, '.ag-cs-sidebar-glide-pill').forEach((n) => n.remove()); }
 if (isFn(i18nCore?.isCjkLanguage) ? i18nCore.isCjkLanguage(lang) : isZh()) setAttrIfChanged(html, 'data-ag-cs-cjk', '1');
-else if (ha(html, 'data-ag-cs-cjk')) ra(html, 'data-ag-cs-cjk');
+else clrA('data-ag-cs-cjk');
 syncMotionOffStyle(motionLv === 'off');
 getDomBus()?.applyPerformanceMode?.(cfg.performanceMode, D, W);
 const igRm = !!cfg.ignoreReducedMotion, IR_A = 'data-ag-cs-ignore-rm';
 if (isFn(W.__agPrismApplyIgnoreReducedMotion)) W.__agPrismApplyIgnoreReducedMotion(igRm, D, W);
-else if (igRm) setAttrIfChanged(html, IR_A, '1'); else if (ha(html, IR_A)) ra(html, IR_A);
+else if (igRm) setAttrIfChanged(html, IR_A, '1'); else clrA(IR_A);
 try { (W.__agPrismFontCustomizer || GT.__agPrismFontCustomizer)?.applyCustomFonts?.(cfg, D); } catch {}
 try { (W.__agPrismCssMgr || GT.__agPrismCssMgr)?.sync?.(cfg); } catch {}
 syncAbsorbedModules(forceAbsorbed);
 const tv = 'data-ag-prism-thought-view';
-if (getThoughtTranslateMode() === 'off') { if (ha(html, tv)) ra(html, tv); } else setAttrIfChanged(html, tv, getThoughtView());
+if (getThoughtTranslateMode() === 'off') clrA(tv); else setAttrIfChanged(html, tv, getThoughtView());
 syncCaretListeners(cfg.smoothCaret !== false);
 if (telemetryMod !== lastAppliedTelemetry) { const prevTel = lastAppliedTelemetry; lastAppliedTelemetry = telemetryMod; if (prevTel) ensurePulseBridge(telemetryMod !== 'off'); }
 const refreshOptics = () => { rippleCtl.refreshTheme(); convAuraCtl.sync(); convAuraCtl.refreshTheme(); invRim(); };
@@ -870,8 +871,8 @@ if (metricsKey !== lastMetricsKey) { const hadPrev = lastMetricsKey !== ''; last
 }
 
 // Composer Box & Clearance
-const T_TK = 'interaction-takeover-card', T_RP = 'running-items-panel', T_QM = 'queued-messages-card', T_SQ = 'side-question-panel', S_RP = '[data-testid="running-items-panel"]', S_IB = '[data-testid="agent-input-box"]', S_SUB = '[data-testid="subagent-tab-conversation"]';
-const TK_SEL = '[data-testid="interaction-takeover-card"], [data-testid="side-question-panel"], .agy-takeover-frame', S_AQO = '[data-testid="ask-question-option"]', A_Q = 'data-ag-cs-queued', A_QA = 'data-ag-queued-act', A_TK = 'data-ag-cs-takeover', A_TKO = A_TK + '-open', A_TT = 'data-ag-cs-top-toolbar', S_TB = '[data-testid="input-box-bottom-toolbar"]', A_PB = 'data-ag-cs-prism-box', A_PM = 'data-ag-cs-prism-mirror';
+const _ts = (s) => `[data-testid="${s}"]`, T_TK = 'interaction-takeover-card', T_RP = 'running-items-panel', T_QM = 'queued-messages-card', T_SQ = 'side-question-panel', S_RP = _ts(T_RP), S_IB = _ts('agent-input-box'), S_SUB = _ts('subagent-tab-conversation');
+const TK_SEL = `${_ts(T_TK)}, ${_ts(T_SQ)}, .agy-takeover-frame`, S_AQO = _ts('ask-question-option'), A_Q = 'data-ag-cs-queued', A_QA = 'data-ag-queued-act', A_TK = 'data-ag-cs-takeover', A_TKO = A_TK + '-open', A_TT = 'data-ag-cs-top-toolbar', S_TB = _ts('input-box-bottom-toolbar'), A_PB = 'data-ag-cs-prism-box', A_PM = 'data-ag-cs-prism-mirror';
 const findTkCards = (sc) => {
 if (!sc) return [];
 const out = [], seen = new Set(), add = (e) => { if (e && !seen.has(e)) { seen.add(e); out.push(e); } };

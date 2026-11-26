@@ -20,6 +20,11 @@
     balanced: 'optPerfBalanced',
     quality: 'optPerfQuality',
   });
+  const QUOTA_MODES = Object.freeze(['compact', 'both']);
+  const QUOTA_MODE_OPT_KEYS = Object.freeze({
+    compact: 'optQuotaCompact',
+    both: 'optQuotaBoth',
+  });
   const CHAT_FONT_MODES = Object.freeze(['default', 'system-sans', 'noto-sans', 'inter', 'harmony', 'custom']);
   const CHAT_FONT_OPT_KEYS = Object.freeze({
     default: 'optChatFontDefault',
@@ -473,6 +478,69 @@
     return { codeRow, customBtn, customUi };
   }
 
+  function ensureTelemetryQuotaModeRow(rootEl, doc, ctx) {
+    let row = qs(rootEl, '[data-ag-cs-row="telemetryQuotaMode"]');
+    if (row) return row;
+    const telRow = qs(rootEl, '[data-ag-cs-row="telemetryModule"]');
+    if (!telRow || !telRow.parentElement) return null;
+
+    row = mk(doc, 'div');
+    sa(row, 'data-ag-cs-row', 'telemetryQuotaMode');
+    sa(row, 'data-ag-cs-ext-owned', '1');
+
+    const inner = mk(doc, 'div', 'py-2');
+    const textCol = mk(doc, 'div', 'flex-1');
+    const titleLine = mk(doc, 'div', 'ag-cs-settings-title-line');
+    const tSpan = mk(doc, 'span');
+    sa(tSpan, 'data-k', 't');
+    const dSpan = mk(doc, 'span', 'whitespace-pre-wrap');
+    sa(dSpan, 'data-k', 'd');
+    titleLine.appendChild(tSpan);
+    textCol.appendChild(titleLine);
+    textCol.appendChild(dSpan);
+
+    const ctrlWrap = mk(doc, 'div', 'shrink-0');
+    const grp = mk(doc, 'div', 'ag-cs-seg-group');
+    sa(grp, 'role', 'group');
+
+    const BTN_CLS = 'ag-cs-seg-btn data-[pressed]:bg-secondary data-[pressed]:text-foreground';
+    for (let i = 0; i < QUOTA_MODES.length; i++) {
+      const val = QUOTA_MODES[i];
+      const btn = mk(doc, 'button', BTN_CLS);
+      btn.type = 'button';
+      sa(btn, 'type', 'button');
+      sa(btn, 'data-ag-cs-ext-key', 'telemetryQuotaMode');
+      sa(btn, 'data-ag-cs-ext-val', JSON.stringify(val));
+      sa(btn, 'data-ag-cs-ext-qmode', val);
+      btn.addEventListener('click', (ev) => {
+        ev?.stopPropagation?.();
+        if (doc && doc.documentElement) sa(doc.documentElement, 'data-ag-cs-telemetry-quota', val);
+        const tel = (ctx.win && ctx.win.__agPrismTelemetry) || G.__agPrismTelemetry;
+        if (tel && typeof tel.sync === 'function') {
+          let curCfg = {};
+          try { curCfg = (ctx.win || G).__agPrism?.getState?.()?.cfg || {}; } catch {}
+          try { tel.sync(Object.assign({}, curCfg, { telemetryQuotaMode: val })); } catch {}
+        }
+        if (typeof ctx.saveSetting === 'function') ctx.saveSetting('telemetryQuotaMode', val);
+        if (typeof row.__extResync === 'function') row.__extResync();
+      });
+      grp.appendChild(btn);
+    }
+
+    ctrlWrap.appendChild(grp);
+    inner.appendChild(textCol);
+    inner.appendChild(ctrlWrap);
+    row.appendChild(inner);
+
+    const parent = telRow.parentElement;
+    if (telRow.nextSibling && typeof parent.insertBefore === 'function') {
+      parent.insertBefore(row, telRow.nextSibling);
+    } else {
+      parent.appendChild(row);
+    }
+    return row;
+  }
+
   function sync(rootEl, rawCtx) {
     if (!rootEl || ga(rootEl, 'data-body-built') !== '1') return false;
     const doc = (rawCtx && rawCtx.doc) || rootEl.ownerDocument || (typeof document !== 'undefined' ? document : null);
@@ -490,14 +558,17 @@
     const chatFontCustom = String(readLiveCfg(ctx, 'chatFontCustom', '') || '');
     const codeFont = String(readLiveCfg(ctx, 'codeFont', 'default') || 'default');
     const codeFontCustom = String(readLiveCfg(ctx, 'codeFontCustom', '') || '');
+    const telOff = readLiveCfg(ctx, 'telemetryModule', 'auto') === 'off';
+    const telQuotaMode = readLiveCfg(ctx, 'telemetryQuotaMode', 'compact') === 'both' ? 'both' : 'compact';
 
-    const extSig = `${lang}|${perfMode}|${ignoreRm ? 1 : 0}|${motionOff ? 1 : 0}|${chatFont}|${chatFontCustom}|${codeFont}|${codeFontCustom}`;
+    const extSig = `${lang}|${perfMode}|${ignoreRm ? 1 : 0}|${motionOff ? 1 : 0}|${chatFont}|${chatFontCustom}|${codeFont}|${codeFontCustom}|${telOff ? 1 : 0}|${telQuotaMode}`;
     if (
       rootEl.__extBeta4Sig === extSig &&
       qs(rootEl, '[data-ag-cs-row="performanceMode"]') &&
       qs(rootEl, '[data-ag-cs-row="ignoreReducedMotion"]') &&
       qs(rootEl, '[data-ag-cs-row="chatFont"]') &&
-      qs(rootEl, 'button[data-ag-cs-code-custom="1"]')
+      qs(rootEl, 'button[data-ag-cs-code-custom="1"]') &&
+      (!qs(rootEl, '[data-ag-cs-row="telemetryModule"]') || qs(rootEl, '[data-ag-cs-row="telemetryQuotaMode"]'))
     ) {
       return true;
     }
@@ -633,6 +704,34 @@
           cUi.resetBtn.textContent = extUi.btnResetFontDefault || 'Reset Default';
         }
       }
+
+      // 4. 底栏配额显示模式（模块区，紧随 telemetryModule 下方）
+      const qmRow = ensureTelemetryQuotaModeRow(rootEl, doc, ctx);
+      if (qmRow) {
+        qmRow.__extResync = resyncNow;
+        const tEl = qs(qmRow, '[data-k="t"]');
+        const dEl = qs(qmRow, '[data-k="d"]');
+        if (tEl && tEl.textContent !== extUi.setTelemetryQuotaModeTitle) tEl.textContent = extUi.setTelemetryQuotaModeTitle || 'Footer Quota Display';
+        if (dEl && dEl.textContent !== extUi.setTelemetryQuotaModeDesc) dEl.textContent = extUi.setTelemetryQuotaModeDesc || '';
+        if (qmRow.style) qmRow.style.opacity = telOff ? '0.55' : '';
+        if (telOff) sa(qmRow, 'data-ag-cs-dimmed', '1');
+        else ra(qmRow, 'data-ag-cs-dimmed');
+        const grp = qs(qmRow, '.ag-cs-seg-group');
+        if (grp) {
+          const btns = grp.querySelectorAll ? grp.querySelectorAll('button[data-ag-cs-ext-key="telemetryQuotaMode"]') : [];
+          for (let i = 0; i < btns.length; i++) {
+            const b = btns[i];
+            const val = ga(b, 'data-ag-cs-ext-qmode') || 'compact';
+            const optKey = QUOTA_MODE_OPT_KEYS[val];
+            const lbl = (optKey && extUi[optKey]) || val;
+            if (b.textContent !== lbl) b.textContent = lbl;
+            const act = val === telQuotaMode;
+            sa(b, 'aria-pressed', act ? 'true' : 'false');
+            if (act) sa(b, 'data-pressed');
+            else ra(b, 'data-pressed');
+          }
+        }
+      }
     });
 
     rootEl.__extBeta4Sig = extSig;
@@ -651,6 +750,7 @@
     STYLE_ID,
     DATALIST_ID,
     PERF_MODES,
+    QUOTA_MODES,
     CHAT_FONT_MODES,
     sync,
     dispose,
