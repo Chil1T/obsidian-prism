@@ -321,24 +321,33 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
   }
 
   function readCompiledMascotAssets(opts = null) {
+    const hopPath = path.join(rootDir, 'src', 'runtime', 'mascot-hop-transition.js');
     const mascotPath = path.join(rootDir, 'dual-mascot-rig.js');
     if (!fs.existsSync(mascotPath)) {
       return { sig: '', minRuntime: '', codeHash: '' };
     }
-    const sig = getFileSig(mascotPath);
+    const hasHop = fs.existsSync(hopPath);
+    const sig = `${hasHop ? getFileSig(hopPath) : '0'}|${getFileSig(mascotPath)}`;
     const cachePath = resolveBundleCachePathOption(opts);
     const curMem = bundleCache.getChannelMemCache('mascot');
     if (!cachePath && curMem && curMem.sig === sig && curMem.codeHash) {
       return curMem;
     }
+    const hopBuf = hasHop ? fs.readFileSync(hopPath) : null;
     const buf = fs.readFileSync(mascotPath);
+    const fileEntries = [];
+    if (hopBuf) fileEntries.push({ rel: 'src/runtime/mascot-hop-transition.js', content: hopBuf });
+    fileEntries.push({ rel: 'dual-mascot-rig.js', content: buf });
     return bundleCache.resolveChannelAssetsWithDiskCache({
       channelName: 'mascot',
       sig,
-      fileEntries: [{ rel: 'dual-mascot-rig.js', content: buf }],
+      fileEntries,
       opts,
       compileFn: () => {
-        const minRuntime = minifySingleSource(buf.toString('utf8'));
+        const parts = [];
+        if (hopBuf) parts.push(minifySingleSource(hopBuf.toString('utf8')));
+        parts.push(minifySingleSource(buf.toString('utf8')));
+        const minRuntime = parts.join(';\n');
         const codeHash = computeHash(minRuntime);
         return { minRuntime, codeHash };
       },
@@ -356,7 +365,7 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
     });
   }
 
-  // 第十通道：双桌宠（dual-mascot-rig.js）配置门控独立注入（mascot === 'off' 时 0 B）
+  // 第十通道：双桌宠（mascot-hop-transition.js + dual-mascot-rig.js）配置门控独立注入（mascot === 'off' 时 0 B）
   function buildMascotChannelExpression(config = null, opts = null) {
     const cfg = config && typeof config === 'object' ? reconcileConfigAliases(config) : readConfig();
     if (!shouldEnableMascot(cfg)) {
@@ -377,17 +386,19 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
     try {
       const liveCfg = window.__agPrism?.getState?.()?.cfg;
       if (liveCfg && (liveCfg.mascot === 'off' || liveCfg.mascot === false)) {
+        try { (window.__agPrismMascotHop || globalThis.__agPrismMascotHop)?.dispose?.(); } catch {}
         try { window.__agDualMascotRig?.dispose?.(); } catch {}
         try { (window.__agPrism || window.__agClaudeStyle)?.sync?.(); } catch {}
+        try { document.getElementById?.('ag-prism-mascot-hop-style')?.remove?.(); } catch {}
         try {
-          document.querySelectorAll?.('.ag-cs-crab, .ag-cs-dual-stage, .ag-cs-crab-stage, .ag-cs-mascot-stage, .ag-v2-mascot-stage, .ag-v2-habitat-prop').forEach((n) => {
+          document.querySelectorAll?.('.ag-cs-crab, .ag-cs-dual-stage, .ag-cs-crab-stage, .ag-cs-mascot-stage, .ag-v2-mascot-stage, .ag-v2-habitat-prop, .ag-prism-mascot-hop-layer').forEach((n) => {
             try { n.__agMascotApi?.dispose?.(); } catch {}
             n.remove?.();
           });
         } catch {}
         try { document.querySelectorAll?.('[data-ag-cs-crab-anchor]').forEach((n) => n.removeAttribute?.('data-ag-cs-crab-anchor')); } catch {}
         try { document.documentElement?.removeAttribute?.('data-ag-cs-has-crab'); document.documentElement?.removeAttribute?.('data-ag-cs-mascot-drag'); } catch {}
-        try { delete window.__agDualMascotRig; delete globalThis.__agDualMascotRig; delete window.__agPrismMascotArt; delete globalThis.__agPrismMascotArt; } catch {}
+        try { delete window.__agDualMascotRig; delete globalThis.__agDualMascotRig; delete window.__agPrismMascotArt; delete globalThis.__agPrismMascotArt; delete window.__agPrismMascotHop; delete globalThis.__agPrismMascotHop; } catch {}
         return { ok: true, status: 'off', skippedByLiveCfg: true };
       }
     } catch {}
