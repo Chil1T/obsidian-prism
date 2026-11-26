@@ -609,6 +609,26 @@
       if (s) pushThemeToIframe(f, s, force);
     }
 
+    const getDomBus = () => (win && (win.__agDomBus || win.__agPrismDomBus)) || null;
+    const readRoSize = (e) => {
+      const bb = Array.isArray(e?.borderBoxSize) ? e.borderBoxSize[0] : e?.borderBoxSize;
+      if (bb && Number.isFinite(bb.inlineSize) && Number.isFinite(bb.blockSize)) return { width: bb.inlineSize, height: bb.blockSize };
+      const cb = Array.isArray(e?.contentBoxSize) ? e.contentBoxSize[0] : e?.contentBoxSize;
+      if (cb && Number.isFinite(cb.inlineSize) && Number.isFinite(cb.blockSize)) return { width: cb.inlineSize, height: cb.blockSize };
+      const cr = e?.contentRect;
+      return cr && (cr.width !== undefined || cr.height !== undefined) ? { width: cr.width, height: cr.height } : null;
+    };
+    const onIframeResizeEntry = (f, sz) => {
+      if (isDead() || !f) return;
+      if (sz) {
+        iframeSizeCache.set(f, sz);
+        if (sz.width > 0 || sz.height > 0) pushIfVis(f, false, sz);
+      } else {
+        iframeSizeCache.delete(f);
+        pushIfVis(f, false);
+      }
+    };
+
     function syncSidecarThemeBridge(forceSample = false) {
       if (isDead() || !doc) return;
       const iframes = querySidecarIframes();
@@ -617,21 +637,11 @@
         return;
       }
       pruneUnsubs(iframeUnsubscribers, false, boundIframes);
-      if (!iframeRo && win?.ResizeObserver) {
+      const bus = getDomBus();
+      if (!bus?.observeSize && !iframeRo && win?.ResizeObserver) {
         iframeRo = new win.ResizeObserver((es) => {
           if (isDead()) return;
-          for (const e of es || []) {
-            const f = e?.target;
-            if (!f) continue;
-            const cr = e?.contentRect;
-            if (cr && (cr.width !== undefined || cr.height !== undefined)) {
-              iframeSizeCache.set(f, { width: cr.width, height: cr.height });
-              if (cr.width > 0 || cr.height > 0) pushIfVis(f, false, cr);
-            } else {
-              iframeSizeCache.delete(f);
-              pushIfVis(f, false);
-            }
-          }
+          for (const e of es || []) onIframeResizeEntry(e?.target, readRoSize(e));
         });
       }
       const vis = [];
@@ -643,19 +653,18 @@
             pushIfVis(frame, true);
           };
           frame.addEventListener('load', onLoad);
-          try {
-            iframeRo?.observe?.(frame);
-          } catch {}
+          let offSize = null;
+          if (bus?.observeSize) {
+            try { offSize = bus.observeSize(frame, (sz) => onIframeResizeEntry(frame, { width: sz.width, height: sz.height })); } catch {}
+          } else {
+            try { iframeRo?.observe?.(frame); } catch {}
+          }
           iframeUnsubscribers.push({
             el: frame,
             unsub: () => {
               iframeSizeCache.delete(frame);
-              try {
-                frame.removeEventListener('load', onLoad);
-              } catch {}
-              try {
-                iframeRo?.unobserve?.(frame);
-              } catch {}
+              try { frame.removeEventListener('load', onLoad); } catch {}
+              try { if (offSize) offSize(); else iframeRo?.unobserve?.(frame); } catch {}
             },
           });
         }
@@ -982,34 +991,44 @@
       return steps.length ? steps : Array.from(qa(root, '[data-testid="user-message-bubble"]'));
     }
 
-    function jumpUserTurn(delta, targetEl = null) {
-      if (isDead() || !delta) return false;
-      const conv = findPrimaryConvView(targetEl),
-        turns = getMountedUserTurns(conv);
-      if (!turns.length) return false;
+    function pickJumpTarget(conv, turns, delta) {
       const vr = findScrollViewport(conv)?.getBoundingClientRect?.(),
         ay = vr && vr.height > 0 ? vr.top + 36 : 80;
       let idx = -1;
       if (delta < 0) {
         for (let i = turns.length - 1; i >= 0; i--) {
           const r = turns[i].getBoundingClientRect?.();
-          if (r && r.top < ay - 8) {
-            idx = i;
-            break;
-          }
+          if (r && r.top < ay - 8) { idx = i; break; }
         }
         if (idx < 0) idx = 0;
       } else {
         for (let i = 0; i < turns.length; i++) {
           const r = turns[i].getBoundingClientRect?.();
-          if (r && r.top > ay + 8) {
-            idx = i;
-            break;
-          }
+          if (r && r.top > ay + 8) { idx = i; break; }
         }
         if (idx < 0) idx = turns.length - 1;
       }
-      const target = turns[idx];
+      return turns[idx] || null;
+    }
+
+    function jumpUserTurn(delta, targetEl = null) {
+      if (isDead() || !delta) return false;
+      const conv = findPrimaryConvView(targetEl),
+        turns = getMountedUserTurns(conv);
+      if (!turns.length) return false;
+      const bus = getDomBus();
+      if (bus?.measure && bus?.mutate) {
+        let target = null;
+        bus.measure('wb:jump-r', () => { if (!isDead()) target = pickJumpTarget(conv, turns, delta); });
+        bus.mutate('wb:jump-w', () => {
+          if (isDead() || !target) return;
+          scrollElementToTopInViewport(target);
+          pulseSonarOnElement(target);
+          stats.jumpCount++;
+        });
+        return true;
+      }
+      const target = pickJumpTarget(conv, turns, delta);
       if (!target) return false;
       scrollElementToTopInViewport(target);
       pulseSonarOnElement(target);
@@ -1135,9 +1154,11 @@
       const steps = getMountedUserTurns(conv);
       if (!total) total = steps.length;
       const vr = findScrollViewport(conv)?.getBoundingClientRect?.(),
-        midY = vr && vr.height > 0 ? vr.top + vr.height * 0.35 : 240;
+        midY = vr && vr.height > 0 ? vr.top + vr.height * 0.35 : 240,
+        bus = getDomBus();
       let actIdx = steps.length - 1;
       for (let i = 0; i < steps.length; i++) {
+        if (bus?.isSkipped?.(steps[i])) continue;
         const r = steps[i].getBoundingClientRect?.();
         if (r && r.top <= midY) actIdx = i;
       }
@@ -1262,11 +1283,11 @@
       return true;
     }
 
-    function renderOutlineListOnly(forceRebuild = false) {
+    function renderOutlineListOnly(forceRebuild = false, preModel = null) {
       if (!outlineListEl || !doc) return;
       const cascadeChanged = syncCascadeChange(false);
       const ui = getStrings();
-      const model = collectOutlineModel(activeNavRail);
+      const model = preModel || collectOutlineModel(activeNavRail);
       const q = outlineFilterText;
       const structParts = [lastCascadeId, lastSyncedLang, model.totalTurns, q, model.chapters.length, model.items.length];
       for (let i = 0; i < model.chapters.length; i++) structParts.push(model.chapters[i].label);
@@ -1364,6 +1385,7 @@
       activeNavRail = navRail;
       const hp = cl(navRail, '[data-testid="conversation-view"]') || navRail.parentElement || doc?.body;
       if (!hp) return null;
+      const preModel = collectOutlineModel(navRail);
       let pop = null;
       mut(() => {
         pop = ensureOutlinePopover(hp);
@@ -1373,7 +1395,7 @@
         if (outlineFoldBtn && !foldFeedbackTimer) outlineFoldBtn.textContent = ui.foldSteps;
       });
       if (!pop) return null;
-      renderOutlineListOnly();
+      renderOutlineListOnly(false, preModel);
       return pop;
     }
 

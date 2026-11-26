@@ -1194,83 +1194,58 @@
       on(doc, 'compositionend', onComposerCompositionEnd, true);
       on(doc, 'keyup', onComposerKeyUp, true);
 
-      if (typeof win?.MutationObserver === 'function' && doc.documentElement) {
+      const domBus = (win && (win.__agDomBus || win.__agPrismDomBus)) || null;
+      if ((domBus?.subscribe || typeof win?.MutationObserver === 'function') && doc.documentElement) {
         const isHcPortal = (n) => {
           if (!n || n.nodeType !== 1 || n === doc.body || n === doc.documentElement) return false;
           const f = n.firstElementChild;
-          if (n.hasAttribute?.('data-hover-card-popup') || f?.hasAttribute?.('data-hover-card-popup') || f?.firstElementChild?.hasAttribute?.('data-hover-card-popup')) return true;
-          return Boolean(n.hasAttribute?.('data-base-ui-portal') && n.querySelector?.('[data-hover-card-popup]'));
+          return Boolean(n.hasAttribute?.('data-hover-card-popup') || f?.hasAttribute?.('data-hover-card-popup') || f?.firstElementChild?.hasAttribute?.('data-hover-card-popup') || (n.hasAttribute?.('data-base-ui-portal') && n.querySelector?.('[data-hover-card-popup]')));
         };
+        const someMutNode = (m, fn) => {
+          for (const l of [m.addedNodes, m.removedNodes]) if (l) for (let i = 0; i < l.length; i++) if (fn(l[i])) return true;
+          return false;
+        };
+        const hasMutNode = (m) => Boolean((m.addedNodes && m.addedNodes.length) || (m.removedNodes && m.removedNodes.length));
+        const matchTidOrQ = (n, tids, sel) => Boolean(n && n.nodeType === 1 && (tids.has(n.getAttribute?.('data-testid') || '') || n.hasAttribute?.('data-ag-cs-row-running') && sel.includes('row-running') || n.querySelector?.(sel)));
+        const SB_TIDS = new Set(['conversation-row-sidebar', 'status-loading-spinner']);
+        const VP_TIDS = new Set(['stop-button', 'cancel-button', 'input-cancel-button', 'agent-loading', 'thinking-collapsible-trigger']);
         const isSuggesterNoise = (m) => {
-          const t = m?.target;
-          const el = t && (t.nodeType === 1 ? t : t.parentElement);
-          if (!el) return true;
-          if (el.id === 'ag-prism-prompt-suggester-root' || el.hasAttribute?.('data-ag-prism-suggester-owned') || isHcPortal(el)) return true;
-          if (m.type === 'childList' && el === doc.body) {
-            const nodes = [...(m.addedNodes || []), ...(m.removedNodes || [])];
-            if (nodes.length > 0 && nodes.every(isHcPortal)) return true;
-          }
+          const t = m?.target, el = t && (t.nodeType === 1 ? t : t.parentElement);
+          if (!el || el.id === 'ag-prism-prompt-suggester-root' || el.hasAttribute?.('data-ag-prism-suggester-owned') || isHcPortal(el)) return true;
+          if (m.type === 'childList' && el === doc.body && hasMutNode(m) && !someMutNode(m, (n) => !isHcPortal(n))) return true;
           if (typeof el.closest === 'function') {
             if (el.closest('[data-ag-prism-suggester-owned],[data-hover-card-popup],.toast-viewport')) return true;
             if (m.type === 'attributes' && m.attributeName === 'class') {
               const tid = el.getAttribute?.('data-testid') || '';
-              if (tid !== 'conversation-view' && tid !== 'agent-input-box' && tid !== 'conversation-row-sidebar' && !el.hasAttribute?.('data-cascade-id') && !el.classList?.contains?.('agy-home')) {
-                return true;
-              }
+              if (tid !== 'conversation-view' && tid !== 'agent-input-box' && tid !== 'conversation-row-sidebar' && !el.hasAttribute?.('data-cascade-id') && !el.classList?.contains?.('agy-home')) return true;
             }
             if (m.type === 'childList' && el.closest('aside,[data-testid="sidebar-split"]>div:first-child,[data-testid="conversation-list-sidebar"],[data-testid="project-header"]')) {
-              const nodes = [...(m.addedNodes || []), ...(m.removedNodes || [])];
-              const touchesRowOrRun = nodes.some((n) => {
-                if (!n || n.nodeType !== 1) return false;
-                const ntid = n.getAttribute?.('data-testid') || '';
-                if (ntid === 'conversation-row-sidebar' || ntid === 'status-loading-spinner' || n.hasAttribute?.('data-ag-cs-row-running')) return true;
-                return Boolean(n.querySelector?.('[data-testid="conversation-row-sidebar"],[data-testid="status-loading-spinner"],[data-ag-cs-row-running]'));
-              });
-              if (!touchesRowOrRun) return true;
+              if (!someMutNode(m, (n) => matchTidOrQ(n, SB_TIDS, '[data-testid="conversation-row-sidebar"],[data-testid="status-loading-spinner"],[data-ag-cs-row-running]'))) return true;
             }
             if (m.type === 'childList' && el.closest('[data-testid="autoscroll-viewport"]')) {
-              const nodes = [...(m.addedNodes || []), ...(m.removedNodes || [])];
-              const touchesState = nodes.some((n) => {
-                if (!n || n.nodeType !== 1) return false;
-                const ntid = n.getAttribute?.('data-testid') || '';
-                if (ntid === 'stop-button' || ntid === 'cancel-button' || ntid === 'input-cancel-button' || ntid === 'agent-loading' || ntid === 'thinking-collapsible-trigger') return true;
-                return Boolean(n.querySelector?.('[data-testid="stop-button"],[data-testid="cancel-button"],[data-testid="input-cancel-button"],[data-testid="agent-loading"],[data-testid="thinking-collapsible-trigger"]'));
-              });
-              if (!touchesState) return true;
+              if (!someMutNode(m, (n) => matchTidOrQ(n, VP_TIDS, '[data-testid="stop-button"],[data-testid="cancel-button"],[data-testid="input-cancel-button"],[data-testid="agent-loading"],[data-testid="thinking-collapsible-trigger"]'))) return true;
             }
           }
           return false;
         };
-        mutObserver = new win.MutationObserver((muts) => {
+        const onMut = (muts) => {
           if (destroyed || !config.enabled) return;
           for (let i = 0; i < muts.length; i++) {
             const m = muts[i];
-            if (m.type === 'attributes' && m.target === doc.documentElement) {
-              syncOverlayForActiveCascade();
-              continue;
-            }
-            if ((m.type === 'childList' || m.type === 'attributes') && !isSuggesterNoise(m)) {
-              scheduleMountCheck();
-              break;
-            }
+            if (m.type === 'attributes' && m.target === doc.documentElement) { syncOverlayForActiveCascade(); continue; }
+            if ((m.type === 'childList' || m.type === 'attributes') && !isSuggesterNoise(m)) { scheduleMountCheck(); break; }
           }
-        });
-        mutObserver.observe(doc.documentElement, {
-          childList: true,
-          subtree: true,
-          attributes: true,
-          attributeFilter: [
-            'data-cascade-id',
-            'data-ag-cs-row-running',
-            'data-ag-cs-lang',
-            'data-ag-prism-lang',
-            'data-ag-pp-open',
-            'data-ag-cs-model-menu',
-            'hidden',
-            'class',
-            'data-op-thought-state',
-          ],
-        });
+        };
+        const obsOpts = {
+          childList: true, subtree: true, attributes: true,
+          attributeFilter: ['data-cascade-id', 'data-ag-cs-row-running', 'data-ag-cs-lang', 'data-ag-prism-lang', 'data-ag-pp-open', 'data-ag-cs-model-menu', 'hidden', 'class', 'data-op-thought-state'],
+        };
+        if (domBus?.subscribe) {
+          mutObserver = { disconnect: domBus.subscribe('suggester-dom', onMut, { doc, win, priority: 'low', observeOptions: obsOpts }) };
+        } else {
+          mutObserver = new win.MutationObserver(onMut);
+          mutObserver.observe(doc.documentElement, obsOpts);
+        }
       }
     };
 

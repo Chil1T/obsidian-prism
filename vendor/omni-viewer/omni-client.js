@@ -298,8 +298,17 @@
 
   function mayContainBareToken(raw) {
     if (!raw || raw.length < 4 || raw.length > 32000) return false;
-    if (raw.indexOf('http') !== -1 || raw.indexOf('localhost:') !== -1) return true;
-    return raw.indexOf('.') !== -1 && (raw.indexOf('/') !== -1 || raw.indexOf('\\') !== -1);
+    const hasSlash = raw.indexOf('/') >= 0;
+    const hasDot = raw.indexOf('.') >= 0;
+    if (!hasSlash && !hasDot && raw.indexOf('\\') < 0 && raw.indexOf('localhost:') < 0) return false;
+    if (hasSlash && (raw.indexOf('http://') >= 0 || raw.indexOf('https://') >= 0)) return true;
+    if (raw.indexOf('localhost:') >= 0) return true;
+    if (!hasDot || (!hasSlash && raw.indexOf('\\') < 0)) return false;
+    for (let i = raw.indexOf('.'); i >= 0; i = raw.indexOf('.', i + 1)) {
+      const next = i + 1 < raw.length ? raw.charCodeAt(i + 1) : 0;
+      if ((next >= 65 && next <= 90) || (next >= 97 && next <= 122) || (next >= 48 && next <= 57)) return true;
+    }
+    return false;
   }
 
   function tokenizeBareText(text) {
@@ -2916,9 +2925,17 @@ unmountSingleAuxSwitch(rec);
 }
 mountedAuxSwitches.clear();
 }
+function getDomBus() {
+return (W && (W.__agDomBus || W.__agPrismDomBus)) || null;
+}
 function ensureRootAttrObserver() {
-if (!D?.documentElement || !W || typeof W.MutationObserver !== 'function' || rootAttrObserver) return;
-rootAttrObserver = new W.MutationObserver((mutations) => {
+if (!D?.documentElement || !W || rootAttrObserver) return;
+const rootAttrFilter = [
+'data-ag-cs-theme', 'data-ag-cs-palette', 'data-ag-cs-light-preset',
+'data-ag-cs-accent', 'data-ag-cs-corners', 'data-ag-cs-motion',
+'data-ag-cs-lang', 'data-ag-prism-omni', 'data-ag-prism-link-target',
+];
+const onRootAttrs = (mutations) => {
 let needSync = false;
 for (const m of mutations) {
 const attr = m.attributeName;
@@ -2934,15 +2951,19 @@ needSync = true;
 }
 }
 if (needSync && enabled) broadcastThemeAndLocaleSync();
+};
+const bus = getDomBus();
+if (bus && typeof bus.subscribe === 'function') {
+const unsub = bus.subscribe('omni-root-attr', onRootAttrs, {
+doc: D, win: W, priority: 'high',
+observeOptions: { childList: false, subtree: false, attributes: true, attributeFilter: rootAttrFilter },
 });
-rootAttrObserver.observe(D.documentElement, {
-attributes: true,
-attributeFilter: [
-'data-ag-cs-theme', 'data-ag-cs-palette', 'data-ag-cs-light-preset',
-'data-ag-cs-accent', 'data-ag-cs-corners', 'data-ag-cs-motion',
-'data-ag-cs-lang', 'data-ag-prism-omni', 'data-ag-prism-link-target',
-],
-});
+rootAttrObserver = { disconnect: unsub };
+return;
+}
+if (typeof W.MutationObserver !== 'function') return;
+rootAttrObserver = new W.MutationObserver(onRootAttrs);
+rootAttrObserver.observe(D.documentElement, { attributes: true, attributeFilter: rootAttrFilter });
 }
 function attachRuntime() {
 if (mounted || !D || !W) return;
@@ -2959,8 +2980,15 @@ D.addEventListener('scroll', onWindowBlurOrScroll, { capture: true, passive: tru
 W.addEventListener?.('blur', onWindowBlurOrScroll);
 W.addEventListener?.('resize', onWindowBlurOrScroll);
 W.addEventListener?.('message', onWindowMessage);
-if (typeof W.MutationObserver === 'function') {
-domObserver = new W.MutationObserver((mutations) => {
+const domAttrFilter = [
+'data-ag-cs-spark-streaming',
+'data-ag-cs-thought-streaming',
+'data-active-file-uri',
+'data-file-uri',
+'data-uri',
+'data-file-path',
+];
+const onDomMutations = (mutations) => {
 const batchIgnored = typeof WeakMap === 'function' ? new WeakMap() : null;
 for (let i = 0; i < mutations.length; i++) {
 const m = mutations[i];
@@ -3019,7 +3047,16 @@ scheduleIncrementalScan(m.target);
 }
 }
 }
+};
+const bus = getDomBus();
+if (bus && typeof bus.subscribe === 'function') {
+const unsubDom = bus.subscribe('omni-dom', onDomMutations, {
+doc: D, win: W, priority: 'low',
+observeOptions: { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: domAttrFilter },
 });
+domObserver = { disconnect: unsubDom };
+} else if (typeof W.MutationObserver === 'function') {
+domObserver = new W.MutationObserver(onDomMutations);
 const obsRoot = D.body || D.documentElement;
 if (obsRoot) {
 domObserver.observe(obsRoot, {
@@ -3027,14 +3064,7 @@ childList: true,
 subtree: true,
 characterData: true,
 attributes: true,
-attributeFilter: [
-'data-ag-cs-spark-streaming',
-'data-ag-cs-thought-streaming',
-'data-active-file-uri',
-'data-file-uri',
-'data-uri',
-'data-file-path',
-],
+attributeFilter: domAttrFilter,
 });
 }
 }

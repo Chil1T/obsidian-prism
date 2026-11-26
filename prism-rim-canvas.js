@@ -319,14 +319,18 @@
       return true;
     };
 
+    const getDomBus = () => G.__agDomBus || G.__agPrismDomBus || (typeof window !== 'undefined' && (window.__agDomBus || window.__agPrismDomBus)) || null;
+    const boxSizeUnsubs = new Map(), spVisUnsubs = new Map();
+    const onBoxResized = () => {
+      pDirty = true;
+      if (!isDestroyed() && !isWB() && !isDragSuspended() && isRimOn() && lastPointerPos.x >= -1000 && !prismRaf && isFn(G.requestAnimationFrame)) {
+        if (hasLitRim()) { lastPrismDrawAt = 0; schedRaf(); }
+      }
+    };
     const ensurePrismBoxRo = () => {
+      if (getDomBus()?.observeSize) return null;
       if (prismBoxRo || typeof ResizeObserver !== 'function') return prismBoxRo;
-      prismBoxRo = new ResizeObserver(() => {
-        pDirty = true;
-        if (!isDestroyed() && !isWB() && !isDragSuspended() && isRimOn() && lastPointerPos.x >= -1000 && !prismRaf && isFn(G.requestAnimationFrame)) {
-          if (hasLitRim()) { lastPrismDrawAt = 0; schedRaf(); }
-        }
-      });
+      prismBoxRo = new ResizeObserver(onBoxResized);
       return prismBoxRo;
     };
 
@@ -335,9 +339,10 @@
       try { const v = parseFloat(getComputedStyle(el).borderTopLeftRadius || ''); return Number.isFinite(v) && v >= 0 ? v : fb; } catch { return fb; }
     };
 
-    const spOk = (e) => !dis(e) && !e.hidden && ga(e, 'aria-hidden') !== 'true' && ga(e, 'data-state') !== 'closed' && ga(e, 'aria-expanded') !== 'false' && e.style?.display !== 'none' && e.style?.visibility !== 'hidden' && !/(?:^|\s)(?:hidden|sr-only|grid-rows-\[0fr\]|h-0|max-h-0)(?:\s|$)/.test(e.className || '');
+    const spOk = (e) => !dis(e) && !getDomBus()?.isSkipped?.(e) && !e.hidden && ga(e, 'aria-hidden') !== 'true' && ga(e, 'data-state') !== 'closed' && ga(e, 'aria-expanded') !== 'false' && e.style?.display !== 'none' && e.style?.visibility !== 'hidden' && !/(?:^|\s)(?:hidden|sr-only|grid-rows-\[0fr\]|h-0|max-h-0)(?:\s|$)/.test(e.className || '');
     const inVp = (r) => !!(r && r.width >= 4 && r.height >= 4 && r.bottom > 0 && r.right > 0 && r.top < (G.innerHeight || 900) && r.left < (G.innerWidth || 1440));
     const spIo = () => {
+      if (getDomBus()?.observeVisibility) return null;
       if (stepPlanIo || typeof IntersectionObserver !== 'function') return stepPlanIo;
       try {
         stepPlanIo = new IntersectionObserver((es) => {
@@ -356,11 +361,12 @@
     };
     const scanSp = (rd) => {
       const ps = Array.from(getDoc()?.querySelectorAll?.('[data-testid="step-plan"]') || []), des = new Set(), rcs = new Map();
+      const bus = getDomBus();
       if (isRimOn() && !isWB()) {
         for (let i = ps.length - 1; i >= 0 && des.size < 2; i--) {
           const e = ps[i];
           if (!spOk(e) || (spVis.has(e) && !spVis.get(e))) continue;
-          if (rd && e.getBoundingClientRect) {
+          if (rd && e.getBoundingClientRect && !bus?.isSkipped?.(e)) {
             const r = e.getBoundingClientRect();
             if (!inVp(r)) continue;
             rcs.set(e, r); des.add(e);
@@ -370,10 +376,26 @@
       return { ps, des, rcs };
     };
     const applySp = (ps, des) => {
-      const io = ps.length ? spIo() : stepPlanIo, pSet = new Set(ps);
-      if (io) {
-        for (const p of ps) if (!spObs.has(p)) { try { io.observe(p); spObs.add(p); } catch {} }
-        for (const o of Array.from(spObs)) if (!pSet.has(o) || dis(o)) { unobs(io, spObs, o); spVis.delete(o); }
+      const bus = getDomBus(), pSet = new Set(ps);
+      if (bus?.observeVisibility) {
+        for (const p of ps) if (!spVisUnsubs.has(p)) {
+          spVisUnsubs.set(p, bus.observeVisibility(p, (st) => {
+            if (isDestroyed()) return;
+            const br = st?.detail?.boundingClientRect;
+            const on = st.visible && (!br || (br.width >= 4 && br.height >= 4)) ? 1 : 0;
+            if (spVis.get(p) !== on) { spVis.set(p, on); pDirty = true; syncSp(0); }
+          }));
+        }
+        for (const [o, off] of Array.from(spVisUnsubs.entries())) if (!pSet.has(o) || dis(o)) {
+          try { off(); } catch {}
+          spVisUnsubs.delete(o); spVis.delete(o);
+        }
+      } else {
+        const io = ps.length ? spIo() : stepPlanIo;
+        if (io) {
+          for (const p of ps) if (!spObs.has(p)) { try { io.observe(p); spObs.add(p); } catch {} }
+          for (const o of Array.from(spObs)) if (!pSet.has(o) || dis(o)) { unobs(io, spObs, o); spVis.delete(o); }
+        }
       }
       for (const s of Array.from(spOn)) if (!des.has(s)) {
         spOn.delete(s);
@@ -388,11 +410,12 @@
     const syncSp = (rd) => {
       if (isDestroyed()) return;
       const { ps, des } = scanSp(rd);
-      if (!ps.length && !spOn.size && !spObs.size) return;
+      if (!ps.length && !spOn.size && !spObs.size && !spVisUnsubs.size) return;
       runGuardedMut(() => { applySp(ps, des); pruneOrphanRimCanvases(false); });
     };
 
     const refreshPrismBoxRectCache = (now, allowReadRect) => {
+      const bus = getDomBus();
       const sp = scanSp(allowReadRect), ro = ensurePrismBoxRo(), prevMap = new Map(), nextObserved = new Set(), next = [], bSet = new Set(), boxList = [];
       for (const e of pBoxes) prevMap.set(e.box, e);
       for (const b of document.querySelectorAll(`[${PB}="1"]`) || []) if ((!spOn.has(b) || sp.des.has(b)) && !bSet.has(b)) { bSet.add(b); boxList.push(b); }
@@ -401,12 +424,15 @@
       let nextOrch = null;
       const preMeasured = boxList.map((box) => {
         const prev = prevMap.get(box);
-        return { box, prev, borderRadius: prev && prev.borderRadius >= 0 ? prev.borderRadius : readBoxBorderRadius(box, 10), rect: sp.rcs.get(box) || (allowReadRect && box.getBoundingClientRect ? box.getBoundingClientRect() : null) };
+        const skipped = Boolean(bus?.isSkipped?.(box));
+        return { box, prev, borderRadius: prev && prev.borderRadius >= 0 ? prev.borderRadius : readBoxBorderRadius(box, 10), rect: skipped ? null : (sp.rcs.get(box) || (allowReadRect && box.getBoundingClientRect ? box.getBoundingClientRect() : null)) };
       });
-      const orchRect = trackEl && allowReadRect && trackEl.getBoundingClientRect ? trackEl.getBoundingClientRect() : null;
+      const orchRect = trackEl && allowReadRect && !bus?.isSkipped?.(trackEl) && trackEl.getBoundingClientRect ? trackEl.getBoundingClientRect() : null;
       const mkEntry = (box, rect, prev, insetPad, borderRadius, mirrorMode = false, reflectBottomMode = false) => {
         nextObserved.add(box);
-        if (ro && !obsSet.has(box)) { try { ro.observe(box); obsSet.add(box); } catch {} }
+        if (bus?.observeSize) {
+          if (!boxSizeUnsubs.has(box)) { try { boxSizeUnsubs.set(box, bus.observeSize(box, onBoxResized)); } catch {} }
+        } else if (ro && !obsSet.has(box)) { try { ro.observe(box); obsSet.add(box); } catch {} }
         const reusePrev = !!(prev?.cv?.isConnected), rim = reusePrev ? prev : ensurePrismRimCanvas(box);
         return {
           box, rect, cv: rim ? rim.cv : null, ctx: rim ? rim.ctx : null, insetPad, mirrorMode, reflectBottomMode, borderRadius,
@@ -415,7 +441,7 @@
         };
       };
       runGuardedMut(() => {
-        if (sp.ps.length || spOn.size || spObs.size) applySp(sp.ps, sp.des);
+        if (sp.ps.length || spOn.size || spObs.size || spVisUnsubs.size) applySp(sp.ps, sp.des);
         for (const { box, prev, borderRadius, rect } of preMeasured) {
           const isHp = !!(box.classList?.contains?.('ag-cs-home-panel'));
           if (isHp && ga(box, PM) !== '1') setAttrIfChanged(box, PM, '1');
@@ -424,6 +450,7 @@
           next.push(mkEntry(box, rect, prev, pad, borderRadius, mirrorMode, reflectBottomMode));
         }
         if (trackEl) nextOrch = mkEntry(trackEl, orchRect, orchE?.box === trackEl ? orchE : null, 0, 999, false, false);
+        for (const [oldEl, off] of Array.from(boxSizeUnsubs.entries())) if (!nextObserved.has(oldEl)) { try { off(); } catch {} boxSizeUnsubs.delete(oldEl); }
         if (ro) for (const oldEl of Array.from(obsSet)) if (!nextObserved.has(oldEl)) unobs(ro, obsSet, oldEl);
         pruneOrphanRimCanvases();
       });
@@ -445,19 +472,24 @@
       const minGap = Math.max(0, Number(getMinFrameGapMs?.() ?? 0) || 0);
       if (minGap > 0 && lastPrismDrawAt > 0 && now - lastPrismDrawAt < minGap) { schedRaf(); return; }
       lastPrismDrawAt = now;
-      const { x, y } = lastPointerPos, allowReadRect = x >= -1000;
+      const { x, y } = lastPointerPos, allowReadRect = x >= -1000, bus = getDomBus();
+      const hasRo = Boolean(prismBoxRo || boxSizeUnsubs.size > 0);
       const activeTrack = getActiveCrystalTrack ? getActiveCrystalTrack() : null;
       if (
-        pDirty || !pBoxes.length || (!prismBoxRo && now - prismBoxCacheAt > 2500) || now - prismBoxCacheAt > 8000 ||
+        pDirty || !pBoxes.length || (!hasRo && now - prismBoxCacheAt > 2500) || now - prismBoxCacheAt > 8000 ||
         activeTrack !== (orchE ? orchE.box : null) ||
-        pBoxes.some((e) => dis(e.box) || (e.cv && e.cv.isConnected === false) || e.borderRadius < 0 || (allowReadRect && !e.rect))
+        pBoxes.some((e) => dis(e.box) || (e.cv && e.cv.isConnected === false) || e.borderRadius < 0 || (allowReadRect && !e.rect && !bus?.isSkipped?.(e.box)))
       ) {
         refreshPrismBoxRectCache(now, allowReadRect);
         lastPrismRectReadAt = now;
-      } else if (allowReadRect && now - lastPrismRectReadAt >= (prismBoxRo ? 5000 : 250)) {
+      } else if (allowReadRect && now - lastPrismRectReadAt >= (hasRo ? 5000 : 250)) {
         lastPrismRectReadAt = now;
-        for (const e of pBoxes) if (e.box?.getBoundingClientRect) e.rect = e.box.getBoundingClientRect();
-        if (orchE?.box?.getBoundingClientRect) orchE.rect = orchE.box.getBoundingClientRect();
+        const readAll = () => {
+          for (const e of pBoxes) if (e.box?.getBoundingClientRect && !bus?.isSkipped?.(e.box)) e.rect = e.box.getBoundingClientRect();
+          if (orchE?.box?.getBoundingClientRect && !bus?.isSkipped?.(orchE.box)) orchE.rect = orchE.box.getBoundingClientRect();
+        };
+        if (bus?.measure) bus.measure('rim:rects', readAll);
+        else readAll();
       }
       const dark = isDarkTheme(), toneKey = resolveRimToneKey(dark);
       let compRim = null;
@@ -561,8 +593,12 @@
     const teardown = () => {
       cancelPendingRaf(); emitComposerRim(null); bindEv('removeEventListener'); shrinkRims(1); trkCvs.clear();
       lastSbTarget = null; lastSbAt = 0; lastPrismRectReadAt = 0;
+      for (const off of boxSizeUnsubs.values()) { try { off(); } catch {} }
+      boxSizeUnsubs.clear();
       if (prismBoxRo) { try { prismBoxRo.disconnect(); } catch {} prismBoxRo = null; }
       obsSet.clear();
+      for (const off of spVisUnsubs.values()) { try { off(); } catch {} }
+      spVisUnsubs.clear();
       if (stepPlanIo) { try { stepPlanIo.disconnect(); } catch {} stepPlanIo = null; }
       spObs.clear(); spVis.clear();
       for (const s of spOn) { try { ra(s, PB); ra(s, PM); } catch {} }
