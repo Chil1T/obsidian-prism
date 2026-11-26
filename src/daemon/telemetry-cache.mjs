@@ -112,6 +112,7 @@ export async function ensureMetricsCollector(tel) {
       const base = await tel._lazyStore.snapshot({
         conversationId: safeId,
         force: Boolean(input?.force),
+        freshContext: Boolean(input?.freshContext),
         quotaRefresh: Boolean(input?.quotaRefresh),
         selectLatest: input?.selectLatest === false ? false : true,
       });
