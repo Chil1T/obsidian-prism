@@ -339,23 +339,34 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
 
   function readCompiledHomeStudioAssets(opts = null) {
     const studioPath = path.join(rootDir, 'home-studio-panel.js');
+    const usagePath = path.join(rootDir, 'usage-core.js');
     if (!fs.existsSync(studioPath)) {
       return { sig: '', minRuntime: '', codeHash: '' };
     }
-    const sig = getFileSig(studioPath);
+    const hasUsage = fs.existsSync(usagePath);
+    const sig = hasUsage ? `${getFileSig(usagePath)}|${getFileSig(studioPath)}` : getFileSig(studioPath);
     const cachePath = resolveBundleCachePathOption(opts);
     const curMem = bundleCache.getChannelMemCache('homeStudio');
     if (!cachePath && curMem && curMem.sig === sig && curMem.codeHash) {
       return curMem;
     }
     const buf = fs.readFileSync(studioPath);
+    const usageBuf = hasUsage ? fs.readFileSync(usagePath) : null;
+    const fileEntries = usageBuf
+      ? [
+          { rel: 'usage-core.js', content: usageBuf },
+          { rel: 'home-studio-panel.js', content: buf },
+        ]
+      : [{ rel: 'home-studio-panel.js', content: buf }];
     return bundleCache.resolveChannelAssetsWithDiskCache({
       channelName: 'homeStudio',
       sig,
-      fileEntries: [{ rel: 'home-studio-panel.js', content: buf }],
+      fileEntries,
       opts,
       compileFn: () => {
-        const minRuntime = minifySingleSource(minifyEmbeddedCssTemplate(buf.toString('utf8')));
+        const studioSrc = minifyEmbeddedCssTemplate(buf.toString('utf8'));
+        const combined = usageBuf ? `${usageBuf.toString('utf8')}\n;\n${studioSrc}` : studioSrc;
+        const minRuntime = minifySingleSource(combined);
         const codeHash = computeHash(minRuntime);
         return { minRuntime, codeHash };
       },
