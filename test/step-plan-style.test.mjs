@@ -57,7 +57,10 @@ test('step-plan checklist card and home-panel align with Obsidian Prism floating
   assert.equal(kfLine.includes('scale(1.08)'), false, 'step-plan transition must avoid bounce overshoot');
   assert.ok(baseSection.includes('@media (forced-colors:active){[data-testid="step-plan-item"]>:first-child{&>svg{display:block !important;}'), 'forced-colors must restore native SVG icons');
   assert.ok(baseSection.includes('--ag-spring-sidebar:linear;--_sa:none;'), 'motion="off" must disable step-plan state animations via --_sa:none');
-  assert.ok(baseSection.includes('@media (prefers-reduced-motion:reduce){html[data-ag-cs-style]{--_sa:none;}'), 'prefers-reduced-motion must disable step-plan state animations via --_sa:none');
+  assert.ok(
+    baseSection.includes('@media (prefers-reduced-motion:reduce){:root:not([data-ag-cs-ignore-rm="1"]){&[data-ag-cs-style]{--_sa:none;}'),
+    'prefers-reduced-motion must disable step-plan state animations via --_sa:none unless data-ag-cs-ignore-rm="1" is explicitly enabled'
+  );
   assert.ok(baseSection.includes('--ag-cs-run-core:#FFFFFF;--_si:#000;'), 'light theme must flip inner glyph tint polarity via --_si:#000');
 
   // Home panel upgraded to floating overview-shell material while preserving backdrop-filter:none & zero blur(

@@ -59,6 +59,7 @@ const CONFIG_SCHEMA = Object.freeze({
   lightPreset: Object.freeze({ type: 'enum', values: Object.freeze(['crystal', 'alabaster']), default: 'crystal' }),
   darkAuraStyle: Object.freeze({ type: 'enum', values: Object.freeze(['prism', 'neon']), default: 'prism' }),
   motionLevel: Object.freeze({ type: 'enum', values: Object.freeze(['off', 'subtle', 'standard', 'ultra']), default: 'ultra' }),
+  ignoreReducedMotion: Object.freeze({ type: 'boolean', default: false, stringBoolMode: 'strictOn' }),
   targetFps: Object.freeze({ type: 'enum', values: Object.freeze(['60', '120', '180', 'native']), default: '180' }),
   telemetryModule: Object.freeze({ type: 'enum', values: AUTO_ON_OFF_VALUES, default: 'auto', coerceBoolToOnOff: true }),
   effortSliderModule: Object.freeze({ type: 'enum', values: AUTO_ON_OFF_VALUES, default: 'auto', coerceBoolToOnOff: true }),
@@ -86,7 +87,10 @@ const CONFIG_SCHEMA = Object.freeze({
   contextMenu: Object.freeze({ type: 'boolean', default: true, stringBoolMode: 'notOff' }),
   accentTone: Object.freeze({ type: 'enum', values: Object.freeze(['follow', 'cobalt', 'iris', 'amber', 'mono']), default: 'follow' }),
   cornerStyle: Object.freeze({ type: 'enum', values: Object.freeze(['sharp', 'balanced', 'soft']), default: 'balanced' }),
-  codeFont: Object.freeze({ type: 'enum', values: Object.freeze(['default', 'jetbrains', 'cascadia', 'sfmono']), default: 'default' }),
+  chatFont: Object.freeze({ type: 'enum', values: Object.freeze(['default', 'system-sans', 'noto-sans', 'inter', 'harmony', 'custom']), default: 'default' }),
+  chatFontCustom: Object.freeze({ type: 'string', default: '', maxLength: 160 }),
+  codeFont: Object.freeze({ type: 'enum', values: Object.freeze(['default', 'jetbrains', 'cascadia', 'sfmono', 'custom']), default: 'default' }),
+  codeFontCustom: Object.freeze({ type: 'string', default: '', maxLength: 160 }),
   codeLigatures: Object.freeze({ type: 'boolean', default: false, stringBoolMode: 'strictOn' }),
   ambientIntensity: Object.freeze({ type: 'enum', values: Object.freeze(['0', '35', '70', '100']), default: '100' }),
   darkAura: Object.freeze({ type: 'enum', values: Object.freeze(['subtle', 'balanced', 'vivid']), default: 'balanced' }),
@@ -120,6 +124,8 @@ for (const [key, spec] of Object.entries(CONFIG_SCHEMA)) {
       VALIDATORS[key] = 'boolean';
     } else if (spec.type === 'enum' && Array.isArray(spec.values)) {
       VALIDATORS[key] = [...spec.values];
+    } else if (spec.type === 'string') {
+      VALIDATORS[key] = 'string';
     }
   }
   if (spec.aliasPair && spec.aliasKind === 'string') {
@@ -153,6 +159,11 @@ function validateConfigEntry(key, value) {
   }
   if (spec.type === 'enum' && Array.isArray(spec.values)) {
     return typeof value === 'string' && spec.values.includes(value);
+  }
+  if (spec.type === 'string') {
+    if (typeof value !== 'string') return false;
+    const maxLen = Number.isInteger(spec.maxLength) && spec.maxLength > 0 ? spec.maxLength : 160;
+    return value.length <= maxLen && !/[\0\r\n]/.test(value);
   }
   return false;
 }
@@ -227,6 +238,13 @@ function reconcileConfigAliases(raw) {
   if (has('mascot') && typeof out.mascot === 'string') {
     const normMascot = normalizeMascotConfigValue(out.mascot);
     if (normMascot !== null) out.mascot = normMascot;
+  }
+
+  for (const strKey of ['chatFontCustom', 'codeFontCustom']) {
+    if (has(strKey)) {
+      const maxLen = CONFIG_SCHEMA[strKey].maxLength || 160;
+      out[strKey] = typeof out[strKey] === 'string' ? out[strKey].replace(/[\0\r\n]/g, '').slice(0, maxLen) : '';
+    }
   }
 
   return out;

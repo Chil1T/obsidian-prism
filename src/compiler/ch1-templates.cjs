@@ -126,7 +126,7 @@ function createCh1Templates({
         else { try { W.__agPrismOmni?.sync?.(e, W.__agPrismOmniServerMeta || null); } catch {} }
         if (e?.sidebarStudio !== 'on') {
           try { W.__agPrismSidebar?.sync?.(e, W.__agPrismSidebarMeta || null); W.__agPrismSidebar?.destroy?.(); delete W.__agPrismSidebar; } catch {}
-          try { if (de) ['data-ag-prism-mode','data-ag-prism-chat-kind','data-ag-prism-chat-telemetry','data-ag-cs-space','data-ag-cs-space-palette','data-ag-cs-space-accent'].forEach((a) => de.removeAttribute(a)); } catch {}
+          try { if (de) 'data-ag-prism-mode,data-ag-prism-chat-kind,data-ag-prism-chat-telemetry,data-ag-cs-space,data-ag-cs-space-palette,data-ag-cs-space-accent'.split(',').forEach((a) => de.removeAttribute(a)); } catch {}
         } else { try { W.__agPrismSidebar?.sync?.(e, W.__agPrismSidebarMeta || null); } catch {} }
         try {
           const hiMode = e?.hostLocalization, hiLang = e?.language;
@@ -157,9 +157,9 @@ function createCh1Templates({
         if (e?.periodicModelPicker === 'off' || e?.periodicModelPicker === false) {
           try {
             W.__agPrismPeriodicPicker?.destroy?.();
-            ['data-ag-prism-periodic-picker','data-ag-pp-open','data-ag-pp-holding'].forEach((a) => de?.removeAttribute?.(a));
+            'data-ag-prism-periodic-picker,data-ag-pp-open,data-ag-pp-holding'.split(',').forEach((a) => de?.removeAttribute?.(a));
             D.querySelectorAll?.('#ag-prism-periodic-picker-css,#ag-prism-periodic-picker-root,.ag-pp-hold-ring,.ag-pp-mini-keycap').forEach((n) => n.remove());
-            ['__agPrismPeriodicPicker','__agPrismPeriodicPickerFactory','__agPrismKeyboard3D','__agPrismPeriodicKeyboard3D','__agPrismOledScreen','__agPrismGrainAssets','__agPeriodicAudioFx','__agPeriodicModelCatalog','__agPeriodicHostBridge','__agPeriodicBentoUi','__agPeriodicPbrGrainAssets','__agPeriodicOledScreen','__agPeriodicKeyboard3D'].forEach((k) => { try { delete W[k]; } catch {} try { delete G[k]; } catch {} });
+            '__agPrismPeriodicPicker,__agPrismPeriodicPickerFactory,__agPrismKeyboard3D,__agPrismPeriodicKeyboard3D,__agPrismOledScreen,__agPrismGrainAssets,__agPeriodicAudioFx,__agPeriodicModelCatalog,__agPeriodicHostBridge,__agPeriodicBentoUi,__agPeriodicPbrGrainAssets,__agPeriodicOledScreen,__agPeriodicKeyboard3D'.split(',').forEach((k) => { try { delete W[k]; } catch {} try { delete G[k]; } catch {} });
           } catch {}
         }
         if (de) {
@@ -167,6 +167,7 @@ function createCh1Templates({
           else de.removeAttribute('data-ag-prism-thought-view');
           de.setAttribute('data-ag-prism-sidebar-studio', e?.sidebarStudio === 'on' ? 'on' : 'off');
         }
+        try { W.__agPrismApplyIgnoreReducedMotion?.(!!e?.ignoreReducedMotion); W.__agPrismFontCustomizer?.applyCustomFonts?.(e, D); } catch {}
         return { refreshed: true, version: api.version };
       }
       return { refreshed: false };

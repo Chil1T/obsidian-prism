@@ -524,29 +524,22 @@
     var _rmMqlCache = typeof WeakMap === 'function' ? new WeakMap() : null;
     function checkPrefersReducedMotion(rt) {
       try {
-        var host = (rt && typeof rt.matchMedia === 'function')
-          ? rt
-          : (typeof window !== 'undefined' && window && typeof window.matchMedia === 'function' ? window : null);
-        if (!host) return false;
-        var mm = host.matchMedia;
-        if (_rmMqlCache) {
-          var cached = _rmMqlCache.get(host);
-          if (cached && cached.fn === mm && cached.mq) {
-            return Boolean(cached.mq.matches);
-          }
-          var mq = mm.call(host, '(prefers-reduced-motion: reduce)');
-          _rmMqlCache.set(host, { fn: mm, mq: mq });
-          return Boolean(mq && mq.matches);
-        }
-        var mq2 = mm.call(host, '(prefers-reduced-motion: reduce)');
-        if (mq2 && mq2.matches) return true;
-      } catch (_mmErr) {}
+        var host = (rt && typeof rt === 'object') ? rt : (typeof window !== 'undefined' && window ? window : null);
+        if (host && typeof host.__agPrismReducedMotion === 'function') return Boolean(host.__agPrismReducedMotion(host.document, host));
+        var d = (host && host.document) || (typeof document !== 'undefined' ? document : null), de = d && d.documentElement;
+        if (de && de.getAttribute && de.getAttribute('data-ag-cs-motion') === 'off') return true;
+        if (de && de.getAttribute && de.getAttribute('data-ag-cs-ignore-rm') === '1') return false;
+        if (!host || typeof host.matchMedia !== 'function') return false;
+        var mm = host.matchMedia, c = _rmMqlCache && _rmMqlCache.get(host);
+        if (c && c.fn === mm && c.mq) return Boolean(c.mq.matches);
+        var mq = mm.call(host, '(prefers-reduced-motion: reduce)');
+        if (_rmMqlCache) _rmMqlCache.set(host, { fn: mm, mq: mq });
+        return Boolean(mq && mq.matches);
+      } catch (_e) {}
       return false;
     }
 
-    /* ============================================================================
-     * 2. V13.1 精密 CNC 6063 喷砂阳极铝色卡（Obsidian 深钛枪灰 / Warm 古铜香槟 / Alabaster 银铝）× 去糖果化工业键帽
-     * ============================================================================ */
+    /* 2. V13.1 CNC 6063 色卡 */
     var THEME_PALETTES = {
       'obsidian-dark': {
         /* 深钛枪灰 CNC 6063 喷砂铝 + 45° 亮银高光倒角 + 深石墨微凹 PBT 盲键 + 暖瓷灰双色可选键（零荧光绿！） */

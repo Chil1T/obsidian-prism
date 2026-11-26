@@ -110,12 +110,14 @@
     out.placeholderStyle = out.promptStyle = (out.placeholderStyle ?? out.promptStyle) === 'host' ? 'host' : 'studio';
     out.mascot = out.mascot === 'off' || out.mascot === false ? 'off' : /^(minis|quad(-minis)?|r:[ckdw0-4,+m]+)$/.test(out.mascot) ? out.mascot : 'crab';
     out.convRipple = normConvRipple(out.convRipple);
-    for (const k of ['sidebarCompact', 'codeLigatures', 'autoArchiveOnExit']) out[k] = out[k] === true || out[k] === 'on';
+    for (const k of ['sidebarCompact', 'codeLigatures', 'autoArchiveOnExit', 'ignoreReducedMotion']) out[k] = out[k] === true || out[k] === 'on';
     for (const k of ['sidebarNavFold', 'sidebarStudio', 'autoUpdate']) out[k] = out[k] === 'on' || out[k] === true ? 'on' : 'off';
     for (const k of ['smoothCaret', 'contextMenu']) out[k] = out[k] === undefined ? true : out[k] !== false && out[k] !== 'off';
     out.accentTone = pickOf(out.accentTone, 'follow|cobalt|iris|amber|mono', 'follow');
     out.cornerStyle = pickOf(out.cornerStyle, 'sharp|balanced|soft', 'balanced');
-    out.codeFont = pickOf(out.codeFont, 'default|jetbrains|cascadia|sfmono', 'default');
+    out.chatFont = pickOf(out.chatFont, 'default|system-sans|noto-sans|inter|harmony|custom', 'default');
+    out.codeFont = pickOf(out.codeFont, 'default|jetbrains|cascadia|sfmono|custom', 'default');
+    for (const k of ['chatFontCustom', 'codeFontCustom']) out[k] = typeof out[k] === 'string' ? out[k].replace(/[\0\r\n]/g, '').slice(0, 160) : '';
     out.ambientIntensity = pickOf(String(out.ambientIntensity ?? '100'), '0|35|70|100', '100');
     out.darkAura = pickOf(out.darkAura, 'subtle|balanced|vivid', 'balanced');
     for (const k of ['omniModule', 'effortMemory', 'periodicModelPicker']) out[k] = out[k] === 'off' || out[k] === false ? 'off' : 'on';
@@ -152,7 +154,7 @@
       }
     }
     if ('convRipple' in patch) patch.convRipple = normConvRipple(patch.convRipple);
-    for (const k of ['sidebarCompact', 'codeLigatures', 'autoArchiveOnExit']) {
+    for (const k of ['sidebarCompact', 'codeLigatures', 'autoArchiveOnExit', 'ignoreReducedMotion']) {
       if (k in patch && typeof patch[k] === 'string') patch[k] = patch[k] === 'on' || patch[k] === 'true';
     }
     for (const k of ['smoothCaret', 'contextMenu']) {
@@ -245,9 +247,9 @@
   const routeConfigDirtyFlags = (prevCfg, nextCfg, patch) => {
     dirtyFlags.g = true;
     const any = (s) => s.split('|').some((k) => prevCfg[k] !== nextCfg[k] || O.hasOwn(patch, k));
-    if (any('palette|lightPreset|accentTone|ambientIntensity|darkAura|darkAuraStyle|cornerStyle|codeFont|codeLigatures')) dirtyFlags.t = true;
-    if (any('accentTone|composerRestyle|placeholderStyle|mascot|smoothCaret|telemetryModule|motionLevel|language')) dirtyFlags.c = true;
-    if (any('homeLayout|homeRipple|convRipple|motionLevel|language')) dirtyFlags.r = true;
+    if (any('palette|lightPreset|accentTone|ambientIntensity|darkAura|darkAuraStyle|cornerStyle|chatFont|chatFontCustom|codeFont|codeFontCustom|codeLigatures')) dirtyFlags.t = true;
+    if (any('accentTone|composerRestyle|placeholderStyle|mascot|smoothCaret|telemetryModule|motionLevel|ignoreReducedMotion|language')) dirtyFlags.c = true;
+    if (any('homeLayout|homeRipple|convRipple|motionLevel|ignoreReducedMotion|language')) dirtyFlags.r = true;
     if (any('sidebarRestyle|sidebarCompact|sidebarNavFold')) dirtyFlags.s = true;
     if (any('thoughtTranslate|thoughtTrigger|thoughtView')) dirtyFlags.l = dirtyFlags.tk = true;
   };
@@ -331,7 +333,7 @@
   const getThoughtTriggerTiming = () => (cfg.thoughtTrigger === 'expand' ? 'expand' : 'preload');
   const getAccentTone = () => pickOf(cfg.accentTone, 'cobalt|iris|amber|mono', 'follow');
   const getCornerStyle = () => pickOf(cfg.cornerStyle, 'sharp|soft', 'balanced');
-  const getCodeFont = () => pickOf(cfg.codeFont, 'jetbrains|cascadia|sfmono', 'default');
+  const getCodeFont = () => pickOf(cfg.codeFont, 'jetbrains|cascadia|sfmono|custom', 'default');
   const isCodeLigaturesEnabled = () => cfg.codeLigatures === true || cfg.codeLigatures === 'on';
   const isContextMenuEnabled = () => cfg.contextMenu !== false && cfg.contextMenu !== 'off';
   const getAmbientIntensitySetting = () => pickOf(String(cfg.ambientIntensity ?? '100'), '0|35|70|100', '100');
@@ -354,15 +356,7 @@
 
   let _rmFn = null;
   let _rmMql = null;
-  const motionReduced = () => {
-    if (cfg.motionLevel === 'off') return true;
-    if (typeof matchMedia !== 'function') return false;
-    if (_rmFn !== matchMedia || !_rmMql) {
-      _rmFn = matchMedia;
-      _rmMql = matchMedia('(prefers-reduced-motion: reduce)');
-    }
-    return Boolean(_rmMql?.matches);
-  };
+  const motionReduced=()=>{if(cfg.motionLevel==='off')return true;if(isFn(W.__agPrismReducedMotion))return!!W.__agPrismReducedMotion(D,W);if(cfg.ignoreReducedMotion||ga(de(),'data-ag-cs-ignore-rm')==='1')return false;if(typeof matchMedia!=='function')return false;if(_rmFn!==matchMedia||!_rmMql){_rmFn=matchMedia;_rmMql=matchMedia('(prefers-reduced-motion: reduce)');}return!!_rmMql?.matches;};
 
   const isMotionStandardOrUltra = () => {
     if (motionReduced()) return false;
@@ -381,7 +375,7 @@
     } catch { return false; }
   };
 
-  // ── Built-in Thought Translator Overlay Isolation Helpers (Zero-Flicker Guard) ──
+  // Thought Translator Isolation
   const THOUGHT_ISOLATED_SELECTOR = '.ag-prism-thought-overlay, .ag-prism-thought-raw-toggle, [data-prism-ignore]';
 
   const isThoughtIsolatedNode = (node) => {
@@ -413,7 +407,7 @@
 
   const setAttrIfChanged = (el, name, val) => { if (el && ga(el, name) !== val) sa(el, name, val); };
 
-  // ── Antigravity React Fiber & Store Bridge ─────────────────────────────
+  // React Fiber & Store Bridge
   let cachedSvc = null, cachedStore = null, storeUnsub = null, storeDebounce = null;
 
   const findFiber = (el) => {
@@ -585,7 +579,7 @@
     }
   };
 
-  // ── Extracted Domain Controllers Initialization ────────────────────────
+  // Domain Controllers
   const noopFn = () => null;
   const noopStub = (ov = {}) => new Proxy(ov, { get: (t, k) => (k in t ? t[k] : noopFn) });
 
@@ -703,7 +697,7 @@
         measureVisibleChangedHeaders: () => [], measureNewLensOverlays: () => [], isStreamMutating: () => false, hasStreamObserver: () => false,
       });
 
-  // ── Root Attrs, Spring Tokens & Language Sync ──────────────────────────
+  // Root Attrs & Sync
   let lastThemeKey = '';
   let lastAppliedLang = '';
   let lastAppliedMotion = '';
@@ -893,6 +887,11 @@
       else if (ha(html, 'data-ag-cs-cjk')) ra(html, 'data-ag-cs-cjk');
 
       syncMotionOffStyle(motionLv === 'off');
+      const igRm = !!cfg.ignoreReducedMotion, IR_A = 'data-ag-cs-ignore-rm';
+      if (isFn(W.__agPrismApplyIgnoreReducedMotion)) W.__agPrismApplyIgnoreReducedMotion(igRm, D, W);
+      else if (igRm) setAttrIfChanged(html, IR_A, '1');
+      else if (ha(html, IR_A)) ra(html, IR_A);
+      try { (W.__agPrismFontCustomizer || GT.__agPrismFontCustomizer)?.applyCustomFonts?.(cfg, D); } catch {}
       syncAbsorbedModules(forceAbsorbed);
       const tv = 'data-ag-prism-thought-view';
       if (getThoughtTranslateMode() === 'off') { if (ha(html, tv)) ra(html, tv); }
@@ -906,9 +905,10 @@
       }
 
       const refreshOptics = () => { rippleCtl.refreshTheme(); convAuraCtl.sync(); convAuraCtl.refreshTheme(); invRim(); };
-      if (motionLv !== lastAppliedMotion) {
+      const motionKey = `${motionLv}|${igRm ? 1 : 0}`;
+      if (motionKey !== lastAppliedMotion) {
         const prevMotion = lastAppliedMotion;
-        lastAppliedMotion = motionLv;
+        lastAppliedMotion = motionKey;
         if (prevMotion) try { rippleCtl.sync?.(); } catch {}
         refreshOptics();
         if (prevMotion) {
@@ -927,7 +927,7 @@
         refreshOptics();
         try { hostEnhancerCtl.onThemeChange?.(); } catch {}
       }
-      const metricsKey = `${lang}|${getCodeFont()}|${isCodeLigaturesEnabled() ? 1 : 0}|${getCornerStyle()}|${cfg.composerRestyle === false ? 0 : 1}`;
+      const metricsKey = `${lang}|${cfg.chatFont}|${cfg.chatFontCustom}|${getCodeFont()}|${cfg.codeFontCustom}|${isCodeLigaturesEnabled() ? 1 : 0}|${getCornerStyle()}|${cfg.composerRestyle === false ? 0 : 1}`;
       if (metricsKey !== lastMetricsKey) {
         const hadPrev = lastMetricsKey !== '';
         lastMetricsKey = metricsKey;
@@ -936,7 +936,7 @@
     });
   }
 
-  // ── Composer Prism Box, Placeholder, Glyph & Mascot Clearance ──────────
+  // Composer Box & Clearance
   const T_TK = 'interaction-takeover-card', T_RP = 'running-items-panel', T_QM = 'queued-messages-card', T_SQ = 'side-question-panel', S_RP = '[data-testid="running-items-panel"]', S_IB = '[data-testid="agent-input-box"]', S_SUB = '[data-testid="subagent-tab-conversation"]';
   const TK_SEL = '[data-testid="interaction-takeover-card"], [data-testid="side-question-panel"]', A_Q = 'data-ag-cs-queued', A_QA = 'data-ag-queued-act', A_TK = 'data-ag-cs-takeover', A_TKO = A_TK + '-open', A_PB = 'data-ag-cs-prism-box', A_PM = 'data-ag-cs-prism-mirror';
   const seenClrWraps = new WeakSet();
@@ -1248,7 +1248,7 @@
     }
   }
 
-  // ── Incremental 21 Host Animated Icons ─────────────────────────────────
+  // Host Animated Icons
   const findOriginalHostSvg = (btn) => {
     if (!btn || !btn.querySelectorAll) return null;
     for (const svg of qa(btn, 'svg')) {
@@ -1403,7 +1403,7 @@
     spm.mountOrSyncSettingsSection({ version: VERSION, getLang, uiText, isZh, i18nCore, formatSettingsSummary, resolveSettingRowActiveValue, isSettingButtonMatch, saveSetting, saveSettingsBatch, getConfig: () => ({ ...cfg }), getThoughtTranslateMode, handledGroupClicks, runSettingsGroupGlide, runGuardedMut });
   }
 
-  // ── Pulse Physical Water Vial Bridge & Micro-Interactions ──────────────
+  // Pulse Bridge & Micro-Interactions
   let pulseBridgeInst = null;
   let motionBinding = null;
   let wasContextCardOpen = false;
@@ -1463,7 +1463,7 @@
     else if (forceSync && isFn(pulseBridgeInst.sync)) { try { void pulseBridgeInst.sync(); } catch {} }
   };
 
-  // ── FastDOM Two-Phase Incremental Synchronization Loop ─────────────────
+  // FastDOM Sync Loop
   let syncQueued = false;
   let syncTimer = null;
   let syncIsRaf = false;
@@ -2187,7 +2187,7 @@
     scheduleSync();
   }
 
-  // ── Event Handlers ─────────────────────────────────────────────────────
+  // Event Handlers
   let blurTm = 0, lbr = 0;
   const clearWinBlur = () => {
     try {
@@ -2454,7 +2454,7 @@
     try {
       if (destroyed || internalDomMutating || streamChoreoCtl.isStreamMutating() || !mutations || mutations.length === 0) return;
 
-      // 后台隐藏窗口挂起深扫：避免 Swarm 多窗口后台刷屏触发海量 querySelector，切回前台时由 visibilitychange 合并一次同步！
+      // 隐藏窗口挂起深扫
       if (D.hidden) {
         for (let i = 0; i < mutations.length; i++) {
           const m = mutations[i];
@@ -2591,7 +2591,7 @@
   });
   mainObserver = observer;
 
-  // Strict test contract: NEVER register 'click' or 'mousedown' on D!
+  // Never bind click/mousedown on D
   const CAP_PASSIVE = { capture: true, passive: true };
   const CARET_LISTENERS = 'keyup:1|mouseup:0|input:1|selectionchange:1|focusin:0|focusout:0|scroll:0|compositionupdate:1|compositionend:1'.split('|');
   const DOC_LISTENERS = [
@@ -2783,11 +2783,11 @@
         qa(D, `[${a}]`).forEach((e) => ra(e, a));
       }
       for (const a of ['data-has-sep', 'data-pv-warn', 'data-ag-sp-running']) qa(D, `[${a}]`).forEach((e) => ra(e, a));
-      try { getMascotHop()?.dispose?.(D); } catch {}
-      qa(D, '#ag-prism-settings-v101-css,#ag-prism-mascot-hop-style,.ag-prism-mascot-hop-layer,#ag-prism-studio-v101-css,#ag-prism-omni-css,#ag-prism-motion-off-css,#ag-prism-periodic-picker-css,#ag-prism-periodic-picker-root,.ag-pp-hold-ring,.ag-pp-mini-keycap,#ag-prism-wallpaper-root,#ag-prism-wallpaper-css,#ag-prism-suggester-css,.ag-omni-dock,.ag-omni-menu,.ag-prism-omni-menu,.ag-prism-omni-pane,.ag-cs-ctx-menu,.ag-cs-ctx-toast,.ag-cs-sb-more-wrap,[data-ag-prism-omni-owned="1"],.ag-cs-home-panel,.ag-cs-home-panel-seat,.ag-cs-liftoff-veil,.ag-cs-sidebar-glide-pill,.ag-cs-pill-glide,.ag-cs-conv-aura-host,.ag-cs-conv-glow,.ag-cs-prism-rim-cv,.ag-cs-code-fold-btn,.ag-cs-nav-outline-popover,.ag-cs-model-glyph,.ag-cs-panel-row-glyph,[data-testid="orchestrator-effort-bar"],.ag-cs-thinking-spark,.ag-cs-orbital-backdrop,.ag-cs-perf-backdrop,.ag-v2-habitat-prop,#' + SETTINGS_SEC_ID).forEach((e) => e.remove());
+      try{getMascotHop()?.dispose?.(D);(W.__agPrismFontCustomizer||GT.__agPrismFontCustomizer)?.dispose?.(D);(W.__agPrismReducedMotionGuard||GT.__agPrismReducedMotionGuard)?.dispose?.(D);}catch{}
+      qa(D, '#ag-prism-mascot-hop-style,.ag-prism-mascot-hop-layer,#ag-prism-custom-fonts-style,#ag-prism-settings-ext-beta4-css,#ag-prism-settings-v101-css,#ag-prism-studio-v101-css,#ag-prism-omni-css,#ag-prism-motion-off-css,#ag-prism-periodic-picker-css,#ag-prism-periodic-picker-root,.ag-pp-hold-ring,.ag-pp-mini-keycap,#ag-prism-wallpaper-root,#ag-prism-wallpaper-css,#ag-prism-suggester-css,.ag-omni-dock,.ag-omni-menu,.ag-prism-omni-menu,.ag-prism-omni-pane,.ag-cs-ctx-menu,.ag-cs-ctx-toast,.ag-cs-sb-more-wrap,[data-ag-prism-omni-owned="1"],.ag-cs-home-panel,.ag-cs-home-panel-seat,.ag-cs-liftoff-veil,.ag-cs-sidebar-glide-pill,.ag-cs-pill-glide,.ag-cs-conv-aura-host,.ag-cs-conv-glow,.ag-cs-prism-rim-cv,.ag-cs-code-fold-btn,.ag-cs-nav-outline-popover,.ag-cs-model-glyph,.ag-cs-panel-row-glyph,[data-testid="orchestrator-effort-bar"],.ag-cs-thinking-spark,.ag-cs-orbital-backdrop,.ag-cs-perf-backdrop,.ag-v2-habitat-prop,#' + SETTINGS_SEC_ID).forEach((e) => e.remove());
       const html = de();
       if (html) {
-        for (const s of 'style|theme|palette|light-preset|motion|target-fps|telemetry|effort-slider|thought-translate|home|composer|logo-ink|sidebar|sidebar-compact|sidebar-collapsed|sb-fold|has-crab|model-menu|takeover-open|lang|cjk|accent|corners|code-font|ligatures|ambient|win-blur|scroll-bottom|resizing|mascot-drag|conv-ripple'.split('|')) ra(html, 'data-ag-cs-' + s);
+        for (const s of 'style|theme|palette|light-preset|motion|ignore-rm|target-fps|telemetry|effort-slider|thought-translate|home|composer|logo-ink|sidebar|sidebar-compact|sidebar-collapsed|sb-fold|has-crab|model-menu|takeover-open|lang|cjk|accent|corners|chat-font|code-font|ligatures|ambient|win-blur|scroll-bottom|resizing|mascot-drag|conv-ripple'.split('|')) ra(html, 'data-ag-cs-' + s);
         for (const s of '|thought-view|omni|link-target|sidebar-studio|sidebar-host-sync'.split('|')) ra(html, s ? 'data-ag-prism-' + s : 'data-ag-prism');
         rp(html, '--ag-spring-sidebar-ease'); rp(html, '--ag-spring-sidebar-dur');
       }
