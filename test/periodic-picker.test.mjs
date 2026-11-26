@@ -7112,7 +7112,7 @@ test('v1.0.8-beta (f) keyboard-3d-gl.js targetFps throttling, shadowDirty static
     slots: ELEMENTS_90,
   });
   assert.equal(rendererAuto.getPerfStats().motionLevel, 'medium');
-  assert.equal(rendererAuto.getPerfStats().shadowMapSize, 1024, 'medium motionLevel must downgrade shadow FBO to 1024px');
+  assert.equal(rendererAuto.getPerfStats().shadowMapSize, 512, 'medium motionLevel must downgrade shadow FBO to 512px');
 
   env.html.setAttribute('data-ag-cs-motion', 'off');
   env.triggerMutations(env.html, [{ target: env.html, type: 'attributes', attributeName: 'data-ag-cs-motion' }]);

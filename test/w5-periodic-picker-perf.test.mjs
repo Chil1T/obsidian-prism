@@ -172,7 +172,7 @@ test('W5-Perf #7: pbr-grain-assets 64x32 METAL_ENV downsample, atob/Buffer parit
   assert.ok(ch8 && ch8.bytes < 830000 && ch8.bytes <= ch8.budgetBytes, `Ch8 should stay well under budget (got ${ch8?.bytes})`);
 });
 
-test('W5-Perf #1: native 300Hz caps transient @120fps, drops steady zeroG to @60fps, 2.5px debounce & 0.85s hover linger', () => {
+test('W5-Perf #1 + W6-Ultra: native 300Hz uncapped transient (0ms gap), performance <=60fps, steady zeroG @60fps, 2.5px debounce & 0.85s hover linger', () => {
   const { ELEMENTS_90 } = require(PICKER_FILE);
   const env = createPerfSandbox();
   env.loadFile(GRAIN_FILE);
@@ -182,29 +182,45 @@ test('W5-Perf #1: native 300Hz caps transient @120fps, drops steady zeroG to @60
     canvas: env.makeCanvas(960, 552), doc: env.doc, root: env.win, slots: ELEMENTS_90, targetFps: 'native',
   });
 
-  // 1) 切键瞬态动画在 300Hz (3.33ms) 节拍下封顶 120fps (7.6ms)
+  // 1) 切键活跃瞬态动画在 native 300Hz (3.33ms) 节拍下返回 0ms 间隔，真正跟满 240Hz/300Hz 高刷
   r.setState({ availableByZ: avail, selectedZ: 6 });
   r.setState({ selectedZ: 10 });
   assert.equal(r.isIdle(), false, 'selecting new key must wake spring transient');
   env.flushRafAt(200);
   const d0 = r.getPerfStats().frameDraws;
   env.flushRafAt(203.33);
+  assert.equal(r.getPerfStats().frameDraws, d0 + 1, 'native transient must follow 300Hz (3.33ms) without artificial 7.6ms cap');
   env.flushRafAt(206.66);
-  assert.equal(r.getPerfStats().frameDraws, d0, 'native transient must skip sub-7.6ms 300Hz ticks (120fps cap)');
-  env.flushRafAt(208.2);
-  assert.equal(r.getPerfStats().frameDraws, d0 + 1, 'native transient must draw once >= 7.6ms elapsed');
+  assert.equal(r.getPerfStats().frameDraws, d0 + 2, 'native transient must sustain consecutive 300Hz frames');
+
+  // 1b) performance 模式下即使是 native 档也必须严格锁死 <=60fps (15.5ms) 且阴影降采至 512
+  env.doc.documentElement.setAttribute('data-ag-cs-perf-mode', 'performance');
+  env.flushRafAt(225);
+  const dPerf = r.getPerfStats().frameDraws;
+  env.flushRafAt(235); // 10ms < 15.5ms -> 跳过
+  assert.equal(r.getPerfStats().frameDraws, dPerf, 'performance mode must cap native transient to <=60fps (skip 10ms tick)');
+  env.flushRafAt(241.5); // 16.5ms >= 15.5ms -> 绘制
+  assert.equal(r.getPerfStats().frameDraws, dPerf + 1, 'performance mode must draw once >= 15.5ms elapsed');
+  env.doc.documentElement.setAttribute('data-ag-cs-perf-mode', 'balanced');
 
   // 2) 物理弹簧收敛后仅余 zeroGRemainSec 悬浮余韵时，native 自动降频至 60fps (15.5ms)
   for (let i = 0; i < 65; i += 1) r.step(0.016); // ~1.04s: 键帽/磁浮弹簧已收敛，zeroGRemainSec 仍余 ~1.4s
   assert.equal(r.isIdle(), false, 'zeroGRemainSec should still linger after ~1s');
   env.flushRafAt(500);
   const dSteady = r.getPerfStats().frameDraws;
-  env.flushRafAt(510); // 10ms > 7.6ms 且 < 15.5ms，60fps 稳态门限应跳过
+  env.flushRafAt(510); // 10ms < 15.5ms，60fps 稳态门限应跳过
   assert.equal(r.getPerfStats().frameDraws, dSteady, 'steady zeroG-only native mode must throttle to 60fps (skip 10ms tick)');
   env.flushRafAt(516.5);
   assert.equal(r.getPerfStats().frameDraws, dSteady + 1, 'steady zeroG-only native mode must draw after >= 15.5ms');
 
-  // 3) 显式 targetFps='180' 仍放开高刷 (5.3ms >= 4.9ms)
+  // 3) 显式 targetFps='180' (4.9ms) 与 '120' (7.6ms) 仍精确生效
+  r.setState({ targetFps: '120', selectedZ: 1 });
+  env.flushRafAt(560);
+  const d120 = r.getPerfStats().frameDraws;
+  env.flushRafAt(564);
+  assert.equal(r.getPerfStats().frameDraws, d120, 'explicit 120fps must skip sub-7.6ms tick');
+  env.flushRafAt(568.5);
+  assert.equal(r.getPerfStats().frameDraws, d120 + 1, 'explicit 120fps must draw once >= 7.6ms');
   r.setState({ targetFps: '180', selectedZ: 18 });
   env.flushRafAt(600);
   const d180 = r.getPerfStats().frameDraws;
@@ -316,11 +332,14 @@ test('W5-Perf #2/#4/#5: static widgetsGpu (0 rebuilds), 66ms drag shadow throttl
   assert.equal(r.isIdle(), true);
   assert.ok(r.getPerfStats().shadowDraws >= shBeforeSettle);
 
-  // 超宽视口 (cssWidth*dpr > 1800) 静态 DPR 封顶 1.35，常规视口保持 1.5
+  // 超宽视口静态 DPR 封顶 1.35 + 总像素面积封顶 2,200,000（防 2K/4K+300Hz 拉爆像素填充率）
   r.resize(960, 552, 2.0);
   assert.equal(r.getPerfStats().dpr, 1.5);
-  r.resize(1600, 900, 2.0);
-  assert.equal(r.getPerfStats().dpr, 1.35, 'ultrawide (cssWidth*dpr > 1800) must clamp dpr to 1.35');
+  r.resize(1400, 500, 2.0);
+  assert.equal(r.getPerfStats().dpr, 1.35, 'ultrawide (cssWidth*dpr > 1800, <=2.2M px) must clamp dpr to 1.35');
+  r.resize(2560, 1440, 2.0);
+  assert.ok(r.getPerfStats().dpr < 1.35, '2K fullscreen must scale internal DPR below 1.35 to cap total pixel area');
+  assert.ok(canvas.width * canvas.height <= 2205000, `2K canvas pixel count must cap <=2.2M, got ${canvas.width}x${canvas.height}=${canvas.width * canvas.height}`);
 
   const kbSrc = fs.readFileSync(KB3D_FILE, 'utf8');
   assert.ok(kbSrc.includes('baseN.y>.45'), 'SOLID_FS must restrict grain normal gradient to top faces');
@@ -650,4 +669,131 @@ test('W5-Perf Batch B #3/#8: syncSceneAndDom deferRender (0 double render), dock
   assert.equal(c.activeTimers, 0);
   assert.equal(c.activeRafs, 0);
   assert.equal(c.activeObservers, 0);
+});
+
+test('W6-3D-Ultra: 512 reduced shadowMap, zero-trig SOLID_FS env dedup, open Read-then-Write, hoverOnly Bento skip, single-node cursor & card rim xor throttle', () => {
+  // 1) ShadowMap 分级 (ultra=1024, low/medium/subtle/performance=512) + SOLID_FS 零 atan/acos & 共享 Ruv
+  const kbSrc = fs.readFileSync(KB3D_FILE, 'utf8');
+  const bentoSrc = fs.readFileSync(path.join(PP_DIR, 'bento-ui.js'), 'utf8');
+  assert.ok(kbSrc.includes('SHADOW_MAP_SIZE_REDUCED = 512'), 'reduced shadow map must be 512px');
+  assert.ok(kbSrc.includes('sampleMetalStudioEnvUv('), 'SOLID_FS must share precomputed equirect UV via sampleMetalStudioEnvUv');
+  const eqSlice = kbSrc.slice(kbSrc.indexOf('vec2 dirToEquirectUv('), kbSrc.indexOf('vec2 dirToEquirectUv(') + 700);
+  assert.equal(/\b(?:atan|acos)\s*\(/.test(eqSlice), false, 'dirToEquirectUv must eliminate trig atan()/acos()');
+  assert.ok(bentoSrc.includes('.ag-pp-floor-shadow::after{content:"";position:absolute;inset:20% 5% 0% 5%;pointer-events:none;border-radius:50%;contain:strict;'), 'floor-shadow::after must isolate compositing with contain:strict');
+
+  const { ELEMENTS_90 } = require(PICKER_FILE);
+  const glEnv = createPerfSandbox();
+  glEnv.loadFile(GRAIN_FILE);
+  glEnv.loadFile(KB3D_FILE);
+  const rUltra = glEnv.win.__agPrismKeyboard3D.createKeyboard3DRenderer({
+    canvas: glEnv.makeCanvas(960, 552), doc: glEnv.doc, root: glEnv.win, slots: ELEMENTS_90, motionLevel: 'ultra',
+  });
+  assert.equal(rUltra.getPerfStats().shadowMapSize, 1024, 'ultra motion must keep 1024px shadow map');
+  rUltra.setState({ motionLevel: 'low' });
+  assert.equal(rUltra.getPerfStats().shadowMapSize, 512, 'low motion must drop shadow map to 512px');
+  rUltra.setState({ motionLevel: 'subtle' });
+  assert.equal(rUltra.getPerfStats().shadowMapSize, 512, 'subtle motion must keep 512px shadow map');
+  rUltra.setState({ motionLevel: 'ultra' });
+  assert.equal(rUltra.getPerfStats().shadowMapSize, 1024, 'switching back to ultra restores 1024px shadow map');
+  glEnv.doc.documentElement.setAttribute('data-ag-cs-perf-mode', 'performance');
+  const rPerf = glEnv.win.__agPrismKeyboard3D.createKeyboard3DRenderer({
+    canvas: glEnv.makeCanvas(960, 552), doc: glEnv.doc, root: glEnv.win, slots: ELEMENTS_90, motionLevel: 'ultra',
+  });
+  assert.equal(rPerf.getPerfStats().shadowMapSize, 512, 'performance mode must downgrade shadow map to 512px even under ultra motion');
+  rUltra.dispose();
+  rPerf.dispose();
+
+  // 2) open() + 首帧 rAF 合并 Read-then-Write（16ms 内不再连读第二轮 6x getBoundingClientRect）
+  const env = createBatchBPickerEnv();
+  let bentoSyncCalls = 0;
+  const origSyncBento = env.win.__agPeriodicBentoUi.syncBentoTwinCardsDom;
+  env.win.__agPeriodicBentoUi.syncBentoTwinCardsDom = function () {
+    bentoSyncCalls += 1;
+    return origSyncBento.apply(this, arguments);
+  };
+  const triggerBtn = env.makeEl('button');
+  triggerBtn.setAttribute('data-testid', 'model-selector-trigger');
+  triggerBtn.textContent = 'Gemini 4 Carbon (High)';
+  env.body.appendChild(triggerBtn);
+  env.win.__agPeriodicMockHost = {
+    selectedModel: { label: 'Gemini 4 Carbon (High)', modelId: 'gemini-4-c-high' },
+    modelOptions: [
+      { label: 'Gemini 4 Hydrogen (High)', modelId: 'gemini-4-h-high' },
+      { label: 'Gemini 4 Carbon (High)', modelId: 'gemini-4-c-high' },
+      { label: 'Gemini 4 Neon (High)', modelId: 'gemini-4-ne-high' },
+    ],
+  };
+  const inst = env.win.__agPrismPeriodicPickerFactory.mountPeriodicPicker({ root: env.win, doc: env.doc, mode: 'on' });
+  env.resetRectReads();
+  assert.equal(inst.open(triggerBtn), true);
+  const readsAfterOpenSync = env.getRectReads();
+  assert.ok(readsAfterOpenSync <= 6, `open() sync phase must measure at most 1 round (<=6 rects), got ${readsAfterOpenSync}`);
+  env.flushRaf(16);
+  assert.equal(env.getRectReads(), readsAfterOpenSync, 'openRafId within 16ms must reuse cached rects with 0 duplicate getBoundingClientRect() calls');
+
+  const rootEl = env.doc.getElementById('ag-prism-periodic-picker-root');
+  const stageEl = rootEl.querySelector('.ag-pp-stage');
+  const canvasEl = rootEl.querySelector('.ag-pp-gl-canvas');
+  const specRim = rootEl.querySelector('.ag-pp-spec-rim');
+  const teleRim = rootEl.querySelector('.ag-pp-tele-rim');
+
+  // 3) 96 键悬停扫盲键：跳过冗余 Bento 全量重算，且 cursor 仅单写 stageEl（0 写 canvasEl）
+  const proj = inst.getProjectedRects();
+  const blindA = proj.keys.find((k) => k.z === 22);
+  const blindB = proj.keys.find((k) => k.z === 23);
+  const keyNe = proj.keys.find((k) => k.z === 10);
+  assert.ok(blindA && blindB && keyNe);
+
+  let stageCursorWrites = 0, canvasCursorWrites = 0;
+  const origStageSet = stageEl.style.setProperty.bind(stageEl.style);
+  const origCanvasSet = canvasEl.style.setProperty.bind(canvasEl.style);
+  stageEl.style.setProperty = (k, v) => { if (k === 'cursor') stageCursorWrites += 1; return origStageSet(k, v); };
+  canvasEl.style.setProperty = (k, v) => { if (k === 'cursor') canvasCursorWrites += 1; return origCanvasSet(k, v); };
+
+  bentoSyncCalls = 0;
+  rootEl.dispatchEvent({ type: 'pointermove', clientX: 260 + blindA.cx, clientY: 220 + blindA.cy, target: canvasEl });
+  env.flushRaf(16);
+  rootEl.dispatchEvent({ type: 'pointermove', clientX: 260 + blindB.cx, clientY: 220 + blindB.cy, target: canvasEl });
+  env.flushRaf(16);
+  assert.equal(bentoSyncCalls, 0, 'sweeping across blind keys with unchanged display model must skip Bento DOM rebuild (0 calls)');
+  // 在 3D 舞台扫键时绝不触发卡片 -webkit-mask-composite: xor 光斑重绘
+  assert.equal(specRim.style.getPropertyValue('--ag-pp-card-px'), '', 'stage key sweep must not repaint specCard rim mask');
+  assert.equal(teleRim.style.getPropertyValue('--ag-pp-right-px'), '', 'stage key sweep must not repaint telePod rim mask');
+
+  // 切到可用键 Ne -> 立即刷新 Bento 且 cursor 只写 1 次 canvasEl、0 次 stageEl
+  rootEl.dispatchEvent({ type: 'pointermove', clientX: 260 + keyNe.cx, clientY: 220 + keyNe.cy, target: canvasEl });
+  env.flushRaf(16);
+  assert.equal(bentoSyncCalls, 1, 'hovering a different available model key must refresh Bento panel once');
+  assert.equal(stageCursorWrites, 0, 'cursor must never duplicate-write onto stageEl');
+  assert.equal(canvasEl.style.getPropertyValue('cursor'), 'pointer');
+  const writesBeforeSameHover = canvasCursorWrites;
+  rootEl.dispatchEvent({ type: 'pointermove', clientX: 260 + keyNe.cx + 0.5, clientY: 220 + keyNe.cy + 0.5, target: canvasEl });
+  env.flushRaf(16);
+  assert.equal(canvasCursorWrites, writesBeforeSameHover, 'unchanged cursor state must not re-write canvasEl.style.cursor');
+
+  // 4) 悬停在卡片上：首次点亮，位移 <2px 与 300Hz (<16ms) 微节流跳过重复写 --ag-pp-card-px/py
+  let cardPxWrites = 0;
+  const origSpecRimSet = specRim.style.setProperty.bind(specRim.style);
+  specRim.style.setProperty = (k, v) => { if (k === '--ag-pp-card-px') cardPxWrites += 1; return origSpecRimSet(k, v); };
+  rootEl.dispatchEvent({ type: 'pointermove', clientX: 100, clientY: 100, target: rootEl });
+  env.flushRaf(20);
+  assert.equal(cardPxWrites, 1, 'entering specCard must illuminate card rim once');
+  rootEl.dispatchEvent({ type: 'pointermove', clientX: 101, clientY: 100, target: rootEl }); // 1px < 2px (even after 20ms)
+  env.flushRaf(20);
+  assert.equal(cardPxWrites, 1, 'sub-2px pointer move must skip card rim CSS var write');
+  rootEl.dispatchEvent({ type: 'pointermove', clientX: 120, clientY: 110, target: rootEl }); // >=16ms since first write -> refreshes
+  env.flushRaf(1);
+  assert.equal(cardPxWrites, 2, 'pointer move >=2px after >=16ms refreshes card rim');
+  rootEl.dispatchEvent({ type: 'pointermove', clientX: 140, clientY: 120, target: rootEl }); // >2px but only 3ms later -> throttled!
+  env.flushRaf(3);
+  assert.equal(cardPxWrites, 2, '300Hz (3ms) continuous move must micro-throttle card rim xor repaint');
+  rootEl.dispatchEvent({ type: 'pointermove', clientX: 160, clientY: 130, target: rootEl }); // >=16ms later -> refreshes
+  env.flushRaf(18);
+  assert.equal(cardPxWrites, 3, 'card rim must refresh smoothly once >=16ms elapsed');
+
+  inst.destroy();
+  const c2 = env.getCounts();
+  assert.equal(c2.activeTimers, 0);
+  assert.equal(c2.activeRafs, 0);
+  assert.equal(c2.activeObservers, 0);
 });
