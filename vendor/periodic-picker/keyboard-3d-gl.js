@@ -241,9 +241,9 @@
       _fallbackGrainCache = {
         size: size,
         combinedRG: combined,
-        envW: 128,
-        envH: 64,
-        metalEnvRGB: getFallbackStudioMetalEnvRGB(128, 64),
+        envW: 64,
+        envH: 32,
+        metalEnvRGB: getFallbackStudioMetalEnvRGB(64, 32),
         emblemViewBox: 2048,
         emblemPaths: [],
         noveltyIcons: null,
@@ -275,13 +275,13 @@
               size = fb.size;
               combinedRG = fb.combinedRG;
             }
-            var envW = Number(data.envW) > 0 ? Number(data.envW) : 128;
-            var envH = Number(data.envH) > 0 ? Number(data.envH) : 64;
+            var envW = Number(data.envW || data.METAL_ENV_WIDTH || pkg.METAL_ENV_WIDTH) || 64;
+            var envH = Number(data.envH || data.METAL_ENV_HEIGHT || pkg.METAL_ENV_HEIGHT) || 32;
             var metalEnvRGB = data.metalEnvRGB;
             if (!metalEnvRGB || metalEnvRGB.length < envW * envH * 3 || !hasNonZeroBytes(metalEnvRGB)) {
-              envW = 128;
-              envH = 64;
-              metalEnvRGB = getFallbackStudioMetalEnvRGB(128, 64);
+              envW = 64;
+              envH = 32;
+              metalEnvRGB = getFallbackStudioMetalEnvRGB(64, 32);
             }
             return {
               size: size,
@@ -324,6 +324,17 @@
       } catch (_e) {
         return null;
       }
+    }
+
+    var _novP2D = new Map();
+    function getCompiledNoveltyPath2Ds(k, paths) {
+      if (!Array.isArray(paths) || !paths.length || typeof Path2D !== 'function') return null;
+      var hit = _novP2D.get(k);
+      if (hit && hit.c === Path2D && hit.r === paths) return hit.l;
+      var l = [];
+      for (var i = 0; i < paths.length; i++) if (paths[i]) l.push(new Path2D(paths[i]));
+      _novP2D.set(k, { c: Path2D, r: paths, l: l });
+      return l;
     }
 
     /* ============================================================================
@@ -506,11 +517,15 @@
       return 'native';
     }
 
-    function resolveMinFrameGapMs(fpsKey) {
-      if (fpsKey === '60') return 15.5;
-      if (fpsKey === '120') return 7.6;
-      if (fpsKey === '180') return 4.9;
-      return 0;
+    var _spOut = new Float64Array(3);
+    function fnvMixInt(h, v) { return Math.imul((h ^ (v | 0)) >>> 0, 16777619) >>> 0; }
+    function fnvMixStr(h, s) {
+      var str = String(s || '');
+      for (var i = 0; i < str.length; i++) h = Math.imul((h ^ str.charCodeAt(i)) >>> 0, 16777619) >>> 0;
+      return Math.imul((h ^ 0xff) >>> 0, 16777619) >>> 0;
+    }
+    function resolveMinFrameGapMs(fpsKey, steadyZeroGOnly) {
+      return fpsKey === '60' ? 15.5 : fpsKey === '120' ? 7.6 : fpsKey === '180' ? 4.9 : (steadyZeroGOnly ? 15.5 : 7.6);
     }
 
     function normalizeMotionLevel(raw) {
@@ -3005,21 +3020,19 @@
     function buildArtisanPrismKeyMesh(mb, palette, hwCtrl, ambientMul) {
       var cx = ARTISAN_WAVE_X;
       var cz = ROW1_Z;
-      var press = hwCtrl ? clamp(hwCtrl.prismPress || 0, 0, 1) : 0;
-      var hover = hwCtrl ? clamp(hwCtrl.prismHover || 0, 0, 1) : 0;
-      var waveDip = hwCtrl ? (hwCtrl.prismWaveDip || 0) : 0;
+      void hwCtrl;
 
       var baseCol = hexToRgb01(palette.artisanMetal || palette.hwDeckPanel || palette.caseChamfer);
       var rimCol = hexToRgb01(palette.artisanRim || palette.caseChamfer);
       var collarCol = hexToRgb01(palette.hwDeckBody || palette.caseStep || palette.caseBody);
-      var hoverGain = 1.0 + hover * (palette.isLight ? 0.08 : 0.16);
-      var tiBody = shadeRgb(baseCol, hoverGain, hover * 0.018);
+      var tiBody = baseCol;
       var tiChamfer = mixRgb(tiBody, rimCol, palette.isLight ? 0.56 : 0.62);
       var tiDark = shadeRgb(tiBody, 0.72);
 
       var matCollar = [palette.isLight ? 0.22 : 0.25, 0.90, 0.0, 0];
-      var matTiSkirt = [palette.isLight ? 0.14 : 0.15, 0.95, hover * 0.04 * ambientMul, 1];
-      var matTiFacet = [palette.isLight ? 0.075 : 0.085, 0.98, (0.02 + hover * 0.11) * ambientMul, 1];
+      /* wid=1 (11.0 / 11.25): 1U 棱镜键浮沉与悬停提亮交由 SOLID_VS / SHADOW_SOLID_VS GPU Uniform 实时驱动 */
+      var matTiSkirt = [palette.isLight ? 0.14 : 0.15, 0.95, 0.0, 11.0];
+      var matTiFacet = [palette.isLight ? 0.075 : 0.085, 0.98, 0.02 * ambientMul, 11.25];
 
       /* 1. 底部 CNC 磁吸金属底座护圈（严丝合缝封住 col=2, row=1 槽底） */
       var collarBot = sampleG2RectLoop(cx - 0.485, cz - 0.485, cx + 0.485, cz + 0.485, 0.085, 6, 2.2);
@@ -3031,8 +3044,8 @@
       );
       mb.addLoopCap(collarTop, 0.032, shadeRgb(collarCol, 0.68), matCollar, false);
 
-      /* 2. 1U 钛金属个性键主体四斜面梯形收腰键裙（对齐 Row 1 R1 高度 + 支持悬停微升与点击下压行程） */
-      var y0 = CAP_Y_BASE + 0.018 + hover * 0.030 - press * 0.105 + waveDip;
+      /* 2. 1U 钛金属个性键主体（静态基准位构建，Y 行程与悬停高光走 GPU Uniform） */
+      var y0 = CAP_Y_BASE + 0.018;
       var yMid = y0 + 0.48;
       var yShoulder = y0 + 0.565;
       var yWell = y0 + 0.538;
@@ -3064,7 +3077,7 @@
       var octR = 0.228;
       var octBaseY = yWell - 0.002;
       var octApexY = y0 + 0.652;
-      var octRimMask = clamp(0.68 + hover * 0.28, 0.0, 0.99);
+      var octRimMask = 0.68;
       for (var fi = 0; fi < 8; fi++) {
         var a0 = (fi / 8) * TWO_PI + Math.PI * 0.125;
         var a1 = ((fi + 1) / 8) * TWO_PI + Math.PI * 0.125;
@@ -3127,17 +3140,9 @@
 
       var matDeckAnod = [palette.isLight ? 0.20 : 0.22, 0.91, 0.0, 0];
       var matDeckPvd = [palette.isLight ? 0.09 : 0.11, 0.96, 0.0, 1];
-      var matKnobKnurl = [palette.isLight ? 0.11 : 0.12, 0.97, 0.0, 1];
-
-      var resetPress = hwCtrl ? clamp(hwCtrl.resetPress || 0, 0, 1) : 0;
-      var resetHover = hwCtrl ? clamp(hwCtrl.resetHover || 0, 0, 1) : 0;
-      var mutePress = hwCtrl ? clamp(hwCtrl.mutePress || 0, 0, 1) : 0;
-      var muteHover = hwCtrl ? clamp(hwCtrl.muteHover || 0, 0, 1) : 0;
-      var closePress = hwCtrl ? clamp(hwCtrl.closePress || 0, 0, 1) : 0;
-      var closeHover = hwCtrl ? clamp(hwCtrl.closeHover || 0, 0, 1) : 0;
-      var knobAngle = hwCtrl ? (hwCtrl.knobAngle || 0) : -0.38;
+      /* wid=4 (41.0): 32 齿滚花旋钮旋转与微动由 GPU Uniform 驱动，彻底消除 CPU 帧级重建 */
+      var matKnobKnurl = [palette.isLight ? 0.11 : 0.12, 0.97, 0.0, 41.0];
       var isMuted = Boolean(hwCtrl && hwCtrl.muted);
-      var rotMag = hwCtrl ? (hwCtrl.orbitMag || 0) : 0;
 
       /* 0. 5U 控制舱一体重金属底座（严丝合缝填满 x∈[2.99, 8.01], z∈[-3.03, -2.07]，消除黑洞沟壑） */
       var yDeckShoulder = HW_DECK_Y_TOP - 0.026;
@@ -3192,14 +3197,10 @@
         matDeckPvd, matDeckPvd, 0.90
       );
 
-      /* 2. (cx = 5.36, z = -2.56)：视角回正物理微动圆键（action: 'reset-view'，旋转态点亮清透青白微光环） */
+      /* 2. (cx = 5.36, z = -2.56)：视角回正物理微动圆键（wid=3 光环 / wid=2 键帽+准星，由 GPU Uniform 驱动） */
       var rSegs = 24;
-      var rotActive = smootherstepScalar(0.015, 0.065, rotMag);
-      var haloOnCol = palette.isLight ? [0.22, 0.62, 0.88] : [0.72, 0.92, 1.00];
       var haloIdleCol = shadeRgb(grooveDark, 0.85);
-      var haloCol = mixRgb(haloIdleCol, haloOnCol, rotActive);
-      var haloEmis = rotActive * (palette.isLight ? 0.52 : 0.78) * Math.max(0.25, ambientMul);
-      var matResetHalo = [0.08, 0.16, haloEmis, 2];
+      var matResetHalo = [0.08, 0.16, 0.0, 32.0];
 
       var rOuterWell = sampleCircleLoop(CTRL_RESET_X, ROW1_Z, 0.348, rSegs, 0);
       var rHaloOut = sampleCircleLoop(CTRL_RESET_X, ROW1_Z, 0.324, rSegs, 0);
@@ -3209,18 +3210,18 @@
         rOuterWell, HW_DECK_Y_TOP + 0.004, 0.80, deckChamferCol,
         matDeckPvd, true, 0.32, 0.72
       );
-      mb.addPlanarAnnulus(rHaloOut, HW_DECK_Y_TOP - 0.008, rHaloIn, HW_DECK_Y_TOP - 0.008, haloCol, matResetHalo, false);
+      mb.addPlanarAnnulus(rHaloOut, HW_DECK_Y_TOP - 0.008, rHaloIn, HW_DECK_Y_TOP - 0.008, haloIdleCol, matResetHalo, false);
 
-      var yResetTop = HW_DECK_Y_TOP + 0.125 + resetHover * 0.016 - resetPress * 0.062;
+      var yResetTop = HW_DECK_Y_TOP + 0.125;
       var yResetDish = yResetTop - 0.018;
-      var resetCol = shadeRgb(panelCol, 1.0 + resetHover * 0.14, resetHover * 0.016);
-      var matResetBtn = [palette.isLight ? 0.12 : 0.14, 0.95, resetHover * 0.03 * ambientMul, 1];
+      var resetCol = panelCol;
+      var matResetBtn = [palette.isLight ? 0.12 : 0.14, 0.95, 0.0, 21.0];
       var rBtnBase = sampleCircleLoop(CTRL_RESET_X, ROW1_Z, 0.276, rSegs, 0);
       var rBtnRim = sampleCircleLoop(CTRL_RESET_X, ROW1_Z, 0.252, rSegs, 0);
       var rBtnDish = sampleCircleLoop(CTRL_RESET_X, ROW1_Z, 0.175, rSegs, 0);
 
       mb.addSmoothFilletStrip(
-        rBtnBase, HW_DECK_Y_TOP - 0.010, 0.22, shadeRgb(resetCol, 0.76),
+        rBtnBase, HW_DECK_Y_TOP - 0.030, 0.22, shadeRgb(resetCol, 0.76),
         rBtnRim, yResetTop, 0.74, mixRgb(resetCol, rimCol, 0.58),
         matResetBtn, false, 0.25, 0.88
       );
@@ -3231,23 +3232,22 @@
       );
       mb.addLoopCap(rBtnDish, yResetDish, shadeRgb(resetCol, 0.90), matResetBtn, false);
 
-      /* 回正键顶面微雕准星十字刻度 */
-      var reticleBase = palette.isLight ? etchInkCol : mixRgb(resetCol, rimCol, 0.74);
-      var reticleCol = rotActive > 0.05 ? mixRgb(reticleBase, haloOnCol, 0.58) : reticleBase;
-      var matReticle = [0.09, 0.96, rotActive * 0.18 * ambientMul, 1];
+      /* 回正键顶面微雕准星十字刻度（wid=2, subFlag=0.25） */
+      var reticleCol = palette.isLight ? etchInkCol : mixRgb(resetCol, rimCol, 0.74);
+      var matReticle = [0.09, 0.96, 0.0, 21.25];
       addRotatedChamferBar(mb, CTRL_RESET_X, ROW1_Z, yResetDish - 0.002, yResetDish + 0.013, 0.115, 0.017, 0.0, 0.006, reticleCol, etchBevelCol, resetCol, matReticle, matReticle, 0.82);
       addRotatedChamferBar(mb, CTRL_RESET_X, ROW1_Z, yResetDish - 0.002, yResetDish + 0.013, 0.017, 0.115, 0.0, 0.006, reticleCol, etchBevelCol, resetCol, matReticle, matReticle, 0.82);
 
-      /* 3. (cx = 6.38, z = -2.56)：V13.1 双层交错 32 齿菱形滚花 CNC 编码器旋钮（支持滚轮/拖拽旋转切档 + 3 颗针孔 LED） */
+      /* 3. (cx = 6.38, z = -2.56)：V13.1 双层交错 32 齿菱形滚花 CNC 编码器旋钮（静态基准角 0，GPU 实旋） */
       var kSegs = 64; /* 32 齿双层错相菱形滚花（64 段高密波峰波谷） */
-      var yKnobBase = HW_DECK_Y_TOP + 0.018;
-      var yKnobTop = HW_DECK_Y_TOP + 0.258 + muteHover * 0.016 - mutePress * 0.052;
+      var yKnobBase = HW_DECK_Y_TOP - 0.004;
+      var yKnobTop = HW_DECK_Y_TOP + 0.258;
       var yKnobShoulder = yKnobTop - 0.026;
-      var yKnobMid = (yKnobBase + yKnobShoulder) * 0.5;
+      var yKnobMid = (HW_DECK_Y_TOP + 0.018 + yKnobShoulder) * 0.5;
       var yKnobWell = yKnobTop - 0.008;
-      var knobCol = shadeRgb(panelCol, 1.08 + muteHover * 0.14, muteHover * 0.018);
+      var knobCol = shadeRgb(panelCol, 1.08);
       var knobToothBright = mixRgb(knobCol, rimCol, palette.isLight ? 0.58 : 0.62);
-      var matKnobTop = [palette.isLight ? 0.09 : 0.10, 0.98, muteHover * 0.03 * ambientMul, 1];
+      var matKnobTop = [palette.isLight ? 0.09 : 0.10, 0.98, 0.0, 41.0];
 
       var kSkirtCollar = sampleCircleLoop(CTRL_MUTE_X, ROW1_Z, 0.366, 28, 0);
       var kSkirtInner = sampleCircleLoop(CTRL_MUTE_X, ROW1_Z, 0.334, 28, 0);
@@ -3262,11 +3262,11 @@
         return idx % 2 === 0 ? 0.332 : 0.308;
       };
       var halfToothPhase = TWO_PI / kSegs;
-      var kKnurlBot = sampleCircleLoop(CTRL_MUTE_X, ROW1_Z, knurlRadiusFn, kSegs, knobAngle);
-      var kKnurlMid = sampleCircleLoop(CTRL_MUTE_X, ROW1_Z, knurlRadiusFn, kSegs, knobAngle + halfToothPhase);
-      var kKnurlTop = sampleCircleLoop(CTRL_MUTE_X, ROW1_Z, knurlRadiusFn, kSegs, knobAngle);
-      var kCapRim = sampleCircleLoop(CTRL_MUTE_X, ROW1_Z, 0.288, kSegs, knobAngle);
-      var kCapInner = sampleCircleLoop(CTRL_MUTE_X, ROW1_Z, 0.240, 28, knobAngle);
+      var kKnurlBot = sampleCircleLoop(CTRL_MUTE_X, ROW1_Z, knurlRadiusFn, kSegs, 0);
+      var kKnurlMid = sampleCircleLoop(CTRL_MUTE_X, ROW1_Z, knurlRadiusFn, kSegs, halfToothPhase);
+      var kKnurlTop = sampleCircleLoop(CTRL_MUTE_X, ROW1_Z, knurlRadiusFn, kSegs, 0);
+      var kCapRim = sampleCircleLoop(CTRL_MUTE_X, ROW1_Z, 0.288, kSegs, 0);
+      var kCapInner = sampleCircleLoop(CTRL_MUTE_X, ROW1_Z, 0.240, 28, 0);
 
       /* 双层反向错相 32 齿菱形滚花侧壁（呈现微距图 4 的精密交错钻石滚花切面高光） */
       for (var ki = 0; ki < kSegs; ki++) {
@@ -3313,16 +3313,14 @@
       mb.addLoopCap(kCapRim, yKnobTop, mixRgb(knobCol, rimCol, 0.28), matKnobTop, false);
       mb.addLoopCap(kCapInner, yKnobWell + 0.010, mixRgb(knobCol, rimCol, 0.16), matKnobTop, false);
 
-      /* 旋钮顶面随 knobAngle 实时旋转的金属刻度槽亮条 */
+      /* 旋钮顶面金属刻度槽亮条（静态基准位 0 rad，GPU 与滚花同步刚体旋转） */
       var notchR = 0.140;
-      var notchCx = CTRL_MUTE_X + Math.sin(knobAngle) * notchR;
-      var notchCz = ROW1_Z - Math.cos(knobAngle) * notchR;
       var notchCol = palette.isLight
         ? (isMuted ? [0.46, 0.50, 0.57] : etchInkCol)
         : (isMuted ? shadeRgb(rimCol, 0.64) : mixRgb(rimCol, [1.0, 1.0, 1.0], 0.55));
       addRotatedChamferBar(
-        mb, notchCx, notchCz, yKnobTop - 0.002, yKnobTop + 0.015,
-        0.022, 0.098, -knobAngle, 0.007,
+        mb, CTRL_MUTE_X, ROW1_Z - notchR, yKnobTop - 0.002, yKnobTop + 0.015,
+        0.022, 0.098, 0.0, 0.007,
         notchCol, palette.isLight ? etchBevelCol : [1.0, 1.0, 1.0], knobCol,
         matKnobTop, matKnobTop, 0.94
       );
@@ -3367,17 +3365,18 @@
       );
       mb.addLoopCap(clWellIn, HW_DECK_Y_TOP - 0.014, grooveDark, matDeckAnod, false);
 
-      var yCloseTop = HW_DECK_Y_TOP + 0.125 + closeHover * 0.016 - closePress * 0.062;
+      var yCloseTop = HW_DECK_Y_TOP + 0.125;
       var yCloseWell = yCloseTop - 0.014;
-      var closeCol = shadeRgb(panelCol, 1.0 + closeHover * 0.16, closeHover * 0.018);
-      var matCloseBtn = [palette.isLight ? 0.12 : 0.14, 0.95, closeHover * 0.04 * ambientMul, 1];
+      var closeCol = panelCol;
+      /* wid=5 (51.0 / 51.25): 关闭微动键下沉与悬停微红由 GPU Uniform 驱动 */
+      var matCloseBtn = [palette.isLight ? 0.12 : 0.14, 0.95, 0.0, 51.0];
 
       var clBase = sampleG2RectLoop(CTRL_CLOSE_X - 0.302, ROW1_Z - 0.302, CTRL_CLOSE_X + 0.302, ROW1_Z + 0.302, 0.096, 6, 2.2);
       var clRim = sampleG2RectLoop(CTRL_CLOSE_X - 0.274, ROW1_Z - 0.274, CTRL_CLOSE_X + 0.274, ROW1_Z + 0.274, 0.086, 6, 2.2);
       var clDish = sampleG2RectLoop(CTRL_CLOSE_X - 0.220, ROW1_Z - 0.220, CTRL_CLOSE_X + 0.220, ROW1_Z + 0.220, 0.068, 6, 2.2);
 
       mb.addSmoothFilletStrip(
-        clBase, HW_DECK_Y_TOP - 0.012, 0.22, shadeRgb(closeCol, 0.76),
+        clBase, HW_DECK_Y_TOP - 0.030, 0.22, shadeRgb(closeCol, 0.76),
         clRim, yCloseTop, 0.76, mixRgb(closeCol, rimCol, 0.60),
         matCloseBtn, false, 0.24, 0.90
       );
@@ -3388,12 +3387,9 @@
       );
       mb.addLoopCap(clDish, yCloseWell, shadeRgb(closeCol, 0.90), matCloseBtn, false);
 
-      /* 顶面立体微雕 `×` 十字金属亮纹 */
-      var xGlyphBase = palette.isLight ? etchInkCol : mixRgb(closeCol, rimCol, 0.78);
-      var xGlyphCol = closeHover > 0.05
-        ? mixRgb(xGlyphBase, [0.95, 0.42, 0.38], 0.40 * closeHover)
-        : xGlyphBase;
-      var matXGlyph = [0.08, 0.97, closeHover * 0.10 * ambientMul, 1];
+      /* 顶面立体微雕 `×` 十字金属亮纹（wid=5, subFlag=0.25） */
+      var xGlyphCol = palette.isLight ? etchInkCol : mixRgb(closeCol, rimCol, 0.78);
+      var matXGlyph = [0.08, 0.97, 0.0, 51.25];
       addRotatedChamferBar(
         mb, CTRL_CLOSE_X, ROW1_Z, yCloseWell - 0.002, yCloseWell + 0.014,
         0.132, 0.020, Math.PI * 0.25, 0.006,
@@ -3998,12 +3994,7 @@
             var vb = Number(noveltyEntry.viewBox) || 2048;
             var sc = iconBox / vb;
             try {
-              var compiledNovelty = [];
-              for (var np = 0; np < noveltyEntry.paths.length; np++) {
-                if (noveltyEntry.paths[np]) {
-                  compiledNovelty.push(new Path2D(noveltyEntry.paths[np]));
-                }
-              }
+              var compiledNovelty = getCompiledNoveltyPath2Ds(String(zNum), noveltyEntry.paths) || [];
               if (compiledNovelty.length > 0) {
                 ctx.save();
                 ctx.translate(iconX, iconY);
@@ -4575,17 +4566,15 @@
     var SHADOW_SOLID_VS = [
       '#version 300 es',
       'precision highp float;',
-      'layout(location = 0) in vec3 a_pos;',
-      'layout(location = 3) in vec4 a_params;',
-      'uniform mat4 u_lightViewProj;',
-      'uniform mat4 u_model;',
-      'void main() {',
-      '  if ((a_params.w > 2.5 && a_params.w < 3.5) || a_params.w > 6.5) {',
-      '    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);',
-      '    return;',
-      '  }',
-      '  gl_Position = u_lightViewProj * (u_model * vec4(a_pos, 1.0));',
-      '}',
+      'layout(location=0) in vec3 a_pos;layout(location=3) in vec4 a_params;',
+      'uniform mat4 u_lightViewProj;uniform mat4 u_model;uniform vec4 u_hwDyn0;uniform vec4 u_hwDyn2;',
+      'void main(){',
+      'float rk=a_params.w;vec3 pos=a_pos;',
+      'if(rk<9.5){if((rk>2.5&&rk<3.5)||rk>6.5){gl_Position=vec4(2.0,2.0,2.0,1.0);return;}}',
+      'else{float w=floor(rk*0.1+0.001);if(w<1.5)pos.y+=u_hwDyn0.x;else if(w<2.5)pos.y+=u_hwDyn0.y;',
+      'else if(w>3.5&&w<4.5){float c=cos(u_hwDyn0.w),s=sin(u_hwDyn0.w),x=pos.x-6.38,z=pos.z+2.56;pos.x=6.38+x*c-z*s;pos.z=-2.56+x*s+z*c;pos.y+=u_hwDyn0.z;}',
+      'else if(w>=4.5)pos.y+=u_hwDyn2.x;}',
+      'gl_Position=u_lightViewProj*(u_model*vec4(pos,1.0));}',
     ].join('\n');
 
     var SHADOW_KEYCAP_VS = [
@@ -4838,7 +4827,7 @@
       'vec3 sampleMetalStudioEnv(sampler2D metalEnvTex, vec3 R, float roughness, float isLightTheme) {',
       '  vec3 d = normalize(R);',
       '  vec2 uv = dirToEquirectUv(d);',
-      '  float lod = clamp(0.85 + roughness * 5.2, 0.0, 5.0);',
+      '  float lod = clamp(0.45 + roughness * 4.4, 0.0, 4.5);',
       '  vec3 texSrgb = textureLod(metalEnvTex, uv, lod).rgb;',
       '  vec3 texLin = srgbToLinear(texSrgb);',
       '  float luma = dot(texLin, vec3(0.2126, 0.7152, 0.0722));',
@@ -4862,26 +4851,16 @@
       '    return 1.0;',
       '  }',
       '  float bias = max(0.0018 * (1.0 - ndl), 0.00065);',
-      '  float ign = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715)))) * 6.2831853;',
-      '  float ca = cos(ign);',
-      '  float sa = sin(ign);',
-      '  /* 6-tap 预计算 Vogel Disk PCF + IGN 旋转抖动：纹理采样与三角函数开销 -50%+，柔影边缘依然平滑细腻 */',
-      '  const vec2 vogel6[6] = vec2[6](',
-      '    vec2( 0.000678,  0.000000),',
-      '    vec2(-0.000866,  0.000794),',
-      '    vec2( 0.000133, -0.001511),',
-      '    vec2( 0.001122,  0.001407),',
-      '    vec2(-0.002016, -0.000321),',
-      '    vec2( 0.001614, -0.001577)',
-      '  );',
-      '  float lit = 0.0;',
-      '  for (int i = 0; i < 6; i++) {',
-      '    vec2 d = vogel6[i];',
-      '    vec2 rotOff = vec2(ca * d.x - sa * d.y, sa * d.x + ca * d.y);',
-      '    float occDepth = textureLod(shadowTex, proj.xy + rotOff, 0.0).r;',
-      '    lit += (proj.z - bias <= occDepth) ? 1.0 : 0.0;',
-      '  }',
-      '  return lit * (1.0 / 6.0);',
+      '  const vec2 rot8[8]=vec2[8](vec2(1.,0.),vec2(.7071,.7071),vec2(0.,1.),vec2(-.7071,.7071),vec2(-1.,0.),vec2(-.7071,-.7071),vec2(0.,-1.),vec2(.7071,-.7071));',
+      '  vec2 cs=rot8[int(fract(52.9829189*fract(dot(gl_FragCoord.xy,vec2(.06711056,.00583715))))*8.)&7];',
+      '  mat2 rM=mat2(cs.x,cs.y,-cs.y,cs.x);float lit=0.;',
+      '  if(shadowEnabled>1.5){',
+      '    const vec2 vogel6[6]=vec2[6](vec2(.000678,0.),vec2(-.000866,.000794),vec2(.000133,-.001511),vec2(.001122,.001407),vec2(-.002016,-.000321),vec2(.001614,-.001577));',
+      '    for(int i=0;i<6;i++)lit+=(proj.z-bias<=textureLod(shadowTex,proj.xy+rM*vogel6[i],0.).r)?1.:0.;',
+      '    return lit*(1./6.);}',
+      '  const vec2 vogel4[4]=vec2[4](vec2(.00078,0.),vec2(-.00102,.000935),vec2(.00016,-.00168),vec2(.00148,.00126));',
+      '  for(int i=0;i<4;i++)lit+=(proj.z-bias<=textureLod(shadowTex,proj.xy+rM*vogel4[i],0.).r)?1.:0.;',
+      '  return lit*.25;',
       '}',
     ].join('\n');
 
@@ -4906,22 +4885,23 @@
       'layout(location = 3) in vec4 a_params;',
       'layout(location = 4) in vec2 a_uv;',
       GLSL_FRAME_GLOBALS_UBO,
-      'uniform mat4 u_model;',
-      'out vec3 v_worldPos;',
-      'out vec3 v_localPos;',
-      'out vec3 v_normal;',
-      'out vec3 v_color;',
-      'out vec4 v_params;',
-      'out vec2 v_uv;',
-      'void main() {',
-      '  vec3 pos = a_pos;',
-      '  vec3 nrm = a_normal;',
-      '  float kind = a_params.w;',
-      '  vec4 wp;',
-      '  if (kind > 6.5) {',
+      'uniform mat4 u_model;uniform vec4 u_hwDyn0;uniform vec4 u_hwDyn1;uniform vec4 u_hwDyn2;',
+      'out vec3 v_worldPos;out vec3 v_localPos;out vec3 v_normal;out vec3 v_color;out vec4 v_params;out vec2 v_uv;',
+      'void main(){',
+      'vec3 pos=a_pos,nrm=a_normal,col=a_color;vec4 prm=a_params;vec2 uv=a_uv;float rk=prm.w,wid=floor(rk*.1+.001);vec4 wp;',
+      'if(wid>.5){',
+      'float sk=rk-wid*10.,bk=floor(sk+.001),sf=sk-bk,isL=u_envParams.x,amb=u_envParams.z;prm.w=bk;',
+      'vec3 hOn=mix(vec3(.72,.92,1.),vec3(.22,.62,.88),isL);',
+      'if(wid<1.5){float h=u_hwDyn1.x;pos.y+=u_hwDyn0.x;col=clamp(col*(1.+h*mix(.16,.08,isL))+h*.018,0.,1.);prm.z+=h*(sf>.15?.11:.04)*amb;if(sf>.15&&uv.x>.5)uv.x=min(.99,uv.x+h*.28);}',
+      'else if(wid<2.5){float h=u_hwDyn1.y,ra=u_hwDyn1.w;pos.y+=u_hwDyn0.y;if(sf>.15){col=mix(col,hOn,ra*.58);prm.z+=ra*.18*amb;}else{col=clamp(col*(1.+h*.14)+h*.016,0.,1.);prm.z+=h*.03*amb;}}',
+      'else if(wid<3.5){float ra=u_hwDyn1.w;col=mix(col,hOn,ra);prm.z=ra*mix(.78,.52,isL)*max(.25,amb);}',
+      'else if(wid<4.5){float c=cos(u_hwDyn0.w),s=sin(u_hwDyn0.w),x=pos.x-6.38,z=pos.z+2.56,nx=nrm.x,nz=nrm.z,mh=u_hwDyn1.z;pos.x=6.38+x*c-z*s;pos.z=-2.56+x*s+z*c;pos.y+=u_hwDyn0.z;nrm.x=nx*c-nz*s;nrm.z=nx*s+nz*c;col=clamp(col*(1.+mh*.14)+mh*.018,0.,1.);prm.z+=mh*.03*amb;}',
+      'else{float ch=u_hwDyn2.y;pos.y+=u_hwDyn2.x;if(sf>.15){col=mix(col,vec3(.95,.42,.38),.4*ch);prm.z+=ch*.1*amb;}else{col=clamp(col*(1.+ch*.16)+ch*.018,0.,1.);prm.z+=ch*.04*amb;}}',
+      'wp=u_model*vec4(pos,1.);',
+      '  } else if (rk > 6.5) {',
       '    float phaseT = u_envParams.w;',
       '    float ePulseF = u_prismConfig.w;',
-      '    if (kind < 7.15) {',
+      '    if (rk < 7.15) {',
       '      float ringIdx = a_params.x;',
       '      float radExpand = 1.0 + ePulseF * 0.14 + 0.038 * sin(phaseT * 2.4 + ringIdx * 2.1);',
       '      float wobX = sin(phaseT * 1.8 + ringIdx * 1.7) * 0.042;',
@@ -4931,11 +4911,11 @@
       '      pos.y += (a_normal.x * wobZ - a_normal.z * wobX) * (0.35 + 0.32 * ringIdx);',
       '      nrm = vec3(0.0, 1.0, 0.0);',
       '      wp = u_model * vec4(pos, 1.0);',
-      '    } else if (kind > 7.45 && kind < 7.85) {',
+      '    } else if (rk > 7.45 && rk < 7.85) {',
       '      float cSeed = a_params.x;',
       '      pos.y += sin(phaseT * 1.65 + cSeed * 6.2831853) * 0.032 + ePulseF * 0.025;',
       '      wp = u_model * vec4(pos, 1.0);',
-      '    } else if (kind > 7.85) {',
+      '    } else if (rk > 7.85) {',
       '      float mSeed = a_params.x;',
       '      pos.y += sin(phaseT * 1.9 + mSeed * 6.2831853) * 0.042;',
       '      float mSize = clamp(a_normal.x, 0.005, 0.065) * (1.0 + ePulseF * 0.35 + 0.16 * sin(phaseT * 2.6 + mSeed * 12.56637));',
@@ -4955,9 +4935,9 @@
       '  v_worldPos = wp.xyz;',
       '  v_localPos = pos;',
       '  v_normal = normalize(mat3(u_model) * nrm);',
-      '  v_color = a_color;',
-      '  v_params = a_params;',
-      '  v_uv = a_uv;',
+      '  v_color = col;',
+      '  v_params = prm;',
+      '  v_uv = uv;',
       '  gl_Position = u_viewProj * wp;',
       '}',
     ].join('\n');
@@ -5079,30 +5059,14 @@
       '',
       '  vec3 baseN = normalize(v_normal);',
       '  vec3 N = baseN;',
-      '  if (kind < 0.5) {',
-      '    vec3 an = abs(baseN);',
-      '    vec3 triW = an * an;',
-      '    triW *= triW;',
-      '    triW /= max(triW.x + triW.y + triW.z, 1e-4);',
-      '    float gScale = 2.95;',
-      '    float gStep = grainTexelSize(u_grainTex);',
-      '    float beadY = texture(u_grainTex, v_localPos.xz * gScale).g;',
-      '    float beadZ = texture(u_grainTex, v_localPos.xy * gScale).g;',
-      '    float beadX = texture(u_grainTex, v_localPos.zy * gScale).g;',
-      '    float beadH = beadX * triW.x + beadY * triW.y + beadZ * triW.z;',
-      '    float pxFoot = max(length(fwidth(v_localPos.xz)), length(fwidth(v_localPos.xy)));',
-      '    float aaWeight = 1.0 - smoothstep(0.035, 0.15, pxFoot);',
-      '    float ignGrain = fract(52.9829189 * fract(dot(floor(gl_FragCoord.xy), vec2(0.06711056, 0.00583715)))) - 0.5;',
-      '    if (aaWeight > 0.02) {',
-      '      float beadHx = texture(u_grainTex, v_localPos.xz * gScale + vec2(gStep, 0.0)).g;',
-      '      float beadHz = texture(u_grainTex, v_localPos.xz * gScale + vec2(0.0, gStep)).g;',
-      '      vec3 T_iso = abs(baseN.y) < 0.99 ? normalize(cross(vec3(0.0, 1.0, 0.0), baseN)) : vec3(1.0, 0.0, 0.0);',
-      '      vec3 B_iso = normalize(cross(baseN, T_iso));',
-      '      float dBx = (beadHx - beadY) * aaWeight * 0.017 + ignGrain * 0.0032;',
-      '      float dBz = (beadHz - beadY) * aaWeight * 0.017 - ignGrain * 0.0032;',
-      '      N = normalize(baseN + T_iso * dBx + B_iso * dBz);',
-      '    }',
-      '    rough = clamp(rough + (beadH - 0.5) * 0.018 * aaWeight, 0.19, 0.32);',
+      '  if(kind<.5){float gS=2.95;',
+      '    if(baseN.y>.45){float gSt=grainTexelSize(u_grainTex),bY=texture(u_grainTex,v_localPos.xz*gS).g,aaW=1.-smoothstep(.035,.15,length(fwidth(v_localPos.xz)));',
+      '      if(aaW>.02){float ig=fract(52.9829189*fract(dot(floor(gl_FragCoord.xy),vec2(.06711056,.00583715))))-.5;',
+      '        float bHx=texture(u_grainTex,v_localPos.xz*gS+vec2(gSt,0.)).g,bHz=texture(u_grainTex,v_localPos.xz*gS+vec2(0.,gSt)).g;',
+      '        vec3 Ti=abs(baseN.y)<.99?normalize(cross(vec3(0.,1.,0.),baseN)):vec3(1.,0.,0.),Bi=normalize(cross(baseN,Ti));',
+      '        N=normalize(baseN+Ti*((bHx-bY)*aaW*.017+ig*.0032)+Bi*((bHz-bY)*aaW*.017-ig*.0032));}',
+      '      rough=clamp(rough+(bY-.5)*.018*aaW,.19,.32);',
+      '    }else{float bH=texture(u_grainTex,(abs(baseN.x)>abs(baseN.z)?v_localPos.zy:v_localPos.xy)*gS).g;rough=clamp(rough+(bH-.5)*.018,.19,.32);}',
       '  } else if (kind > 4.5 && kind < 5.5) {',
       '    float gStep = grainTexelSize(u_grainTex);',
       '    vec2 pcUv = (v_localPos.xz + baseN.xz * v_localPos.y) * 1.15;',
@@ -6468,6 +6432,9 @@
       var _frameEnvVec4 = new Float32Array(4);
       var _frameLiftShadow4 = new Float32Array(4);
       var _frameUboFloats = new Float32Array(52);
+      var _frameHwDyn0 = new Float32Array(4);
+      var _frameHwDyn1 = new Float32Array(4);
+      var _frameHwDyn2 = new Float32Array(4);
       var _zeroVec4 = new Float32Array([0, 0, 0, 0]);
       var _fallbackRimTint3 = new Float32Array([0.74, 0.84, 1.0]);
 
@@ -6511,10 +6478,13 @@
       var explicitPaused = Boolean(opts.paused);
       var pendingRenderWhilePaused = false;
       var shadowDirty = true;
-      var lastShadowGeomSig = '';
+      var lastShadowGeomSig = -1;
       var lastShadowDrawClockMs = -1000;
       var SHADOW_THROTTLE_MS = 33.0;
-      var lastDynMeshSig = '';
+      var SHADOW_DRAG_THROTTLE_MS = 66.0;
+      var shadowDeferredByDrag = false;
+      var onlyZeroGActive = false;
+      var lastDynMeshSig = -1;
       var keycapInstanceDirty = true;
       var perfStats = {
         shadowDraws: 0,
@@ -6875,6 +6845,8 @@
         shadowObj.uSolid = {
           lightViewProj: gl.getUniformLocation(progShadowSolid, 'u_lightViewProj'),
           model: gl.getUniformLocation(progShadowSolid, 'u_model'),
+          hwDyn0: gl.getUniformLocation(progShadowSolid, 'u_hwDyn0'),
+          hwDyn2: gl.getUniformLocation(progShadowSolid, 'u_hwDyn2'),
         };
         shadowObj.uKeycap = {
           lightViewProj: gl.getUniformLocation(progShadowKeycap, 'u_lightViewProj'),
@@ -6956,7 +6928,7 @@
         if (rebuilt) {
           shPass.size = nextSize;
           shadowDirty = true;
-          lastShadowGeomSig = '';
+          lastShadowGeomSig = -1;
         }
       }
 
@@ -7065,7 +7037,7 @@
         var anisoExt =
           gl.getExtension('EXT_texture_filter_anisotropic') ||
           gl.getExtension('WEBKIT_EXT_texture_filter_anisotropic');
-        var maxAniso = anisoExt ? Math.min(8, gl.getParameter(anisoExt.MAX_TEXTURE_MAX_ANISOTROPY_EXT) || 1) : 1;
+        var maxAniso = anisoExt ? Math.min(4, gl.getParameter(anisoExt.MAX_TEXTURE_MAX_ANISOTROPY_EXT) || 1) : 1;
 
         var atlasTex = gl.createTexture();
         glRes.textures.push(atlasTex);
@@ -7114,7 +7086,7 @@
           gl.texParameterf(gl.TEXTURE_2D, anisoExt.TEXTURE_MAX_ANISOTROPY_EXT, maxAniso);
         }
 
-        /* 6. 128x64 RGB8 戏剧光摄影棚金属环境反射贴图 (#3/5) */
+        /* 6. 64x32 RGB8 戏剧光摄影棚金属环境反射贴图 (#3/5) */
         var metalEnvTex = gl.createTexture();
         glRes.textures.push(metalEnvTex);
         gl.bindTexture(gl.TEXTURE_2D, metalEnvTex);
@@ -7124,7 +7096,7 @@
         gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
         gl.texImage2D(
           gl.TEXTURE_2D, 0, rgb8Internal,
-          grainAssets.envW || 128, grainAssets.envH || 64, 0,
+          grainAssets.envW || 64, grainAssets.envH || 32, 0,
           rgbFormat, gl.UNSIGNED_BYTE, grainAssets.metalEnvRGB
         );
         gl.pixelStorei(unpackAlign, 4);
@@ -7157,9 +7129,10 @@
           return false;
         }
         shadowDirty = true;
-        lastShadowGeomSig = '';
+        lastShadowGeomSig = -1;
         lastShadowDrawClockMs = -1000;
-        lastDynMeshSig = '';
+        shadowDeferredByDrag = false;
+        lastDynMeshSig = -1;
         keycapInstanceDirty = true;
 
         var uboTarget = gl.UNIFORM_BUFFER || 0x8a11;
@@ -7181,6 +7154,9 @@
 
         var uSolid = {
           model: gl.getUniformLocation(progSolid, 'u_model'),
+          hwDyn0: gl.getUniformLocation(progSolid, 'u_hwDyn0'),
+          hwDyn1: gl.getUniformLocation(progSolid, 'u_hwDyn1'),
+          hwDyn2: gl.getUniformLocation(progSolid, 'u_hwDyn2'),
           liftCapShadow: gl.getUniformLocation(progSolid, 'u_liftCapShadow'),
           switchLightPos: gl.getUniformLocation(progSolid, 'u_switchLightPos'),
           switchLightColor: gl.getUniformLocation(progSolid, 'u_switchLightColor'),
@@ -7272,8 +7248,10 @@
         oledCoreTransitionStep = false;
         lastAuxAtlasSig = '';
         lastChassisThemeId = '';
-        lastShadowGeomSig = '';
-        lastDynMeshSig = '';
+        lastShadowGeomSig = -1;
+        lastDynMeshSig = -1;
+        lastKeycapInstSig = -1;
+        shadowDeferredByDrag = false;
         shadowDirty = true;
         keycapInstanceDirty = true;
         oledTexAllocated = false;
@@ -8685,17 +8663,20 @@
 
         var nextErr = expTerm * (e0 * cosTerm + c2 * sinTerm);
         var nextVel = expTerm * (vel * cosTerm - ((alpha * vel + wn * wn * e0) / wd) * sinTerm);
-        var nextCur = target + nextErr;
-        var energyErr = Math.abs(nextErr) + Math.abs(nextVel) * 0.085;
-        return [nextCur, nextVel, energyErr];
+        _spOut[0] = target + nextErr;
+        _spOut[1] = nextVel;
+        _spOut[2] = Math.abs(nextErr) + Math.abs(nextVel) * 0.085;
+        return _spOut;
       }
 
       function stepDampedSpring(cur, vel, target, stiffness, damping, dt) {
         var force = (target - cur) * stiffness;
         var nextVel = (vel + force * dt) * Math.exp(-damping * dt);
         var nextCur = cur + nextVel * dt;
-        var err = Math.abs(target - nextCur) + Math.abs(nextVel) * 0.08;
-        return [nextCur, nextVel, err];
+        _spOut[0] = nextCur;
+        _spOut[1] = nextVel;
+        _spOut[2] = Math.abs(target - nextCur) + Math.abs(nextVel) * 0.08;
+        return _spOut;
       }
 
       function isMagneticSpringAtRest() {
@@ -8724,6 +8705,7 @@
         var prevOrbPitch = orbitPitchCur;
         var prevOrbYaw = orbitYawCur;
         var maxErr = 0;
+        var zeroGKeepAlive = false;
 
         /* 1. 推进 Apple 官网级 1:1 紧耦合旋转伺服 (wn=38.0, zeta=0.96)、动量惯性滑停 (damping=6.0) 与双盘磁吸共轨 */
         if (reduced) {
@@ -8748,20 +8730,12 @@
           auxOrbitYawVel = 0;
           auxPhaseLiftY = 0;
         } else if (orbitServoActive || orbitMode === 'servo') {
-          var svPitch = stepExactSecondOrderSpring(orbitPitchCur, orbitPitchVel, orbitTargetPitch, ORBIT_SERVO_WN, ORBIT_SERVO_ZETA, dt);
-          var svYaw = stepExactSecondOrderSpring(orbitYawCur, orbitYawVel, orbitTargetYaw, ORBIT_SERVO_WN, ORBIT_SERVO_ZETA, dt);
-          orbitPitchCur = clamp(svPitch[0], ORBIT_PITCH_MIN, ORBIT_PITCH_MAX);
-          orbitPitchVel = svPitch[1];
-          orbitYawCur = clamp(svYaw[0], -ORBIT_YAW_LIMIT, ORBIT_YAW_LIMIT);
-          orbitYawVel = svYaw[1];
-          if (svPitch[2] < IDLE_EPS && svYaw[2] < IDLE_EPS) {
-            orbitPitchCur = orbitTargetPitch;
-            orbitYawCur = orbitTargetYaw;
-            orbitPitchVel = 0;
-            orbitYawVel = 0;
-          } else {
-            maxErr = Math.max(maxErr, svPitch[2], svYaw[2]);
-          }
+          var sv = stepExactSecondOrderSpring(orbitPitchCur, orbitPitchVel, orbitTargetPitch, ORBIT_SERVO_WN, ORBIT_SERVO_ZETA, dt);
+          orbitPitchCur = clamp(sv[0], ORBIT_PITCH_MIN, ORBIT_PITCH_MAX); orbitPitchVel = sv[1]; var svPE = sv[2];
+          sv = stepExactSecondOrderSpring(orbitYawCur, orbitYawVel, orbitTargetYaw, ORBIT_SERVO_WN, ORBIT_SERVO_ZETA, dt);
+          orbitYawCur = clamp(sv[0], -ORBIT_YAW_LIMIT, ORBIT_YAW_LIMIT); orbitYawVel = sv[1]; var svYE = sv[2];
+          if (svPE < IDLE_EPS && svYE < IDLE_EPS) { orbitPitchCur = orbitTargetPitch; orbitYawCur = orbitTargetYaw; orbitPitchVel = 0; orbitYawVel = 0; }
+          else maxErr = Math.max(maxErr, svPE, svYE);
         } else if (orbitMode === 'fling') {
           var dampF = Math.exp(-ORBIT_FLING_DAMP * dt);
           orbitPitchCur = clamp(orbitPitchCur + orbitPitchVel * dt, ORBIT_PITCH_MIN, ORBIT_PITCH_MAX);
@@ -8785,25 +8759,13 @@
             maxErr = Math.max(maxErr, flingSpeed * 0.14);
           }
         } else if (orbitMode === 'reset') {
-          var rPitch = stepExactSecondOrderSpring(orbitPitchCur, orbitPitchVel, 0.0, ORBIT_RESET_WN, ORBIT_RESET_ZETA, dt);
-          var rYaw = stepExactSecondOrderSpring(orbitYawCur, orbitYawVel, 0.0, ORBIT_RESET_WN, ORBIT_RESET_ZETA, dt);
-          orbitPitchCur = rPitch[0];
-          orbitPitchVel = rPitch[1];
-          orbitYawCur = rYaw[0];
-          orbitYawVel = rYaw[1];
-          orbitTargetPitch = orbitPitchCur;
-          orbitTargetYaw = orbitYawCur;
-          if (rPitch[2] < IDLE_EPS && rYaw[2] < IDLE_EPS) {
-            orbitPitchCur = 0;
-            orbitYawCur = 0;
-            orbitTargetPitch = 0;
-            orbitTargetYaw = 0;
-            orbitPitchVel = 0;
-            orbitYawVel = 0;
-            orbitMode = 'idle';
-          } else {
-            maxErr = Math.max(maxErr, rPitch[2], rYaw[2]);
-          }
+          var rv = stepExactSecondOrderSpring(orbitPitchCur, orbitPitchVel, 0.0, ORBIT_RESET_WN, ORBIT_RESET_ZETA, dt);
+          orbitPitchCur = rv[0]; orbitPitchVel = rv[1]; var rPE = rv[2];
+          rv = stepExactSecondOrderSpring(orbitYawCur, orbitYawVel, 0.0, ORBIT_RESET_WN, ORBIT_RESET_ZETA, dt);
+          orbitYawCur = rv[0]; orbitYawVel = rv[1]; var rYE = rv[2];
+          orbitTargetPitch = orbitPitchCur; orbitTargetYaw = orbitYawCur;
+          if (rPE < IDLE_EPS && rYE < IDLE_EPS) { orbitPitchCur = orbitYawCur = orbitTargetPitch = orbitTargetYaw = orbitPitchVel = orbitYawVel = 0; orbitMode = 'idle'; }
+          else maxErr = Math.max(maxErr, rPE, rYE);
         }
 
         if (!reduced) {
@@ -8823,22 +8785,14 @@
             -ORBIT_YAW_LIMIT,
             ORBIT_YAW_LIMIT
           );
-          var sAuxP = stepExactSecondOrderSpring(auxOrbitPitchCur, auxOrbitPitchVel, tgtAuxPitch, 28.0, 0.92, dt);
-          var sAuxY = stepExactSecondOrderSpring(auxOrbitYawCur, auxOrbitYawVel, tgtAuxYaw, 28.0, 0.92, dt);
-          auxOrbitPitchCur = sAuxP[0];
-          auxOrbitPitchVel = sAuxP[1];
-          auxOrbitYawCur = sAuxY[0];
-          auxOrbitYawVel = sAuxY[1];
+          var sa = stepExactSecondOrderSpring(auxOrbitPitchCur, auxOrbitPitchVel, tgtAuxPitch, 28.0, 0.92, dt);
+          auxOrbitPitchCur = sa[0]; auxOrbitPitchVel = sa[1]; var aPE = sa[2];
+          sa = stepExactSecondOrderSpring(auxOrbitYawCur, auxOrbitYawVel, tgtAuxYaw, 28.0, 0.92, dt);
+          auxOrbitYawCur = sa[0]; auxOrbitYawVel = sa[1]; var aYE = sa[2];
           auxPhaseLiftY = clamp(-chassisInstVelYaw * 0.015, -0.038, 0.038);
-          if (sAuxP[2] < IDLE_EPS && sAuxY[2] < IDLE_EPS && Math.abs(chassisInstVelPitch) < 0.002 && Math.abs(chassisInstVelYaw) < 0.002) {
-            auxOrbitPitchCur = orbitPitchCur;
-            auxOrbitYawCur = orbitYawCur;
-            auxOrbitPitchVel = 0;
-            auxOrbitYawVel = 0;
-            auxPhaseLiftY = 0;
-          } else {
-            maxErr = Math.max(maxErr, sAuxP[2], sAuxY[2]);
-          }
+          if (aPE < IDLE_EPS && aYE < IDLE_EPS && Math.abs(chassisInstVelPitch) < 0.002 && Math.abs(chassisInstVelYaw) < 0.002) {
+            auxOrbitPitchCur = orbitPitchCur; auxOrbitYawCur = orbitYawCur; auxOrbitPitchVel = auxOrbitYawVel = auxPhaseLiftY = 0;
+          } else maxErr = Math.max(maxErr, aPE, aYE);
         }
 
         /* 1b. 推进思考档位阶梯悬浮高度（0.40U..1.06U）与 High/Extra 邻键失重共鸣（<= 1.65U） */
@@ -8866,12 +8820,13 @@
           var sEffH = stepExactSecondOrderSpring(effortLiftHeightCur, effortLiftHeightVel, effortLiftTarget, 20.0, 0.88, dt);
           effortLiftHeightCur = clamp(sEffH[0], 0.24, 1.25);
           effortLiftHeightVel = sEffH[1];
+          var effHErr = sEffH[2];
 
           var sSym = stepExactSecondOrderSpring(neighborSympathyCur, neighborSympathyVel, symTarget, 18.0, 0.88, dt);
           neighborSympathyCur = clamp(sSym[0], 0.0, 0.12);
           neighborSympathyVel = sSym[1];
 
-          maxErr = Math.max(maxErr, sEffH[2], sSym[2]);
+          maxErr = Math.max(maxErr, effHErr, sSym[2]);
         }
 
         /* 2. 推进全局动效三件套（Intro Wake / 90+6 Key Wave Ripple / Energy Pulse） */
@@ -8987,12 +8942,11 @@
           zeroGEnvCur = 0;
         } else {
           var gP = stepExactSecondOrderSpring(gyroPitchCur, gyroPitchVel, tgtGyroPitch, 16.0, 0.82, dt);
+          gyroPitchCur = gP[0]; gyroPitchVel = gP[1]; maxErr = Math.max(maxErr, gP[2]);
           var gR = stepExactSecondOrderSpring(gyroRollCur, gyroRollVel, tgtGyroRoll, 16.0, 0.82, dt);
+          gyroRollCur = gR[0]; gyroRollVel = gR[1]; maxErr = Math.max(maxErr, gR[2]);
           var gY = stepExactSecondOrderSpring(gyroYawCur, gyroYawVel, tgtGyroYaw, 16.0, 0.82, dt);
-          gyroPitchCur = gP[0]; gyroPitchVel = gP[1];
-          gyroRollCur = gR[0]; gyroRollVel = gR[1];
-          gyroYawCur = gY[0]; gyroYawVel = gY[1];
-          maxErr = Math.max(maxErr, gP[2], gR[2], gY[2]);
+          gyroYawCur = gY[0]; gyroYawVel = gY[1]; maxErr = Math.max(maxErr, gY[2]);
 
           if (zeroGRemainSec > 0) {
             zeroGRemainSec = Math.max(0, zeroGRemainSec - dt);
@@ -9000,7 +8954,7 @@
             zeroGPhase += dt * (0.45 + 0.55 * zeroGEnvCur);
             fluxPhase += dt * (0.85 + effortTierCur * 0.16 + energyPulseVal * 1.6);
             if (zeroGRemainSec > 0) {
-              maxErr = Math.max(maxErr, 0.005);
+              zeroGKeepAlive = true;
             }
           } else {
             zeroGEnvCur = 0;
@@ -9061,26 +9015,18 @@
             fltLiftMagZ = tgtLiftMagZ;
           }
 
-          var sPitch = stepExactSecondOrderSpring(liftPitchCur, liftPitchVel, fltLiftPitch, TILT_SPRING_WN, TILT_SPRING_ZETA, dt);
-          liftPitchCur = clamp(sPitch[0], -CAP_TILT_MAX_RAD * 1.15, CAP_TILT_MAX_RAD * 1.15);
-          liftPitchVel = sPitch[1];
-
-          var sRoll = stepExactSecondOrderSpring(liftRollCur, liftRollVel, fltLiftRoll, TILT_SPRING_WN, TILT_SPRING_ZETA, dt);
-          liftRollCur = clamp(sRoll[0], -CAP_TILT_MAX_RAD * 1.15, CAP_TILT_MAX_RAD * 1.15);
-          liftRollVel = sRoll[1];
-
-          var sYaw = stepExactSecondOrderSpring(liftYawCur, liftYawVel, fltLiftYaw, TILT_SPRING_WN, TILT_SPRING_ZETA, dt);
-          liftYawCur = clamp(sYaw[0], -CAP_YAW_MAX_RAD * 1.15, CAP_YAW_MAX_RAD * 1.15);
-          liftYawVel = sYaw[1];
-
-          var driftLim = pointerMode === 'norm' ? CAP_NORM_DRIFT_COMPAT * 1.15 : CAP_MAGNETIC_DRIFT * 1.15;
-          var sMagX = stepExactSecondOrderSpring(liftMagXCur, liftMagXVel, fltLiftMagX, DRIFT_SPRING_WN, DRIFT_SPRING_ZETA, dt);
-          liftMagXCur = clamp(sMagX[0], -driftLim, driftLim);
-          liftMagXVel = sMagX[1];
-
-          var sMagZ = stepExactSecondOrderSpring(liftMagZCur, liftMagZVel, fltLiftMagZ, DRIFT_SPRING_WN, DRIFT_SPRING_ZETA, dt);
-          liftMagZCur = clamp(sMagZ[0], -driftLim, driftLim);
-          liftMagZVel = sMagZ[1];
+          var tLim = CAP_TILT_MAX_RAD * 1.15, yLim = CAP_YAW_MAX_RAD * 1.15, sp;
+          sp = stepExactSecondOrderSpring(liftPitchCur, liftPitchVel, fltLiftPitch, TILT_SPRING_WN, TILT_SPRING_ZETA, dt);
+          liftPitchCur = clamp(sp[0], -tLim, tLim); liftPitchVel = sp[1]; maxErr = Math.max(maxErr, sp[2]);
+          sp = stepExactSecondOrderSpring(liftRollCur, liftRollVel, fltLiftRoll, TILT_SPRING_WN, TILT_SPRING_ZETA, dt);
+          liftRollCur = clamp(sp[0], -tLim, tLim); liftRollVel = sp[1]; maxErr = Math.max(maxErr, sp[2]);
+          sp = stepExactSecondOrderSpring(liftYawCur, liftYawVel, fltLiftYaw, TILT_SPRING_WN, TILT_SPRING_ZETA, dt);
+          liftYawCur = clamp(sp[0], -yLim, yLim); liftYawVel = sp[1]; maxErr = Math.max(maxErr, sp[2]);
+          var dLim = (pointerMode === 'norm' ? CAP_NORM_DRIFT_COMPAT : CAP_MAGNETIC_DRIFT) * 1.15;
+          sp = stepExactSecondOrderSpring(liftMagXCur, liftMagXVel, fltLiftMagX, DRIFT_SPRING_WN, DRIFT_SPRING_ZETA, dt);
+          liftMagXCur = clamp(sp[0], -dLim, dLim); liftMagXVel = sp[1]; maxErr = Math.max(maxErr, sp[2]);
+          sp = stepExactSecondOrderSpring(liftMagZCur, liftMagZVel, fltLiftMagZ, DRIFT_SPRING_WN, DRIFT_SPRING_ZETA, dt);
+          liftMagZCur = clamp(sp[0], -dLim, dLim); liftMagZVel = sp[1]; maxErr = Math.max(maxErr, sp[2]);
 
           var fltResidual = Math.max(
             Math.abs(tgtLiftPitch - fltLiftPitch),
@@ -9088,7 +9034,7 @@
             Math.abs(tgtLiftMagX - fltLiftMagX),
             Math.abs(tgtLiftMagZ - fltLiftMagZ)
           );
-          maxErr = Math.max(maxErr, sPitch[2], sRoll[2], sYaw[2], sMagX[2], sMagZ[2], fltResidual);
+          maxErr = Math.max(maxErr, fltResidual);
         }
 
         var expFast = reduced ? 1.0 : 1.0 - Math.exp(-28.0 * dt);
@@ -9340,6 +9286,10 @@
         if (oledAnimating || oledPendingFlush) {
           maxErr = Math.max(maxErr, 0.01);
         }
+        onlyZeroGActive = Boolean(zeroGKeepAlive && maxErr < IDLE_EPS && isMagneticSpringAtRest());
+        if (zeroGKeepAlive && maxErr < 0.005) {
+          maxErr = 0.005;
+        }
 
         if (maxErr < IDLE_EPS) {
           fltLiftYaw = tgtLiftYaw;
@@ -9427,6 +9377,7 @@
           knobAngleVel = 0;
           auxPageWaveActive = false;
           auxPageWaveElapsed = 0;
+          onlyZeroGActive = false;
           idle = true;
         } else {
           idle = false;
@@ -9891,181 +9842,68 @@
         gl.bufferSubData(gl.ARRAY_BUFFER, 0, inst);
       }
 
-      function computeShadowGeomSignature(palette, shadowMapSize) {
-        var q1000 = function (v) { return Math.round((Number(v) || 0) * 1000); };
-        var q500 = function (v) { return Math.round((Number(v) || 0) * 500); };
-        /* 近场悬浮微倾角对柔和 6-tap PCF 阴影影响极小，按 ~0.08 rad (4.5°) 粗量化；剔除纯配色与相机距离，确保纯扫键/换主题 0 次 ShadowPass */
-        var q12 = function (v) { return Math.round((Number(v) || 0) * 12); };
-        var parts = [
-          shadowMapSize,
-          enableAuxPad ? 1 : 0,
-          q1000(orbitPitchCur),
-          q1000(orbitYawCur),
-          q1000(auxOrbitPitchCur),
-          q1000(auxOrbitYawCur),
-          q1000(auxPhaseLiftY),
-          introActive ? q1000(introElapsed) : 0,
-          q1000(effortLiftHeightCur),
-          q12(neighborSympathyCur),
-          q1000(orchLatchCur),
-          q12(liftPitchCur),
-          q12(liftRollCur),
-          q12(liftYawCur),
-          q12(liftMagXCur),
-          q12(liftMagZCur),
-          q12(gyroPitchCur),
-          q12(gyroRollCur),
-          q12(gyroYawCur),
-          q500(ctrlPressCur[0]),
-          q500(ctrlPressCur[1]),
-          q500(ctrlPressCur[2]),
-          q500(ctrlPressCur[3]),
-          q500(knobAngleCur),
-          q500(artisanWaveDipCur),
-          blindTapIdx,
-          q500(blindTapRemain),
-          auxPageWaveActive ? (state.auxPage + ':' + q1000(auxPageWaveElapsed)) : '0',
-        ];
-
-        if (waveRipples.length > 0) {
-          var rParts = [];
-          for (var wi = 0; wi < waveRipples.length; wi++) {
-            var wv = waveRipples[wi];
-            rParts.push(q500(wv.ox) + ',' + q500(wv.oz) + ',' + q1000(wv.elapsed) + ',' + q500(wv.strength));
-          }
-          parts.push('W:' + rParts.join(';'));
-        } else {
-          parts.push('W:0');
+      function computeShadowGeomSignature(palette, shSize) {
+        void palette;
+        var m = fnvMixInt, q = Math.round, h = 2166136261;
+        h = m(m(m(m(h, shSize | 0), enableAuxPad ? 1 : 0), q(orbitPitchCur * 120)), q(orbitYawCur * 120));
+        h = m(m(m(m(h, q(auxOrbitPitchCur * 120)), q(auxOrbitYawCur * 120)), q(auxPhaseLiftY * 120)), introActive ? q(introElapsed * 500) : 0);
+        h = m(m(m(h, q(effortLiftHeightCur * 500)), q(neighborSympathyCur * 12)), q(orchLatchCur * 500));
+        h = m(m(m(m(h, q(liftPitchCur * 4)), q(liftRollCur * 4)), q(liftYawCur * 4)), q(liftMagXCur * 4));
+        h = m(m(m(m(h, q(liftMagZCur * 4)), q(gyroPitchCur * 4)), q(gyroRollCur * 4)), q(gyroYawCur * 4));
+        h = m(m(m(m(h, q(ctrlPressCur[0] * 60)), q(ctrlPressCur[1] * 60)), q(ctrlPressCur[2] * 60)), q(ctrlPressCur[3] * 60));
+        h = m(m(m(m(h, q(knobAngleCur * 30)), q(artisanWaveDipCur * 120)), blindTapIdx), q(blindTapRemain * 120));
+        h = m(m(h, auxPageWaveActive ? ((state.auxPage << 12) ^ q(auxPageWaveElapsed * 500)) : 0), waveRipples.length);
+        for (var wi = 0; wi < waveRipples.length; wi++) {
+          var wv = waveRipples[wi];
+          h = m(m(m(m(h, q(wv.ox * 250)), q(wv.oz * 250)), q(wv.elapsed * 500)), q(wv.strength * 250));
         }
-
-        if (state.lockedShakeZ && state.lockedShakeZ.progress > 0 && state.lockedShakeZ.progress < 1) {
-          parts.push('SZ:' + state.lockedShakeZ.z + ':' + q500(state.lockedShakeZ.progress));
-        }
-        if (
-          state.lockedShakeAuxIndex &&
-          typeof state.lockedShakeAuxIndex === 'object' &&
-          state.lockedShakeAuxIndex.progress > 0 &&
-          state.lockedShakeAuxIndex.progress < 1
-        ) {
-          parts.push('SAO:' + (state.lockedShakeAuxIndex.auxIndex || 0) + ':' + q500(state.lockedShakeAuxIndex.progress));
-        } else if (auxShakeActiveIdx >= 0 && auxShakeProgress < 1) {
-          parts.push('SA:' + auxShakeActiveIdx + ':' + q500(auxShakeProgress));
-        }
-
-        var mainMov = '';
+        var sz = state.lockedShakeZ, sa = state.lockedShakeAuxIndex;
+        if (sz && sz.progress > 0 && sz.progress < 1) h = m(m(m(h, 0x535a), sz.z | 0), q(sz.progress * 500));
+        if (sa && typeof sa === 'object' && sa.progress > 0 && sa.progress < 1) h = m(m(m(h, 0x5341), sa.auxIndex | 0), q(sa.progress * 500));
+        else if (auxShakeActiveIdx >= 0 && auxShakeProgress < 1) h = m(m(m(h, 0x5342), auxShakeActiveIdx), q(auxShakeProgress * 500));
         for (var i = 0; i < slotCount; i++) {
-          var kl = keyLiftCur[i];
-          var kp = keyPressCur[i];
-          if (kl > 0.0005 || kp > 0.0005) {
-            mainMov += i + ':' + q1000(kl) + ':' + q500(kp) + ',';
-          }
+          var kl = keyLiftCur[i], kp = keyPressCur[i];
+          if (kl > 0.0005 || kp > 0.0005) h = m(m(m(h, (i + 1) * 131), q(kl * 500)), q(kp * 250));
         }
-        parts.push('M:' + mainMov);
-
-        if (enableAuxPad) {
-          var auxMov = '';
-          for (var ai = 0; ai < AUX_SLOT_COUNT; ai++) {
-            var akl = auxKeyLiftCur[ai];
-            var akp = auxKeyPressCur[ai];
-            if (akl > 0.0005 || akp > 0.0005) {
-              auxMov += ai + ':' + q1000(akl) + ':' + q500(akp) + ',';
-            }
-          }
-          parts.push('A:' + auxMov);
+        if (enableAuxPad) for (var ai = 0; ai < AUX_SLOT_COUNT; ai++) {
+          var akl = auxKeyLiftCur[ai], akp = auxKeyPressCur[ai];
+          if (akl > 0.0005 || akp > 0.0005) h = m(m(m(h, (ai + 101) * 131), q(akl * 500)), q(akp * 250));
         }
-
-        return parts.join('|');
+        return h >>> 0;
       }
 
-      function computeDynMeshSignature(palette, activeSwitchInfo, ambientMul, hwCtrl, fluxCfg) {
-        var q500 = function (v) { return Math.round((Number(v) || 0) * 500); };
-        var q100 = function (v) { return Math.round((Number(v) || 0) * 100); };
-        var parts = [
-          palette.id,
-          enableAuxPad ? 1 : 0,
-          Math.round(clamp(orchLatchCur, 0, 1) * 20),
-          q100(ambientMul),
-          hwCtrl.muted ? 1 : 0,
-          hwCtrl.effortTier,
-          hwCtrl.orbitMag > 0.015 ? Math.round(clamp(hwCtrl.orbitMag, 0, 0.1) * 40) : 0,
-          q500(hwCtrl.prismHover),
-          q500(hwCtrl.prismPress),
-          q500(hwCtrl.prismWaveDip),
-          q500(hwCtrl.resetHover),
-          q500(hwCtrl.resetPress),
-          q500(hwCtrl.muteHover),
-          q500(hwCtrl.mutePress),
-          q500(hwCtrl.knobAngle),
-          q500(hwCtrl.closeHover),
-          q500(hwCtrl.closePress),
-        ];
-        if (activeSwitchInfo) {
-          parts.push(
-            'S',
-            activeSwitchInfo.isAux ? 1 : 0,
-            activeSwitchInfo.slotIndex,
-            q500(activeSwitchInfo.x),
-            q500(activeSwitchInfo.z),
-            activeSwitchInfo.stemRgb ? (q500(activeSwitchInfo.stemRgb[0]) + ',' + q500(activeSwitchInfo.stemRgb[1]) + ',' + q500(activeSwitchInfo.stemRgb[2])) : '',
-            activeSwitchInfo.ledRgb ? (q500(activeSwitchInfo.ledRgb[0]) + ',' + q500(activeSwitchInfo.ledRgb[1]) + ',' + q500(activeSwitchInfo.ledRgb[2])) : ''
-          );
-        } else {
-          parts.push('S0');
-        }
-        if (fluxCfg) {
-          parts.push(
-            'F',
-            fluxCfg.isAux ? 1 : 0,
-            fluxCfg.effortTier,
-            q500(fluxCfg.originX),
-            q500(fluxCfg.originY),
-            q500(fluxCfg.originZ),
-            q500(fluxCfg.gapH),
-            q100(fluxCfg.visAlpha),
-            Math.round(clamp(fluxCfg.slamCollapse || 0, 0, 1) * 20),
-            Math.round(clamp(fluxCfg.orchBlend || 0, 0, 1) * 20),
-            q500(fluxCfg.elemRgb[0]), q500(fluxCfg.elemRgb[1]), q500(fluxCfg.elemRgb[2]),
-            q500(fluxCfg.secondaryRgb[0]), q500(fluxCfg.secondaryRgb[1]), q500(fluxCfg.secondaryRgb[2])
-          );
-        } else {
-          parts.push('F0');
-        }
-        return parts.join('|');
+      function computeDynMeshSignature(palette, sw, amb, hwCtrl, fc) {
+        var m = fnvMixInt, q = Math.round, h = fnvMixStr(2166136261, palette.id);
+        h = m(m(m(m(m(h, enableAuxPad ? 1 : 0), q(clamp(orchLatchCur, 0, 1) * 20)), q((Number(amb) || 0) * 100)), hwCtrl.muted ? 1 : 0), hwCtrl.effortTier | 0);
+        if (sw) {
+          h = m(m(m(m(m(h, 0x5301), sw.isAux ? 1 : 0), sw.slotIndex | 0), q((sw.x || 0) * 500)), q((sw.z || 0) * 500));
+          if (sw.stemRgb) h = m(m(m(h, q(sw.stemRgb[0] * 500)), q(sw.stemRgb[1] * 500)), q(sw.stemRgb[2] * 500));
+          if (sw.ledRgb) h = m(m(m(h, q(sw.ledRgb[0] * 500)), q(sw.ledRgb[1] * 500)), q(sw.ledRgb[2] * 500));
+        } else h = m(h, 0x5300);
+        if (fc) {
+          h = m(m(m(m(m(m(h, 0x4601), fc.isAux ? 1 : 0), fc.effortTier | 0), q((fc.originX || 0) * 500)), q((fc.originY || 0) * 500)), q((fc.originZ || 0) * 500));
+          h = m(m(m(m(h, q((fc.gapH || 0) * 500)), q((fc.visAlpha || 0) * 100)), q(clamp(fc.slamCollapse || 0, 0, 1) * 20)), q(clamp(fc.orchBlend || 0, 0, 1) * 20));
+          h = m(m(m(h, q(fc.elemRgb[0] * 500)), q(fc.elemRgb[1] * 500)), q(fc.elemRgb[2] * 500));
+          h = m(m(m(h, q(fc.secondaryRgb[0] * 500)), q(fc.secondaryRgb[1] * 500)), q(fc.secondaryRgb[2] * 500));
+        } else h = m(h, 0x4600);
+        return h >>> 0;
       }
 
-      var lastKeycapInstSig = '';
-      function computeKeycapInstanceSignature(palette, shadowSig) {
-        var q500 = function (v) { return Math.round((Number(v) || 0) * 500); };
-        var hovPart = '';
-        var avSum = 0;
+      var lastKeycapInstSig = -1;
+      function computeKeycapInstanceSignature(palette, shSig) {
+        var m = fnvMixInt, q = Math.round, h = fnvMixStr(fnvMixStr(2166136261, palette.id), lastAuxAtlasSig);
+        h = m(m(m(m(h, state.selectedZ == null ? -999 : (state.selectedZ | 0)), state.selectedAuxIndex == null ? -999 : (state.selectedAuxIndex | 0)), state.orchLatched ? 1 : 0), shSig | 0);
         for (var i = 0; i < slotCount; i++) {
-          avSum += (i + 1) * Math.round(slotAvailCur[i] * 255);
-          if (keyHoverCur[i] > 0.0005 || keyWaveGlow[i] > 0.0005) {
-            hovPart += i + ':' + q500(keyHoverCur[i]) + ':' + q500(keyWaveGlow[i]) + ',';
-          }
+          h = m(h, q(slotAvailCur[i] * 255));
+          var kh = keyHoverCur[i], kw = keyWaveGlow[i];
+          if (kh > 0.0005 || kw > 0.0005) h = m(m(m(h, (i + 1) * 97), q(kh * 500)), q(kw * 500));
         }
-        var auxHovPart = '';
-        var auxAvSum = 0;
-        if (enableAuxPad) {
-          for (var ai = 0; ai < AUX_SLOT_COUNT; ai++) {
-            auxAvSum += (ai + 1) * Math.round(auxAvailCur[ai] * 255);
-            if (auxKeyHoverCur[ai] > 0.0005 || auxKeyWaveGlow[ai] > 0.0005) {
-              auxHovPart += ai + ':' + q500(auxKeyHoverCur[ai]) + ':' + q500(auxKeyWaveGlow[ai]) + ',';
-            }
-          }
+        if (enableAuxPad) for (var ai = 0; ai < AUX_SLOT_COUNT; ai++) {
+          h = m(h, q(auxAvailCur[ai] * 255));
+          var akh = auxKeyHoverCur[ai], akw = auxKeyWaveGlow[ai];
+          if (akh > 0.0005 || akw > 0.0005) h = m(m(m(h, (ai + 201) * 97), q(akh * 500)), q(akw * 500));
         }
-        return [
-          palette.id,
-          lastAuxAtlasSig,
-          state.selectedZ,
-          state.selectedAuxIndex,
-          state.orchLatched ? 1 : 0,
-          avSum,
-          auxAvSum,
-          hovPart,
-          auxHovPart,
-          shadowSig,
-        ].join('|');
+        return h >>> 0;
       }
 
       function renderWebGL2Frame(palette, switchInfo) {
@@ -10084,7 +9922,7 @@
           /* 仅在首次建底盘或副盘结构切换时重算阴影，纯切换主题配色不改变几何深度，避免热开冗余 ShadowPass */
           if (prevEmptyChassis || auxLayoutChanged) {
             shadowDirty = true;
-            lastShadowGeomSig = '';
+            lastShadowGeomSig = -1;
           }
           keycapInstanceDirty = true;
         }
@@ -10130,6 +9968,15 @@
         }
 
         var hwCtrlParams = buildHardwareCtrlParams();
+        _frameHwDyn0[0] = hwCtrlParams.prismHover * 0.030 - hwCtrlParams.prismPress * 0.105 + hwCtrlParams.prismWaveDip;
+        _frameHwDyn0[1] = hwCtrlParams.resetHover * 0.016 - hwCtrlParams.resetPress * 0.062;
+        _frameHwDyn0[2] = hwCtrlParams.muteHover * 0.016 - hwCtrlParams.mutePress * 0.052;
+        _frameHwDyn0[3] = hwCtrlParams.knobAngle;
+        _frameHwDyn1[0] = hwCtrlParams.prismHover; _frameHwDyn1[1] = hwCtrlParams.resetHover;
+        _frameHwDyn1[2] = hwCtrlParams.muteHover; _frameHwDyn1[3] = smootherstepScalar(0.015, 0.065, hwCtrlParams.orbitMag);
+        _frameHwDyn2[0] = hwCtrlParams.closeHover * 0.016 - hwCtrlParams.closePress * 0.062;
+        _frameHwDyn2[1] = hwCtrlParams.closeHover; _frameHwDyn2[2] = 0; _frameHwDyn2[3] = 0;
+
         var dynMeshSig = computeDynMeshSignature(palette, activeSwitchForMesh, ambientMul, hwCtrlParams, fluxCfg);
         if (dynMeshSig !== lastDynMeshSig || glObjs.widgetsGpu.count <= 0) {
           var steadySwitchForMesh = activeSwitchForMesh
@@ -10164,23 +10011,21 @@
         var texUnit1 = gl.TEXTURE0 + 1;
         var texUnit2 = gl.TEXTURE0 + 2;
         var texUnit3 = gl.TEXTURE0 + 3;
-        var shadowEnabled = shPass ? 1.0 : 0.0;
+        var useUltraPcf = resolveMotionLevel() === 'ultra' && (canvas ? canvas.width <= 1800 : true);
+        var shadowEnabled = shPass ? (useUltraPcf ? 2.0 : 1.0) : 0.0;
 
         gl.enable(gl.DEPTH_TEST);
         gl.depthFunc(gl.LEQUAL);
         gl.enable(gl.CULL_FACE);
         gl.cullFace(gl.BACK);
 
-        /* ================= Stage A: 2048/1024 按需静态阴影深度贴图 Pass（纯悬停高亮/微光/纯 OLED 帧直接跳过复用；高刷连续微动限频 30Hz！） ================= */
         if (shPass) {
+          var isDrag = Boolean(orbitServoActive || orbitMode === 'servo' || orbitMode === 'direct' || orbitMode === 'dragging');
+          var shGap = isDrag ? SHADOW_DRAG_THROTTLE_MS : SHADOW_THROTTLE_MS;
           var shadowChanged = curShadowSig !== lastShadowGeomSig;
-          var shadowThrottleReady =
-            lastShadowDrawClockMs < 0 ||
-            animClockMs < lastShadowDrawClockMs ||
-            (animClockMs - lastShadowDrawClockMs) >= SHADOW_THROTTLE_MS ||
-            idle ||
-            isConfirmSlamActiveGlobal();
-          if (shadowDirty || (shadowChanged && shadowThrottleReady)) {
+          var needDragSettleFlush = Boolean(!isDrag && shadowDeferredByDrag && (idle || (animClockMs - lastShadowDrawClockMs) >= SHADOW_THROTTLE_MS));
+          var shadowThrottleReady = lastShadowDrawClockMs < 0 || animClockMs < lastShadowDrawClockMs || (animClockMs - lastShadowDrawClockMs) >= shGap || idle || isConfirmSlamActiveGlobal();
+          if (shadowDirty || needDragSettleFlush || (shadowChanged && shadowThrottleReady)) {
             gl.activeTexture(texUnit1);
             gl.bindTexture(gl.TEXTURE_2D, null);
 
@@ -10196,6 +10041,8 @@
 
             gl.useProgram(shPass.progSolid);
             gl.uniformMatrix4fv(shPass.uSolid.lightViewProj, false, lightViewProjMat);
+            gl.uniform4fv(shPass.uSolid.hwDyn0, _frameHwDyn0);
+            gl.uniform4fv(shPass.uSolid.hwDyn2, _frameHwDyn2);
 
             gl.uniformMatrix4fv(shPass.uSolid.model, false, chassisMat);
             gl.bindVertexArray(glObjs.chassisGpu.vao);
@@ -10237,10 +10084,12 @@
             gl.bindFramebuffer(shPass.fbConst, null);
 
             shadowDirty = false;
+            shadowDeferredByDrag = false;
             lastShadowGeomSig = curShadowSig;
             lastShadowDrawClockMs = animClockMs;
             perfStats.shadowDraws++;
           } else {
+            if (shadowChanged && isDrag) shadowDeferredByDrag = true;
             perfStats.shadowSkips++;
           }
         }
@@ -10344,6 +10193,9 @@
 
         gl.useProgram(glObjs.progSolid);
         gl.uniformMatrix4fv(glObjs.uSolid.model, false, chassisMat);
+        gl.uniform4fv(glObjs.uSolid.hwDyn0, _frameHwDyn0);
+        gl.uniform4fv(glObjs.uSolid.hwDyn1, _frameHwDyn1);
+        gl.uniform4fv(glObjs.uSolid.hwDyn2, _frameHwDyn2);
         gl.uniform4fv(glObjs.uSolid.liftCapShadow, switchInfo && !switchInfo.isAux ? liftShadowVec : _zeroVec4);
         gl.uniform4fv(glObjs.uSolid.prismFocusPos, prismFocusVec);
 
@@ -10798,7 +10650,8 @@
           return;
         }
         var ts = typeof now === 'number' && Number.isFinite(now) ? now : readNowMs(root);
-        var minFrameGapMs = resolveMinFrameGapMs(resolveTargetFps());
+        var steadyZeroG = Boolean(zeroGRemainSec > 0 && onlyZeroGActive && isMagneticSpringAtRest());
+        var minFrameGapMs = resolveMinFrameGapMs(resolveTargetFps(), steadyZeroG);
         if (minFrameGapMs > 0 && lastDrawAt > 0 && ts >= lastDrawAt && (ts - lastDrawAt) < minFrameGapMs) {
           if (!idle || pendingRenderWhilePaused) {
             scheduleAnimLoop(pendingRenderWhilePaused);
@@ -10961,6 +10814,7 @@
           return;
         }
         idle = false;
+        onlyZeroGActive = false;
         recomputePointerTargets();
         updateTransforms();
         renderFrame();
@@ -11460,7 +11314,8 @@
         };
       }
 
-      function getInteractiveProjectedRects() {
+      function getInteractiveProjectedRects(rectOpts) {
+        var includeKeys = !(rectOpts && rectOpts.includeKeys === false);
         var curRect = readCanvasCssRect(false);
         if (
           curRect &&
@@ -11493,7 +11348,7 @@
 
         var keys = [];
         var availableKeys = [];
-        for (var i = 0; i < slotCount; i++) {
+        if (includeKeys) for (var i = 0; i < slotCount; i++) {
           var sl = slots[i];
           var zVal = sl.slotZ !== undefined ? sl.slotZ : sl.z;
           var isAvail = isSlotAvailable(zVal) || isSlotAvailable(sl.z);
@@ -11531,7 +11386,7 @@
         }
 
         var auxKeys = [];
-        if (enableAuxPad) {
+        if (includeKeys && enableAuxPad) {
           for (var ak = 0; ak < AUX_SLOT_COUNT; ak++) {
             var aSlot = state.auxModels[ak] || DEFAULT_AUX_MODELS[ak];
             var aAvail = Boolean(aSlot && aSlot.available);
@@ -11734,6 +11589,7 @@
 
         orbitServoActive = true;
         orbitMode = 'servo';
+        onlyZeroGActive = false;
         energizeZeroG(ZERO_G_DURATION);
         recomputePointerTargets();
         updateTransforms();
@@ -11998,10 +11854,15 @@
         return changed;
       }
 
-      function setHardwareState(patch) {
+      function setHardwareState(patch, setOpts) {
         if (disposed) return;
         if (!applyHardwareStatePatch(patch)) return;
-        wakeAndRenderSync();
+        if ((setOpts && setOpts.deferRender === true) || (patch && patch.deferRender === true)) {
+          onlyZeroGActive = false;
+          requestWake();
+        } else {
+          wakeAndRenderSync();
+        }
       }
 
       function triggerControlPress(action) {
@@ -12065,68 +11926,33 @@
         wakeAndRenderSync();
       }
 
-      function resize(nextCssW, nextCssH, nextDpr, optBoundsRect) {
+      function resize(nextCssW, nextCssH, nextDpr, optBoundsRect, resizeOpts) {
         if (disposed) return;
-        var prevCssW = cssWidth;
-        var prevCssH = cssHeight;
-        var prevDpr = dpr;
+        var prevCssW = cssWidth, prevCssH = cssHeight, prevDpr = dpr;
         cssWidth = Math.max(64, Number(nextCssW) || cssWidth || 1040);
         cssHeight = Math.max(48, Number(nextCssH) || cssHeight || 552);
-        /* DPR 上限封顶 1.5（DPR=1 保持原生 1.0 零降质，2K/4K 高分屏下大幅削减填充率与 MSAA 带宽） */
-        dpr = Math.min(1.5, Math.max(1, Number(nextDpr) || 1));
+        var rawDpr = Math.min(1.5, Math.max(1, Number(nextDpr) || 1));
+        dpr = (cssWidth * rawDpr > 1800) ? Math.min(rawDpr, 1.35) : rawDpr;
         if (optBoundsRect && typeof optBoundsRect === 'object') {
-          cachedCanvasRect = {
-            left: Number(optBoundsRect.left) || 0,
-            top: Number(optBoundsRect.top) || 0,
-            width: cssWidth,
-            height: cssHeight,
-          };
+          cachedCanvasRect = { left: Number(optBoundsRect.left) || 0, top: Number(optBoundsRect.top) || 0, width: cssWidth, height: cssHeight };
           if (canvas) lastCanvasRectFn = canvas.getBoundingClientRect;
         } else if (cachedCanvasRect) {
-          cachedCanvasRect.width = cssWidth;
-          cachedCanvasRect.height = cssHeight;
-          if (canvas && typeof canvas.getBoundingClientRect === 'function') {
-            try {
-              var freshR = canvas.getBoundingClientRect();
-              lastCanvasRectFn = canvas.getBoundingClientRect;
-              if (freshR && Number.isFinite(Number(freshR.left))) {
-                cachedCanvasRect.left = Number(freshR.left) || 0;
-                cachedCanvasRect.top = Number(freshR.top) || 0;
-              }
-            } catch (_reErr) {}
-          }
+          cachedCanvasRect.width = cssWidth; cachedCanvasRect.height = cssHeight;
         } else {
           readCanvasCssRect(true);
-          if (cachedCanvasRect) {
-            cachedCanvasRect.width = cssWidth;
-            cachedCanvasRect.height = cssHeight;
-          }
+          if (cachedCanvasRect) { cachedCanvasRect.width = cssWidth; cachedCanvasRect.height = cssHeight; }
         }
-        var targetW = Math.max(1, Math.round(cssWidth * dpr));
-        var targetH = Math.max(1, Math.round(cssHeight * dpr));
-        var canvasResized = false;
+        var targetW = Math.max(1, Math.round(cssWidth * dpr)), targetH = Math.max(1, Math.round(cssHeight * dpr)), canvasResized = false;
         if (canvas) {
-          if (canvas.width !== targetW) {
-            canvas.width = targetW;
-            canvasResized = true;
-          }
-          if (canvas.height !== targetH) {
-            canvas.height = targetH;
-            canvasResized = true;
-          }
+          if (canvas.width !== targetW) { canvas.width = targetW; canvasResized = true; }
+          if (canvas.height !== targetH) { canvas.height = targetH; canvasResized = true; }
         }
-        /* 画布宽高与 DPR 均未变更且已完成首帧绘制时，跳过冗余整帧重绘 */
-        if (hasInitialRender && !canvasResized && prevCssW === cssWidth && prevCssH === cssHeight && prevDpr === dpr) {
-          return;
-        }
-        /* 视口尺寸变化不影响光源正交阴影深度与键帽局部矩阵，严禁在此处误置 shadowDirty / keycapInstanceDirty */
-        updateTransforms();
-        recomputePointerTargets();
-        if (hasInitialRender && isEffectivelyPaused()) {
-          pendingRenderWhilePaused = true;
-        } else {
-          renderFrame();
-        }
+        if (hasInitialRender && !canvasResized && prevCssW === cssWidth && prevCssH === cssHeight && prevDpr === dpr) return;
+        updateTransforms(); recomputePointerTargets();
+        if (hasInitialRender && isEffectivelyPaused()) { pendingRenderWhilePaused = true; }
+        else if (hasInitialRender && root && typeof root.requestAnimationFrame === 'function' && ((resizeOpts && resizeOpts.deferRender === true) || !canvasResized)) {
+          pendingRenderWhilePaused = true; scheduleAnimLoop(true);
+        } else { renderFrame(); }
       }
 
       function normalizeOptionalIndex(val) {
@@ -12397,7 +12223,7 @@
            (prevHoveredAux !== state.hoveredAuxIndex && state.hoveredAuxIndex !== null)) &&
           !isConfirmSlamActiveGlobal()
         ) {
-          energizeZeroG(1.65);
+          energizeZeroG(0.85);
         }
 
         var nowSlamGlobal = isConfirmSlamActiveGlobal();
@@ -12466,6 +12292,10 @@
         var cy = Number(clientY);
         var isInside = inside !== false && Number.isFinite(cx) && Number.isFinite(cy);
         var wasIdle = idle;
+        var pointerDeltaPx = (Number.isFinite(lastClientX) && Number.isFinite(lastClientY) && lastClientX > -9000)
+          ? Math.hypot(cx - lastClientX, cy - lastClientY)
+          : Infinity;
+        if (isInside && lastClientInside && pointerMode === 'client' && pointerDeltaPx <= 2.5) return;
 
         pointerMode = 'client';
         lastClientInside = isInside;
@@ -12498,7 +12328,8 @@
           return;
         }
 
-        if (isInside && nearTrackingActive) {
+        if (isInside && nearTrackingActive && (wasIdle || pointerDeltaPx > 2.5)) {
+          onlyZeroGActive = false;
           energizeZeroG(ZERO_G_DURATION);
         }
 
@@ -12645,10 +12476,12 @@
         auxPageWaveActive = false;
         auxPageWaveElapsed = 0;
         shadowDirty = true;
-        lastShadowGeomSig = '';
+        shadowDeferredByDrag = false;
+        onlyZeroGActive = false;
+        lastShadowGeomSig = -1;
         lastShadowDrawClockMs = -1000;
-        lastDynMeshSig = '';
-        lastKeycapInstSig = '';
+        lastDynMeshSig = -1;
+        lastKeycapInstSig = -1;
 
         cancelAsyncOledCoalesce();
         if (oledPainter && typeof oledPainter.dispose === 'function') {
