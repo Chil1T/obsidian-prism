@@ -981,3 +981,67 @@ test('Phase 4D: DaemonLogger rolls daemon.log -> daemon.log.1 at 512 KB without 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('RpcDispatcher handleMetricsBinding sanitizes secrets in catch error payloads', async () => {
+  const sentExprs = [];
+  const fakeEntry = {
+    mainFrameId: 'frame-1',
+    hasFrameTree: true,
+    contextFrames: new Map([[1, { isDefault: true, type: 'default', frameId: 'frame-1' }]]),
+    session: {
+      closed: false,
+      async send(method, params) {
+        if (method === 'Runtime.evaluate') sentExprs.push(params.expression);
+        return { result: { value: undefined } };
+      },
+    },
+  };
+  const fakeSecret = 'sk-metricsSecretLeak9876543210';
+  const fakeTokenUrl = 'https://user:pass123@127.0.0.1:4321/api?token=topsecret999';
+  const dispatcher = new RpcDispatcher({
+    getCdp: () => null,
+    telemetrySubsystem: {
+      _customMetricsProvider: null,
+      _telemetryInFlight: 0,
+      isDisabled: () => false,
+      beginActivity() { this._telemetryInFlight += 1; },
+      endActivity() { this._telemetryInFlight -= 1; },
+      releaseIdle() {},
+      async ensureMetricsCollector() {
+        return async () => {
+          throw new Error(`Upstream failed at ${fakeTokenUrl} with Authorization: Bearer ${fakeSecret}`);
+        };
+      },
+    },
+  });
+
+  await dispatcher.handleBindingCall(fakeEntry, {
+    name: '__agPrismMetricsCall',
+    payload: JSON.stringify({ id: 77, input: {} }),
+    executionContextId: 1,
+  });
+
+  assert.equal(sentExprs.length, 1);
+  assert.equal(sentExprs[0].includes(fakeSecret), false, 'metrics catch payload must redact sk-/Bearer secrets');
+  assert.equal(sentExprs[0].includes('pass123'), false, 'metrics catch payload must redact URL basic auth');
+  assert.equal(sentExprs[0].includes('topsecret999'), false, 'metrics catch payload must redact URL query token');
+  let resolvedId = null;
+  let resolvedPayload = null;
+  vm.runInNewContext(sentExprs[0], {
+    window: {
+      __agPrismMetricsResolve(id, data) {
+        resolvedId = id;
+        resolvedPayload = data;
+      },
+    },
+  });
+  assert.equal(resolvedId, 77);
+  assert.equal(resolvedPayload?.connection, 'offline');
+  assert.equal(typeof resolvedPayload?.error, 'string');
+  assert.equal(resolvedPayload.error.includes(fakeSecret), false);
+  assert.equal(resolvedPayload.error.includes('pass123'), false);
+  assert.equal(resolvedPayload.error.includes('topsecret999'), false);
+  assert.ok(resolvedPayload.error.includes('https://***@'));
+  assert.ok(resolvedPayload.error.includes('<REDACTED>'));
+  assert.ok(resolvedPayload.error.includes('***REDACTED***'));
+});

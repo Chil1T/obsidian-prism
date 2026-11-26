@@ -1283,6 +1283,8 @@ test('OP-5.2 / HS-8.3 / UX-9 & <31,000B gate: light+warm alabaster alignment, ta
       ['es', 'Tubo', /Principal .* Swarm\/Sub\(3\)/, /Salida/],
       ['fr', 'Fiole', /Principal .* Swarm\/Sous\(3\)/, /Outils/],
       ['de', 'Gefäß', /Haupt .* Swarm\/Sub\(3\)/, /Ausgabe/],
+      ['tr', 'Tüp', /Ana .* Swarm\/Alt\(3\)/, /Araç Çıktısı/],
+      ['tr-TR', 'Tüp', /Ana .* Swarm\/Alt\(3\)/, /Araç Çıktısı/],
     ]) {
       env.doc.documentElement.setAttribute('data-ag-cs-lang', langAttr);
       for (const rec of observerRecords) rec.cb([]);
@@ -1958,5 +1960,141 @@ test('inline-fallback renders 5h and weekly quota chips in composer bar, hides u
     assert.ok(cssText.includes('[data-card="five"]'), 'shadow CSS must keep tier-3 fold rule for five chip');
   } finally {
     ctrl.destroy();
+  }
+});
+
+test('Turkish (tr / tr-TR) 9th locale in pulse-vial-bridge: full 19-row coverage, auto navigator fallback, 0 CJK & 0 forbidden terms', async () => {
+  const CJK_RE = /[\u3400-\u9FFF\uF900-\uFAFF]/;
+  const FORBIDDEN_RE = /八方旅人|octopath/i;
+  const src = fs.readFileSync(BRIDGE_PATH, 'utf8');
+  const mL0 = src.match(/,L0=Z\('([^']+)'\.replace/);
+  assert.ok(mL0, 'L0 dictionary must exist in pulse-vial-bridge.js');
+  const rows = mL0[1].replace(/~/g, '/compact').replace(/\^/g, 'Swarm/').split('|').map((r) => {
+    let p = '';
+    return r.split(',').map((c) => (p = c || p));
+  });
+  assert.equal(rows.length, 19, 'L0 must contain all 19 localization rows');
+  for (let i = 0; i < rows.length; i++) {
+    assert.equal(rows[i].length, 9, `L0 row ${i} must have exactly 9 locale columns`);
+    const trText = rows[i][8];
+    assert.ok(typeof trText === 'string' && trText.length > 0, `L0[${i}][tr] must be non-empty`);
+    assert.equal(CJK_RE.test(trText), false, `L0[${i}][tr] must contain 0 CJK chars: "${trText}"`);
+    assert.equal(FORBIDDEN_RE.test(trText), false, `L0[${i}][tr] must contain 0 forbidden terms: "${trText}"`);
+  }
+
+  const env = createPulseMockEnv();
+  const host = env.getPulseHost();
+  const sr = host.shadowRoot;
+  const composerInput = env.doc.createElement('textarea');
+  env.doc.body.appendChild(composerInput);
+
+  let remaining5h = 0.72;
+  let remainingWk = 0.80;
+  let groupId = 'gemini';
+  let groupName = 'Gemini';
+  env.win.navigator = { language: 'tr-TR' };
+  env.win.agPulseHost = {
+    getMetrics: async () => ({
+      connection: 'live',
+      speed: {
+        tps: 60.0,
+        latestTps: 0,
+        ttftSeconds: 0.45,
+        rounds: 4,
+        modelSeconds: 5.0,
+        toolSeconds: 2.5,
+        taskUsage: {
+          subagents: 2,
+          own: { totalTokens: 120000 },
+          delegated: { totalTokens: 60000 },
+          total: { totalTokens: 180000 },
+        },
+        context: {
+          usedTokens: 430080,
+          maxTokens: 512000,
+          usedFraction: 0.84,
+          model: 'Gemini 4 Carbon (High)',
+          sampledAt: '2020-01-01T00:00:00Z',
+        },
+      },
+      groups: [
+        {
+          id: groupId,
+          name: groupName,
+          windows: {
+            '5h': { available: true, remaining: remaining5h, resetAt: new Date(Date.now() + 3600e3).toISOString() },
+            weekly: { available: true, remaining: remainingWk, resetAt: new Date(Date.now() + 3 * 86400e3).toISOString() },
+          },
+        },
+      ],
+    }),
+  };
+
+  const prevDoc = globalThis.document;
+  delete globalThis.document;
+  const bridge = bridgeMod.mountPulseVialBridge({
+    win: env.win,
+    doc: env.doc,
+    storage: env.storage,
+    vialCore,
+    autoPoll: false,
+    allowMultiple: true,
+  });
+
+  try {
+    // 1) auto + navigator.language='tr-TR' resolves cleanly to Turkish (index 8)
+    env.doc.documentElement.setAttribute('data-ag-cs-lang', 'auto');
+    await bridge.sync();
+
+    const toggleBtn = sr.querySelector('[data-ag-pulse-vial-toggle="1"]');
+    const cmpBtn = sr.querySelector('[data-ag-pulse-compact="1"]');
+    const paceBadge = sr.querySelector('[data-ag-pulse-pace="1"]');
+    const qLabels = [...sr.querySelectorAll('.pv-qlbl')].map((n) => n.textContent);
+    const taskSplit = sr.querySelector('[data-ag-pulse-qtask="1"]');
+    const segs = sr.querySelectorAll('[data-layer-slice]');
+    const telReadout = sr.querySelector('[data-ag-pulse-telemetry="1"]');
+
+    assert.equal(toggleBtn.textContent, 'Tüp');
+    assert.equal(cmpBtn.getAttribute('title'), '/compact ekle');
+    assert.equal(paceBadge.textContent, 'Yeterli');
+    assert.deepEqual(qLabels, ['5s', 'Haftalık']);
+    assert.match(taskSplit.textContent, /Ana .* Swarm\/Alt\(2\)/);
+
+    const expectedSlices = [/Sistem ve Kurallar/, /Mesajlar/, /Araç Çıktısı/];
+    const renderedTexts = [toggleBtn.textContent, cmpBtn.getAttribute('title'), paceBadge.textContent, ...qLabels, taskSplit.textContent];
+    for (let i = 0; i < 3; i++) {
+      segs[i].dispatchEvent({ type: 'pointerenter' });
+      assert.match(telReadout.textContent, expectedSlices[i]);
+      renderedTexts.push(telReadout.textContent);
+      segs[i].dispatchEvent({ type: 'pointerleave' });
+    }
+
+    // 2) Explicit tr-TR & tight/low quota badges + /compact click feedback + Bar mode label
+    env.doc.documentElement.setAttribute('data-ag-cs-lang', 'tr-TR');
+    remaining5h = 0.25;
+    await bridge.sync();
+    assert.equal(paceBadge.textContent, 'Azalıyor');
+    renderedTexts.push(paceBadge.textContent);
+
+    remaining5h = 0.10;
+    await bridge.sync();
+    assert.equal(paceBadge.textContent, 'Düşük Kota');
+    renderedTexts.push(paceBadge.textContent);
+
+    cmpBtn.dispatchEvent({ type: 'click' });
+    assert.equal(cmpBtn.textContent, '✓ Eklendi');
+    renderedTexts.push(cmpBtn.textContent);
+
+    toggleBtn.dispatchEvent({ type: 'click' });
+    assert.equal(toggleBtn.textContent, 'Çubuk');
+    renderedTexts.push(toggleBtn.textContent);
+
+    for (const txt of renderedTexts) {
+      assert.equal(CJK_RE.test(txt), false, `Turkish UI leaked CJK: "${txt}"`);
+      assert.equal(FORBIDDEN_RE.test(txt), false, `Turkish UI leaked forbidden term: "${txt}"`);
+    }
+  } finally {
+    bridge.destroy();
+    if (prevDoc !== undefined) globalThis.document = prevDoc;
   }
 });

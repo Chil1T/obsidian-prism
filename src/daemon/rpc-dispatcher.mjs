@@ -223,7 +223,7 @@ async function handleMetricsBinding(rpc, entry, payload, executionContextId) {
       const collector = await tel.ensureMetricsCollector();
       result = await collector(parsed.input || {});
     } catch (err) {
-      result = { connection: 'offline', error: err?.message || 'Metrics unavailable', speed: null, groups: [] };
+      result = { connection: 'offline', error: sanitizeSecretText(err?.message || 'Metrics unavailable'), speed: null, groups: [] };
     } finally {
       tel.endActivity();
       if (!tel._customMetricsProvider && tel.isDisabled() && tel._telemetryInFlight === 0) {
