@@ -1,39 +1,20 @@
-// Obsidian Prism — Multi-State Semantic Conversation Horizon Aura Controller (.ag-cs-conv-aura-host)
-// Split-Rate 300Hz VSync (~60fps VSync-paced running on WebGL2, ~30fps Canvas2D fallback, 1200ms idle settle -> 0fps) + Ambient Intensity + 3-State 0fps Semantic Afterglow.
-
+// Obsidian Prism — Conversation Horizon Aura Controller (.ag-cs-conv-aura-host)
 (function (root) {
   'use strict';
-  const M = Math;
-  const G = root || (typeof globalThis !== 'undefined' ? globalThis : window);
+  const M = Math, G = root || (typeof globalThis !== 'undefined' ? globalThis : window);
   if (!G) return;
 
-  const CONV_AURA_HEIGHT_RATIO = 0.32;
-  const CONV_AURA_START_MS = 1150;
-  const CONV_AURA_COMPLETE_MS = 1400;
-  const CONV_AURA_IDLE_SLEEP_MS = 1200;
-  const CONV_AURA_DECISION_BREATH_MS = 1600;
-  const CONV_AURA_DECISION_CLEAR_MS = 400;
-  const CONV_AURA_ERROR_MS = 900;
-  const CONV_AURA_LONG_TASK_THRESHOLD_MS = 15000;
-  const CONV_AURA_LONG_COMPLETE_MS = 1200;
-  const CONV_AURA_FOCUS_FADE_MS = 600;
-
-  function scaleConvReach(fullViewportReach) {
-    return M.max(0.08, M.min(0.98, +(fullViewportReach / CONV_AURA_HEIGHT_RATIO).toFixed(4)));
-  }
-
-  function clamp01(v, fallback = 1) {
-    const n = Number(v);
-    return Number.isFinite(n) ? M.max(0, M.min(1, n)) : fallback;
-  }
-
+  const CONV_AURA_HEIGHT_RATIO = 0.32, CONV_AURA_START_MS = 1150, CONV_AURA_COMPLETE_MS = 1400;
+  const CONV_AURA_IDLE_SLEEP_MS = 1200, CONV_AURA_DECISION_BREATH_MS = 1600, CONV_AURA_DECISION_CLEAR_MS = 400;
+  const CONV_AURA_ERROR_MS = 900, CONV_AURA_LONG_TASK_THRESHOLD_MS = 15000, CONV_AURA_LONG_COMPLETE_MS = 1200, CONV_AURA_FOCUS_FADE_MS = 600;
+  const scaleConvReach = (r) => M.max(0.08, M.min(0.98, +(r / CONV_AURA_HEIGHT_RATIO).toFixed(4)));
+  const clamp01 = (v, fb = 1) => { const n = Number(v); return Number.isFinite(n) ? M.max(0, M.min(1, n)) : fb; };
   function isVisibleAuraNode(el, skipSyncVis = false) {
     if (!el || el.hidden === true || el.isConnected === false) return false;
     const st = el.style;
     if (st && (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0')) return false;
-    if (typeof el.closest === 'function' && el.closest('[hidden], .hidden')) return false;
-    if (!skipSyncVis && typeof el.checkVisibility === 'function' && !el.checkVisibility()) return false;
-    return true;
+    if (el.closest?.('[hidden], .hidden')) return false;
+    return skipSyncVis || !el.checkVisibility || Boolean(el.checkVisibility());
   }
 
   let cachedRunningVal = false, cachedRunningAt = -1, cachedRunningEl = null, cachedRunningScope = null;
@@ -827,12 +808,14 @@
       const wRef = typeof window !== 'undefined' ? window : null;
       wRef?.addEventListener?.('blur', onBlur);
       wRef?.addEventListener?.('focus', onFocus);
-      let bMo = null;
-      if (typeof MutationObserver === 'function' && document.documentElement) {
-        try {
-          bMo = new MutationObserver(() => { if (!isAB()) wb = false; onVis(); });
-          bMo.observe(document.documentElement, { attributes: true, attributeFilter: [WB, PP_OPEN, PM_A] });
-        } catch {}
+      let bMo = null, unBus = null;
+      const dBus = wRef && (wRef.__agDomBus || wRef.__agPrismDomBus), aF = [WB, PP_OPEN, PM_A];
+      const onAttr = () => { if (!isAB()) wb = false; onVis(); };
+      if (dBus?.subscribe) {
+        try { unBus = dBus.subscribe('conv-aura-root', onAttr, { priority: 'high', attributes: true, attributeFilter: aF, filter: (m) => m?.type === 'attributes' && m.target === document.documentElement && aF.includes(m.attributeName), observeOptions: { childList: false, subtree: false, attributes: true, attributeFilter: aF } }); } catch { unBus = null; }
+      }
+      if (!unBus && typeof MutationObserver === 'function' && document.documentElement) {
+        try { bMo = new MutationObserver(onAttr); bMo.observe(document.documentElement, { attributes: true, attributeFilter: aF }); } catch {}
       }
       state.uW = () => {
         if (typeof document !== 'undefined') {
@@ -842,31 +825,24 @@
         }
         wRef?.removeEventListener?.('blur', onBlur);
         wRef?.removeEventListener?.('focus', onFocus);
-        bMo?.disconnect();
+        unBus?.(); bMo?.disconnect();
       };
-
       if (typeof ResizeObserver === 'function') {
         state.ro = new ResizeObserver((entries) => {
           if (isH()) return releaseBacking();
-          const cr = entries && entries[0] && entries[0].contentRect;
-          const hasCr = !!(cr && cr.width > 0 && cr.height > 0);
-          const nextW = hasCr ? M.round(cr.width) : 0, nextH = hasCr ? M.round(cr.height) : 0;
-          const now = readNowMs();
-          const hasLiveBuf = !bkRel && state.width > 0 && state.height > 0 && hasCvBuf();
-          const defer = hasLiveBuf && (isResizing() || hasPendingResize || (lastRoAt >= 0 && now - lastRoAt <= RESIZE_BURST_WINDOW_MS));
+          const e0 = entries?.[0], bs = e0?.borderBoxSize, bb = Array.isArray(bs) ? bs[0] : bs, cr = e0?.contentRect;
+          const rw = bb?.inlineSize > 0 ? bb.inlineSize : (cr?.width || 0), rh = bb?.blockSize > 0 ? bb.blockSize : (cr?.height || 0);
+          const hasCr = rw > 0 && rh > 0, nextW = hasCr ? M.round(rw) : 0, nextH = hasCr ? M.round(rh) : 0, now = readNowMs();
+          const defer = !bkRel && state.width > 0 && state.height > 0 && hasCvBuf() && (isResizing() || hasPendingResize || (lastRoAt >= 0 && now - lastRoAt <= RESIZE_BURST_WINDOW_MS));
           lastRoAt = now;
           if (defer) {
-            hasPendingResize = true;
-            if (hasCr) { pendingW = nextW; pendingH = nextH; } else { pendingW = pendingH = 0; }
-            clearResizeTimer();
-            state.resizeTimer = setTimeout(flushPendingResize, RESIZE_DEBOUNCE_MS);
+            hasPendingResize = true; pendingW = hasCr ? nextW : 0; pendingH = hasCr ? nextH : 0;
+            clearResizeTimer(); state.resizeTimer = setTimeout(flushPendingResize, RESIZE_DEBOUNCE_MS);
             return;
           }
-          clearResizeTimer();
-          hasPendingResize = false; pendingW = pendingH = 0;
+          clearResizeTimer(); hasPendingResize = false; pendingW = pendingH = 0;
           const prevW = state.width, prevH = state.height;
-          if (hasCr) applySize(nextW, nextH);
-          else layout(true);
+          if (hasCr) applySize(nextW, nextH); else layout(true);
           if (state.width !== prevW || state.height !== prevH) wake(true);
         });
         state.ro.observe(seatParent);

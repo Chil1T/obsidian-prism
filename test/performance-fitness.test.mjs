@@ -814,23 +814,22 @@ test('Performance Fitness 5: ripple-core fbm3/mediump/ign, vial-core layered zer
       getState: () => ({ isDark: true, camp: 'gemini', critical: false, fill: 0.48, maxTokens: 512000, hoveredSlice: -1, streaming: true }),
     });
     assert.equal(vial.getDebugState().rendererMode, 'webgl2');
-    assert.equal(vial.getDebugState().zeroCopy, true, 'Mounted vial must activate layered zero-copy WebGL2 canvas');
-    assert.equal(slot.children.length, 2, 'Parent slot must contain bottom glCanvas + top 2D scale canvas');
-    const glCanvas = slot.children[0];
-    assert.equal(glCanvas.getAttribute('data-ag-vial-gl'), '1');
+    assert.equal(vial.getDebugState().zeroCopy, true, 'Mounted vial must activate single-canvas zero-copy WebGL2');
+    assert.equal(vial.getDebugState().singleCanvas, true, 'Mounted vial must restore single <canvas> architecture');
+    assert.equal(slot.children.length, 1, 'Parent slot must contain strictly 1 <canvas> (scale marks composited via u_scaleTex)');
 
     for (let i = 0; i < 20; i++) vial.step(0.016);
-    assert.equal(topCanvas._drawImageCalls || 0, 0, 'Layered dual-canvas vial must execute strictly 0 ctx2d.drawImage(glCanvas) cross-context blits');
-    assert.ok(glCanvas._glStats.drawArrays >= 20, 'Bottom WebGL2 canvas renders directly every frame');
+    assert.equal(topCanvas._drawImageCalls || 0, 0, 'Single-canvas vial must execute strictly 0 ctx2d.drawImage(glCanvas) cross-context blits');
+    assert.ok(topCanvas._glStats.drawArrays >= 20, 'WebGL2 canvas renders directly every frame');
+    assert.ok(topCanvas._glStats.texImage2D >= 2, 'WebGL2 canvas must upload waveTex + static u_scaleTex overlay');
 
-    // contextlost 隐藏底层 glCanvas 并自动退回 2D 不黑屏
-    glCanvas.dispatch('webglcontextlost');
-    assert.equal(glCanvas.style.display, 'none');
+    // contextlost 自动退回 2D 不黑屏
+    topCanvas.dispatch('webglcontextlost');
     vial.step(0.016);
     assert.equal(vial.getDebugState().rendererMode, '2d');
 
     vial.dispose();
-    assert.equal(slot.children.length, 1, 'dispose() must remove injected bottom glCanvas cleanly');
+    assert.equal(slot.children.length, 1, 'dispose() leaves original single <canvas> intact');
   } finally {
     if (prevDoc === undefined) delete globalThis.document; else globalThis.document = prevDoc;
     if (prevWin === undefined) delete globalThis.window; else globalThis.window = prevWin;
