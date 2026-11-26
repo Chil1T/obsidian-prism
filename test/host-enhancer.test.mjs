@@ -853,7 +853,7 @@ test('style.css covers all 6 Wave-2 config hooks, eliminates double borders & en
     '[data-ag-cs-accent="mono"]>body',
     '[data-ag-cs-palette="host"]>body',
     '[data-ag-cs-telemetry="off"] :is(#ag-pulse-status-bar,[data-ag-pulse-bar="true"]){display:none !important;}',
-    '[data-ag-cs-composer="on"]:not([data-ag-cs-telemetry="off"]) .agy-composer-footer>#ag-pulse-status-bar',
+    '[data-ag-cs-composer="on"]:not([data-ag-cs-telemetry="off"]) .agy-composer-footer>:is(#ag-pulse-status-bar,',
     ':is(.agy-composer-footer,[data-testid="input-box-bottom-toolbar"]){position:relative !important;z-index:32 !important;}',
     ':is(#ag-prism-pulse-bar,[data-ag-prism-pulse-bar],#ag-pulse-status-bar):not([data-layout="blocked"]){z-index:36 !important;}',
     '[data-ag-cs-composer="off"] .surface-composer-card>.ag-cs-prism-rim-cv{display:none !important;',
@@ -1693,10 +1693,14 @@ test('D13: inline diff escapes narrow 255px inner block to full-width 754px step
     const css = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
     assert.equal(css.includes('grid-template-rows:1fr'), false, 'Diff box must NOT use layout-thrashing grid-template-rows transition');
     assert.ok(css.includes('ag-cs-diff-unfold') && css.includes('ag-cs-diff-fold'), 'Diff box must use GPU compositor unfold/fold keyframes');
+    const bqBaseRule = css.split('\n').find((l) => l.includes(':is(blockquote,.markdown-alert){')) || '';
     const bqRule = css.split('\n').find((l) => l.includes('& blockquote{')) || '';
-    assert.ok(bqRule.includes('border:none !important') && bqRule.includes('transparent 98%') && bqRule.includes('box-shadow:0 0 4px'), 'Blockquote must use calm flat wash with gentle right fade (98%) and subtle left glow');
+    assert.ok(
+      /border:(?:none|0)\s*!important/.test(bqBaseRule + bqRule) && bqRule.includes('transparent 98%') && bqRule.includes('box-shadow:0 0 4px'),
+      'Blockquote must use calm flat wash with gentle right fade (98%) and subtle left glow'
+    );
     assert.equal(bqRule.includes('radial-gradient'), false, 'Blockquote must not have harsh radial spotlight on multi-line expanded blocks');
-    assert.ok(css.includes('& [data-ag-cs-overview-shell="1"]{height:auto !important;bottom:auto !important;'), 'Overview shell must auto-fit content height');
+    assert.match(css, /& \[data-ag-cs-overview-shell="1"\]\{height:auto\s*!important;bottom:auto\s*!important;/, 'Overview shell must auto-fit content height');
     const ovRule = css.split('\n').find((l) => l.includes('& [data-ag-cs-overview-shell="1"]{')) || '';
     assert.ok(ovRule.includes('opacity') && ovRule.includes('transform') && ovRule.includes('[data-ending-style]'), 'Overview shell must preserve smooth open/close opacity+transform transition');
     assert.ok(css.includes('[data-ag-ov-sec-anim="open"]') && css.includes('[data-ag-ov-sec-anim="closing"]'), 'Overview inner sections must have unfold/fold GPU animations');
@@ -1764,21 +1768,17 @@ test('Wave D18.5 / D19: [data-sash-handle] stays transparent at rest, nested scr
   assert.match(sashLine, /:is\(:hover,:active\)\s*\.bg-border\{/, '[data-sash-handle] inner .bg-border must only illuminate on :hover/:active');
 
   // 2) Staggered nested collapsible scroll containers (margin-right offset + overscroll-behavior-y:auto without stripping host max-height)
-  const tier1Rule = css.split('\n').find((l) => l.includes('[data-testid="autoscroll-viewport"] .bleed-contain.overflow-y-auto{')) || '';
-  assert.ok(
-    tier1Rule.includes('margin-right:10px !important') &&
-      tier1Rule.includes('padding-right:8px !important') &&
-      tier1Rule.includes('overscroll-behavior-y:auto !important'),
+  const bleedScrollLine = css.split('\n').find((l) => l.includes('[data-testid="autoscroll-viewport"] .bleed-contain')) || '';
+  assert.match(
+    bleedScrollLine,
+    /(?:\.bleed-contain\.overflow-y-auto|&\.overflow-y-auto)\{margin-right:10px\s*!important;padding-right:8px\s*!important;overscroll-behavior-y:auto\s*!important/,
     'Tier-1 outer collapsible scroll container must indent margin-right:10px + padding-right:8px and chain overscroll-behavior-y:auto'
   );
-  assert.equal(tier1Rule.includes('max-height:none'), false, 'Nested scroll rules must preserve host native max-height caps');
+  assert.equal(bleedScrollLine.includes('max-height:none'), false, 'Nested scroll rules must preserve host native max-height caps');
 
-  const tier2Rule =
-    css.split('\n').find((l) => l.includes('[data-testid="autoscroll-viewport"] .bleed-contain .overflow-y-auto{')) || '';
-  assert.ok(
-    tier2Rule.includes('margin-right:14px !important') &&
-      tier2Rule.includes('padding-right:8px !important') &&
-      tier2Rule.includes('overscroll-behavior-y:auto !important'),
+  assert.match(
+    bleedScrollLine,
+    /(?:\.bleed-contain\s+\.overflow-y-auto|&\s+\.overflow-y-auto)\{margin-right:14px\s*!important;padding-right:8px\s*!important;overscroll-behavior-y:auto\s*!important/,
     'Tier-2 inner step scroll container must stagger margin-right:14px + padding-right:8px and chain overscroll-behavior-y:auto'
   );
   assert.ok(
@@ -1786,12 +1786,9 @@ test('Wave D18.5 / D19: [data-sash-handle] stays transparent at rest, nested scr
     'Channel 6 inline-diff-body must retain Tier-2 margin-right:14px + padding-right:8px + overscroll-behavior-y:auto'
   );
 
-  const tier3Rule =
-    css
-      .split('\n')
-      .find((l) => l.includes('[data-testid="autoscroll-viewport"] .bleed-contain .overflow-y-auto :is(.overflow-y-auto,pre){')) || '';
-  assert.ok(
-    tier3Rule.includes('margin-right:12px !important') && tier3Rule.includes('overscroll-behavior-y:auto !important'),
+  assert.match(
+    bleedScrollLine,
+    /:is\(\.overflow-y-auto,pre\)\{margin-right:12px\s*!important;overscroll-behavior-y:auto\s*!important/,
     'Tier-3 deeply nested scroll container must stagger margin-right:12px and chain overscroll-behavior-y:auto'
   );
   assert.ok(
@@ -1802,13 +1799,15 @@ test('Wave D18.5 / D19: [data-sash-handle] stays transparent at rest, nested scr
   // 3) Floating overlay sub-scrollbar narrow hitbox (9px) + resting filament (3.5px/.38) -> hover/active (4.5px/.95)
   const fixedScrollRule =
     css.split('\n').find((l) => l.includes('[data-testid="overlay-scrollbar"].fixed[data-orientation="vertical"]{')) || '';
-  assert.ok(fixedScrollRule.includes('width:9px !important;'), 'Floating vertical sub-scrollbar hitbox must narrow from 12px to 9px');
-  assert.ok(
-    fixedScrollRule.includes(':not(:hover):not([data-hovered="true"]):not([data-dragging="true"]):not([data-expanded="true"]) [data-testid="overlay-scrollbar-thumb"]{width:3.5px !important;opacity:.38 !important;}'),
+  assert.match(fixedScrollRule, /width:9px\s*!important;/, 'Floating vertical sub-scrollbar hitbox must narrow from 12px to 9px');
+  assert.match(
+    fixedScrollRule,
+    /:not\(:hover\):not\(\[data-hovered="true"\]\):not\(\[data-dragging="true"\]\):not\(\[data-expanded="true"\]\) \[data-testid="overlay-scrollbar-thumb"\]\{width:3\.5px\s*!important;opacity:\.38\s*!important;?\}/,
     'Floating sub-scrollbar thumb must shrink to 3.5px / 0.38 filament when pointer is not interacting with track'
   );
-  assert.ok(
-    fixedScrollRule.includes(':is(:hover,[data-hovered="true"],[data-dragging="true"],[data-expanded="true"]) [data-testid="overlay-scrollbar-thumb"]{width:4.5px !important;opacity:.95 !important;'),
+  assert.match(
+    fixedScrollRule,
+    /:is\(:hover,\[data-hovered="true"\],\[data-dragging="true"\],\[data-expanded="true"\]\) \[data-testid="overlay-scrollbar-thumb"\]\{width:4\.5px\s*!important;opacity:\.95\s*!important;/,
     'Floating sub-scrollbar thumb must expand cleanly to 4.5px / 0.95 on hover/drag/expand'
   );
   assert.ok(
@@ -2003,18 +2002,18 @@ test('Wave D20: ui-runtime mounts bottom prism-reflect on interaction-takeover-c
   const artifactFacetLine =
     css.split('\n').find((l) => l.includes(':is([data-testid="artifact-card"],[data-testid="bubble-artifact-card"],.artifact-card')) || '';
   assert.ok(
-    artifactFacetLine.includes('background-color:var(--_k0) !important') &&
-      artifactFacetLine.includes('border:1px solid var(--_kb) !important') &&
-      artifactFacetLine.includes('box-shadow:var(--_ks2) !important'),
+    /background-color:var\(--_k0\)\s*!important/.test(artifactFacetLine) &&
+      /border:1px solid var\(--_kb\)\s*!important/.test(artifactFacetLine) &&
+      /box-shadow:var\(--_ks2\)\s*!important/.test(artifactFacetLine),
     'Artifact cards must adopt smoked-obsidian facet tokens (--_k0 / --_kb / --_ks2)'
   );
   const artifactHdrFirstLine =
     css.split('\n').find((l) => l.includes('[data-testid="artifact-card-header"]>:first-child')) || '';
   assert.ok(
     artifactHdrFirstLine.includes(':first-child :is(a,button,span,div)') &&
-      artifactHdrFirstLine.includes('background:transparent !important') &&
-      artifactHdrFirstLine.includes('border-color:transparent !important') &&
-      artifactHdrFirstLine.includes('padding-inline:0 !important'),
+      /background:(?:transparent|0 0)\s*!important/.test(artifactHdrFirstLine) &&
+      /border-color:transparent\s*!important/.test(artifactHdrFirstLine) &&
+      /padding-inline:0\s*!important/.test(artifactHdrFirstLine),
     'Artifact card header first-child must strip nested grey pill chrome cleanly'
   );
   const artifactFooterDividerLine =
@@ -2028,7 +2027,7 @@ test('Wave D20: ui-runtime mounts bottom prism-reflect on interaction-takeover-c
   // 3) .proceed-button raised graphite keycap (--_k2, zero plastic primary-16% tint) & ghost secondary buttons
   const proceedLine = css.split('\n').find((l) => l.startsWith('& .proceed-button{')) || '';
   assert.ok(
-    proceedLine.includes('background-color:var(--_k2) !important') && proceedLine.includes('border-radius:8px !important'),
+    /background-color:var\(--_k2\)\s*!important/.test(proceedLine) && /border-radius:8px\s*!important/.test(proceedLine),
     '.proceed-button must use raised graphite keycap token var(--_k2)'
   );
   assert.equal(
@@ -2039,9 +2038,9 @@ test('Wave D20: ui-runtime mounts bottom prism-reflect on interaction-takeover-c
   const ghostArtifactBtnLine =
     css.split('\n').find((l) => l.includes(':is([data-testid="artifact-card"],[data-testid="bubble-artifact-card"]) button:not(.proceed-button){')) || '';
   assert.ok(
-    ghostArtifactBtnLine.includes('background:transparent !important') &&
-      ghostArtifactBtnLine.includes('border-color:transparent !important') &&
-      ghostArtifactBtnLine.includes('box-shadow:none !important'),
+    /background:(?:transparent|0 0)\s*!important/.test(ghostArtifactBtnLine) &&
+      /border-color:transparent\s*!important/.test(ghostArtifactBtnLine) &&
+      /box-shadow:none\s*!important/.test(ghostArtifactBtnLine),
     'Secondary Open / split buttons inside artifact cards must be borderless ghost buttons'
   );
 
@@ -2049,16 +2048,16 @@ test('Wave D20: ui-runtime mounts bottom prism-reflect on interaction-takeover-c
   const takeoverShellLine =
     css.split('\n').find((l) => l.includes(':is([data-testid="queued-messages-card"],[data-testid="interaction-takeover-card"],.agy-takeover-frame){')) || '';
   assert.ok(
-    takeoverShellLine.includes('background-color:var(--_k0) !important') &&
-      takeoverShellLine.includes('border:1px solid var(--_kb) !important') &&
+    /background-color:var\(--_k0\)\s*!important/.test(takeoverShellLine) &&
+      /border:1px solid var\(--_kb\)\s*!important/.test(takeoverShellLine) &&
       takeoverShellLine.includes('animation:ag-cs-queued-in'),
     'interaction-takeover-card outer shell must align with queued-messages-card smoked-obsidian facet'
   );
   const takeoverLinerLine = css.split('\n').find((l) => l.startsWith('& .agy-takeover-card{')) || '';
   assert.ok(
-    takeoverLinerLine.includes('background:transparent !important') &&
-      takeoverLinerLine.includes('border:0 !important') &&
-      takeoverLinerLine.includes('box-shadow:none !important'),
+    /background:(?:transparent|0 0)\s*!important/.test(takeoverLinerLine) &&
+      /border:0\s*!important/.test(takeoverLinerLine) &&
+      /box-shadow:none\s*!important/.test(takeoverLinerLine),
     '.agy-takeover-card inner liner must be transparent and borderless'
   );
   assert.equal(
@@ -2077,12 +2076,13 @@ test('Wave D20: ui-runtime mounts bottom prism-reflect on interaction-takeover-c
   );
 
   // 5) Stacking context unseal (.surface-composer-card z-index:auto) & #ag-prism-pulse-bar z-index (36) > interaction-takeover-card (12)
-  assert.ok(
-    css.includes('& .surface-composer-card{z-index:auto !important;}'),
+  assert.match(
+    css,
+    /& \.surface-composer-card\{z-index:auto\s*!important;?\}/,
     '.surface-composer-card must set z-index:auto !important to unseal Tailwind z-[1] stacking context'
   );
-  const pulseZMatch = css.match(/:is\(#ag-prism-pulse-bar,\[data-ag-prism-pulse-bar\],#ag-pulse-status-bar\):not\(\[data-layout="blocked"\]\)\{z-index:(\d+)\s*!important;\}/);
-  const takeoverZMatch = css.match(/\[data-testid="interaction-takeover-card"[^\n{]*\{[^}]*z-index:(\d+)\s*!important;/);
+  const pulseZMatch = css.match(/:is\(#ag-prism-pulse-bar,\[data-ag-prism-pulse-bar\],#ag-pulse-status-bar\):not\(\[data-layout="blocked"\]\)\{z-index:(\d+)\s*!important;?\}/);
+  const takeoverZMatch = css.match(/\[data-testid="interaction-takeover-card"[^\n{]*\{[^}]*z-index:(\d+)\s*!important;?/);
   assert.ok(pulseZMatch && takeoverZMatch, 'Both #ag-prism-pulse-bar and interaction-takeover-card z-index rules must exist');
   const pulseZ = Number(pulseZMatch[1]);
   const takeoverZ = Number(takeoverZMatch[1]);

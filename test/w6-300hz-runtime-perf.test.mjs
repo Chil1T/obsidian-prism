@@ -344,9 +344,12 @@ test('w6-1: host-workbench-enhancer eliminates scroll layout thrashing, skips co
     assert.equal(ambientQaCalls, 1, 'syncSubagentRunningAmbient must issue 1 merged querySelectorAll instead of 3-4 separate tree walks');
     assert.equal(subNode.getAttribute('data-ag-sub-running'), '1');
 
-    // Rapid incremental syncs within 120ms window are throttled (0 immediate extra scans)
-    for (let i = 0; i < 8; i++) ctl.sync({ o: true });
+    // Rapid streaming/content incremental syncs within 120ms window are throttled (0 immediate extra scans)
+    for (let i = 0; i < 8; i++) ctl.sync({ c: true });
     assert.equal(ambientQaCalls, 1, 'Incremental ambient syncs inside 120ms window must be throttled');
+    // Explicit overlay/overview sync ({ o: true }) runs synchronously without 120ms UI lag
+    ctl.sync({ o: true });
+    assert.equal(ambientQaCalls, 2, 'Explicit overview sync ({ o: true }) must update synchronously');
   } finally {
     ctl.destroy();
     bus.dispose(doc, win);

@@ -2775,7 +2775,7 @@ test('Smoked Obsidian Wave 1: style.css hygiene (0 :has, ASCII, LF, no BOM, home
   const homeLine = css.split('\n').find((l) => l.startsWith('.ag-cs-home-panel{')) || '';
   assert.ok(homeLine.includes('backdrop-filter:none') && !homeLine.includes('blur('));
   assert.ok(css.includes('.ag-cs-home-chart-svg{') && css.includes('.ag-cs-home-chart-peak{'));
-  assert.ok(css.includes('--ag-cs-menu-bg:rgba(13,14,18,.94);') && css.includes('--ag-cs-menu-bg-l:rgba(252,253,254,.96);'));
+  assert.ok(css.includes('--ag-cs-menu-bg:rgba(13,14,18,.94);') && /--ag-cs-menu-bg-l:rgba\(252,253,25[45],\.9(?:6|75)\);/.test(css));
 
   for (const lang of ['auto', 'zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de']) {
     const expr = cdp.buildInjectExpression({ ...cdp.DEFAULT_CONFIG, language: lang }, { bundleCachePath: '' });

@@ -773,8 +773,9 @@ test('style.css Antigravity 2.29.1 selectors, zero :has(), ASCII-only, Ch1 budge
   assert.equal(css.includes(':has('), false, 'style.css must never contain :has(');
   assert.equal(/[^\x00-\x7F]/.test(css), false, 'style.css must remain strictly ASCII');
   assert.ok(css.includes('.agy-sheet'), 'style.css must cover non-Home .agy-sheet');
-  assert.ok(
-    css.includes('.agy-shell :is(div,aside).bg-sidebar{background-color:var(--sidebar) !important;}'),
+  assert.match(
+    css,
+    /\.agy-shell :is\(div,aside\)\.bg-sidebar\{background-color:var\(--sidebar\)\s*!important;?\}/,
     'style.css must cover Antigravity 2.29.1 .bg-sidebar'
   );
 

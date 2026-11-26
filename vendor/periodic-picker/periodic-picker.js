@@ -583,7 +583,7 @@
 
       var openRafId = 0, modeLayoutRafId = 0, orbitSyncRafId = 0, dockResizeRafId = 0;
       var badgeSyncTimer = 0, blindDwellTimer = 0, blindFlashTimer = 0, confirmCloseTimer = 0, drawerClosingTimer = 0, drawerTransTmr = 0;
-      var drawerTrans = false, drawerLockW = 0, a11yKeysOk = false;
+      var drawerTrans = false, drawerLockW = 0, drawerEstStageH = 314, a11yKeysOk = false;
       var pendingTimers = new Set();
 
       /* Lightweight documentElement-only attribute observer (NEVER observes document.body!) */
@@ -690,6 +690,12 @@
       function clrDrawerTrans() {
         if (drawerTransTmr) { clearTimer(drawerTransTmr); pendingTimers.delete(drawerTransTmr); drawerTransTmr = 0; }
         drawerTrans = false; drawerLockW = 0;
+        if (canvasEl) setStyleVar(canvasEl, 'height', null);
+      }
+      function lockDrawerTransCanvasH() {
+        var cur = cachedStageBounds.valid ? cachedStageBounds.height : 0, th = cur >= drawerEstStageH * 0.85 ? cur : drawerEstStageH;
+        if (canvasEl && th > 60) setStyleVar(canvasEl, 'height', Math.round(th) + 'px');
+        return th;
       }
       function endDrawerTrans() {
         var was = drawerTrans; clrDrawerTrans();
@@ -707,6 +713,7 @@
         if (dockResizeRafId && cancelRaf) cancelRaf(dockResizeRafId);
         openRafId = 0; modeLayoutRafId = 0; dockResizeRafId = 0;
         drawerTrans = false; drawerTransTmr = 0; drawerLockW = 0;
+        if (canvasEl) setStyleVar(canvasEl, 'height', null);
         stopOrbitFollowSync(); cancelPendingPointerMoveRaf();
         clearSessionSyncTimer(); clearSessionSyncFollowupTimer(); clearOpenLockGuardTimer();
         blindDwellTimer = 0; blindFlashTimer = 0; blindFlashZ = null; extNearRendererActive = false;
@@ -2430,15 +2437,11 @@
       /* Strictly zero getBoundingClientRect() calls — reads cached measurements only! */
       function syncDockCompactState() {
         if (!overlayEl) return false;
+        var sa = function (k, v) { overlayEl.setAttribute(k, v); };
         if (stageMode !== 'drawer') {
-          var fullSig = 'fullscreen';
-          if (lastDockCompactSig === fullSig) return false;
-          lastDockCompactSig = fullSig;
-          overlayEl.setAttribute('data-dock-tier', 'wide');
-          overlayEl.setAttribute('data-dock-compact', '0');
-          overlayEl.setAttribute('data-spec-compact', '0');
-          overlayEl.setAttribute('data-source-short', '0');
-          overlayEl.setAttribute('data-compact-expanded', '0');
+          if (lastDockCompactSig === 'fullscreen') return false;
+          lastDockCompactSig = 'fullscreen';
+          sa('data-dock-tier', 'wide'); sa('data-dock-compact', '0'); sa('data-spec-compact', '0'); sa('data-source-short', '0'); sa('data-compact-expanded', '0');
           overlayEl.removeAttribute('data-short-viewport');
           setStyleVar(overlayEl, '--ag-pp-short-dock-h', null);
           return true;
@@ -2459,36 +2462,21 @@
         if (measuredW <= 160 && root && Number(root.innerWidth) > 160) measuredW = Number(root.innerWidth);
         if (measuredW <= 160) measuredW = 1280;
 
-        var tier =
-          measuredW >= DOCK_WIDE_BREAKPOINT_PX
-            ? 'wide'
-            : measuredW >= DOCK_MEDIUM_BREAKPOINT_PX
-            ? 'medium'
-            : 'narrow';
+        var tier = measuredW >= DOCK_WIDE_BREAKPOINT_PX ? 'wide' : measuredW >= DOCK_MEDIUM_BREAKPOINT_PX ? 'medium' : 'narrow';
         var isCompact = tier !== 'wide';
         var isSpecCompact = tier === 'medium' || (tier === 'wide' && measuredW < 1300);
         var useShortSource = tier !== 'wide' || measuredW < 1260;
         if (tier !== 'narrow' && compactExpanded) compactExpanded = false;
         var compExpFlag = tier === 'narrow' && compactExpanded ? '1' : '0';
+        drawerEstStageH = Math.max(120, Math.round(Math.min(Math.max(120, winH - 176), isShortVp ? clampedShortH : tier === 'medium' ? Math.max(368, Math.min(422, winH * 0.43)) : Math.max(336, Math.min(392, winH * 0.38))) - (isShortVp ? 13 : tier === 'medium' ? 64 : tier === 'narrow' ? 59 : 22)));
 
-        var nextSig =
-          'drawer|' + tier + '|' + (isCompact ? '1' : '0') + '|' + (isSpecCompact ? '1' : '0') +
-          '|' + (useShortSource ? '1' : '0') + '|' + compExpFlag + '|' + (isShortVp ? clampedShortH : '0');
+        var nextSig = 'drawer|' + tier + '|' + (isCompact ? '1' : '0') + '|' + (isSpecCompact ? '1' : '0') + '|' + (useShortSource ? '1' : '0') + '|' + compExpFlag + '|' + (isShortVp ? clampedShortH : '0');
         if (lastDockCompactSig === nextSig) return false;
         lastDockCompactSig = nextSig;
 
-        if (isShortVp) {
-          overlayEl.setAttribute('data-short-viewport', '1');
-          setStyleVar(overlayEl, '--ag-pp-short-dock-h', clampedShortH + 'px');
-        } else {
-          overlayEl.removeAttribute('data-short-viewport');
-          setStyleVar(overlayEl, '--ag-pp-short-dock-h', null);
-        }
-        overlayEl.setAttribute('data-dock-tier', tier);
-        overlayEl.setAttribute('data-dock-compact', isCompact ? '1' : '0');
-        overlayEl.setAttribute('data-spec-compact', isSpecCompact ? '1' : '0');
-        overlayEl.setAttribute('data-source-short', useShortSource ? '1' : '0');
-        overlayEl.setAttribute('data-compact-expanded', compExpFlag);
+        if (isShortVp) { sa('data-short-viewport', '1'); setStyleVar(overlayEl, '--ag-pp-short-dock-h', clampedShortH + 'px'); }
+        else { overlayEl.removeAttribute('data-short-viewport'); setStyleVar(overlayEl, '--ag-pp-short-dock-h', null); }
+        sa('data-dock-tier', tier); sa('data-dock-compact', isCompact ? '1' : '0'); sa('data-spec-compact', isSpecCompact ? '1' : '0'); sa('data-source-short', useShortSource ? '1' : '0'); sa('data-compact-expanded', compExpFlag);
         return true;
       }
 
@@ -2750,15 +2738,14 @@
         applyEffortBtnRects(getProjectedEffortsSafe(), stageRect && stageRect.valid && stageRect.width > 80 ? stageRect.width : 1280, stageRect && stageRect.valid && stageRect.height > 60 ? stageRect.height : 680);
       }
 
-      function resizeCanvasToStage(skipRectRefresh, deferRender) {
+      function resizeCanvasToStage(skipRectRefresh, deferRender, overrideH) {
         if (!stageEl || !canvasEl) return;
         if (!skipRectRefresh || !cachedStageBounds.valid) refreshCachedLayoutRects();
-        var sBounds = readStageBoundsZeroReflow();
-        var cssW = sBounds.valid ? sBounds.width : 1280;
-        var cssH = sBounds.valid ? sBounds.height : 680;
+        var sBounds = readStageBoundsZeroReflow(), cssW = sBounds.valid ? sBounds.width : 1280, cssH = overrideH > 60 ? overrideH : (sBounds.valid ? sBounds.height : 680);
+        var bArg = overrideH > 60 ? { left: sBounds.valid ? sBounds.left : 0, top: sBounds.valid ? sBounds.top : 0, width: cssW, height: cssH, valid: true } : (sBounds.valid ? sBounds : null);
         var dpr = Math.min(2, Math.max(1, Number(root && root.devicePixelRatio) || 1));
         if (activeRenderer && typeof activeRenderer.resize === 'function') {
-          try { activeRenderer.resize(cssW, cssH, dpr, sBounds.valid ? sBounds : null, deferRender ? { deferRender: true } : undefined); } catch (e) {}
+          try { activeRenderer.resize(cssW, cssH, dpr, bArg, deferRender ? { deferRender: true } : undefined); } catch (e) {}
         }
       }
 
@@ -4921,9 +4908,9 @@
         isHostPaused = computeHostPaused();
         refreshCachedLayoutRects(true);
         syncDockCompactState();
-        resizeCanvasToStage(true, true);
         drawerTrans = Boolean(stageMode === 'drawer' && reqRaf && !bentoUi.isReducedMotion(doc, root));
         drawerLockW = drawerTrans ? (cachedOverlayWidth || cachedDockBounds.width || 0) : 0;
+        resizeCanvasToStage(true, true, drawerTrans ? lockDrawerTransCanvasH() : 0);
         syncSceneAndDom(true, { deferTelemetryDomScan: Boolean(reqRaf) });
         if (isHostPaused) applyRendererPausedState(true);
 
@@ -5355,42 +5342,20 @@
           }
         });
 
-        overlayEl.addEventListener('pointerleave', function (ev) {
-          if (!overlayEl || isDestroyed || isConfirmClosing || isDrawerClosing) return;
-          if (isOrbitDragging || (gestureState && gestureState.scrubbing)) return;
+        var skipLeave = function () { return !overlayEl || isDestroyed || isConfirmClosing || isDrawerClosing || isOrbitDragging || (gestureState && gestureState.scrubbing); };
+        var resetLeavePtr = function (ev) {
           cancelPendingPointerMoveRaf();
-          if (ev && ev.relatedTarget && Number.isFinite(Number(ev.clientX)) && Number.isFinite(Number(ev.clientY))) {
-            updateDynamicPrismCssVars(ev.clientX, ev.clientY, false);
-          } else {
-            clearLocalRimGlow();
-          }
-          lastPointerClient.x = -9999;
-          lastPointerClient.y = -9999;
-          lastPointerClient.active = false;
+          lastPointerClient.x = -9999; lastPointerClient.y = -9999; lastPointerClient.active = false;
+          if (ev && ev.relatedTarget && Number.isFinite(Number(ev.clientX)) && Number.isFinite(Number(ev.clientY))) updateDynamicPrismCssVars(ev.clientX, ev.clientY, false);
+          else clearLocalRimGlow();
           forwardPointerToRenderer(-9999, -9999, false);
+        };
+        overlayEl.addEventListener('pointerleave', function (ev) { if (!skipLeave()) { resetLeavePtr(ev); clearStageHoverAndPress(); } });
+        stageEl.addEventListener('pointerleave', function (ev) {
+          if (skipLeave()) return;
+          if (!(ev && ev.relatedTarget && typeof overlayEl.contains === 'function' && overlayEl.contains(ev.relatedTarget))) resetLeavePtr(ev);
           clearStageHoverAndPress();
         });
-
-          stageEl.addEventListener('pointerleave', function (ev) {
-            if (!overlayEl || isDestroyed || isConfirmClosing || isDrawerClosing) return;
-            if (isOrbitDragging || (gestureState && gestureState.scrubbing)) return;
-            var stillInOverlay = Boolean(
-              ev && ev.relatedTarget && typeof overlayEl.contains === 'function' && overlayEl.contains(ev.relatedTarget)
-            );
-            if (!stillInOverlay) {
-              cancelPendingPointerMoveRaf();
-              lastPointerClient.x = -9999;
-              lastPointerClient.y = -9999;
-              lastPointerClient.active = false;
-              if (ev && ev.relatedTarget && Number.isFinite(Number(ev.clientX)) && Number.isFinite(Number(ev.clientY))) {
-                updateDynamicPrismCssVars(ev.clientX, ev.clientY, false);
-              } else {
-                clearLocalRimGlow();
-              }
-              forwardPointerToRenderer(-9999, -9999, false);
-            }
-            clearStageHoverAndPress();
-          });
         }
 
         if (reqRaf) {
@@ -5413,7 +5378,7 @@
               var rafW = cachedOverlayWidth || cachedDockBounds.width || 0;
               if (!drawerTrans || rafTierChanged || (drawerLockW > 0 && Math.abs(rafW - drawerLockW) > 2)) {
                 if (drawerTrans) drawerLockW = rafW;
-                resizeCanvasToStage(true, true);
+                resizeCanvasToStage(true, true, drawerTrans ? lockDrawerTransCanvasH() : 0);
               }
               syncHitLayerRects(true);
               if (pinnedScrollEl) {

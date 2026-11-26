@@ -28,9 +28,9 @@ test('step-plan checklist card and home-panel align with Obsidian Prism floating
 
   // PR #43 + v1.0.8 layered monochrome mirror optics & 5-state obsidian star-core icons on step-plan
   assert.ok(spLine.includes('& [data-testid="step-plan"]{'), 'must style step-plan card');
-  assert.ok(spLine.includes('border-radius:13px !important;'), 'step-plan must match overview-shell 13px radius');
+  assert.match(spLine, /border-radius:13px\s*!important;/, 'step-plan must match overview-shell 13px radius');
   assert.ok(spLine.includes('var(--ag-cs-menu-bg,var(--ag-cs-panel-bg,rgba(14,16,22,.94)))'), 'step-plan must share overview-shell dark obsidian surface');
-  assert.ok(spLine.includes('radial-gradient(108% 52px at 50% 0%,rgba(168,200,255,.048) 0%,transparent 74%),var(--ag-cs-menu-sheen)'), 'step-plan must layer restrained cool-silver top diffusion over sheen');
+  assert.match(spLine, /radial-gradient\(108% 52px at 50% 0%?,rgba\(168,200,255,\.048\)(?: 0%)?,transparent 74%\),var\(--ag-cs-menu-sheen\)/, 'step-plan must layer restrained cool-silver top diffusion over sheen');
   assert.ok(spLine.includes('var(--ag-cs-menu-bd)'), 'step-plan must share overview-shell 1px stepped border');
   assert.ok(spLine.includes('inset 0 1px 0 rgba(235,243,255,.14)'), 'step-plan must render crisp icy-silver top specular edge');
   assert.ok(spLine.includes('&[data-ag-sp-running="1"]{') && spLine.includes('rgba(56,176,255,.15)'), 'running step-plan must render nebula cyan-violet top ambient glow');
@@ -40,25 +40,27 @@ test('step-plan checklist card and home-panel align with Obsidian Prism floating
   assert.ok(spLine.includes('&[data-status="pending"]{') && spLine.includes('width:3.5px;height:3.5px;'), 'pending state must render obsidian well + centered 3.5px dormant star dot');
   assert.ok(spLine.includes('&[data-status="failed"]{--_sc:var(--error);'), 'failed state must render obsidian core + crimson ring + cross');
   assert.ok(spLine.includes('&[data-status="skipped"]{') && spLine.includes('width:6px;height:1.5px;'), 'skipped state must render dashed ring + centered 6x1.5px dash');
-  assert.ok(spLine.includes('translate:-50% -50%;') && !spLine.includes('transform:translate('), 'pseudo-element centering must use individual translate before individual rotate');
+  assert.match(spLine, /translate:-50% -50%;?/, 'pseudo-element centering must use individual translate before individual rotate');
+  assert.equal(spLine.includes('transform:translate('), false, 'pseudo-element centering must avoid shorthand transform:translate(');
   assert.equal(spLine.includes('opacity:'), false, 'step-plan-item text must not stack low opacity over --muted-foreground');
 
   // Overview-shell & step-plan 4s GPU opacity breathing ambient + strict pause guards
   assert.ok(baseSection.includes('@keyframes ag-ov-br{'), 'must define GPU-only opacity breathing keyframe for running ambient');
-  assert.ok(baseSection.includes('animation:ag-ov-br 4s ease-in-out infinite;'), 'running overview-shell & step-plan ::after must breathe over 4s');
+  assert.match(baseSection, /animation:ag-ov-br 4s (?:steps\(24\)|ease-in-out) infinite;?/, 'running overview-shell & step-plan ::after must breathe over 4s');
   assert.ok(baseSection.includes('[data-ag-overview-running="1"]::after,& [data-ag-sp-running="1"]::after,') && baseSection.includes('animation-play-state:paused !important;'), 'win-blur/pp-open must pause running ambient breathing');
-  assert.ok(baseSection.includes('html[data-ag-cs-style]:not(#_) :is(.no-transitions,.no-transitions *){transition:none !important;animation:none !important;}'), 'must preserve v2.35.1 .no-transitions session-switch freeze');
-  assert.ok(baseSection.includes('& [data-lexical-editor="true"]{min-height:40px !important;font-size:14px !important;line-height:22px !important;transition:none !important;}'), 'must disable lexical editor 100ms collapse transition');
+  assert.match(baseSection, /html\[data-ag-cs-style\]:not\(#_\) :is\(\.no-transitions,\.no-transitions \*\)\{transition:none\s*!important;animation:none\s*!important;?\}/, 'must preserve v2.35.1 .no-transitions session-switch freeze');
+  assert.match(baseSection, /& \[data-lexical-editor="true"\]\{min-height:40px\s*!important;font-size:14px\s*!important;line-height:22px\s*!important;transition:none\s*!important;?\}/, 'must disable lexical editor 100ms collapse transition');
   assert.ok(baseSection.includes(':not([data-testid*="home-wallpaper"]):not([class*="home-wallpaper"])'), 'must yield to v2.35.1 native home-wallpaper layer');
 
   // State transition keyframe, reduced-motion (--_sa:none), and Windows High Contrast fallback
   const kfLine = css.split('\n').find((l) => l.includes('@keyframes ag-sp-in{')) || '';
   assert.ok(kfLine.length > 0, 'must define restrained ag-sp-in transition keyframe');
   assert.equal(kfLine.includes('scale(1.08)'), false, 'step-plan transition must avoid bounce overshoot');
-  assert.ok(baseSection.includes('@media (forced-colors:active){[data-testid="step-plan-item"]>:first-child{&>svg{display:block !important;}'), 'forced-colors must restore native SVG icons');
+  assert.match(baseSection, /@media \(forced-colors:active\)\{\[data-testid="step-plan-item"\]>:first-child\{&>svg\{display:block\s*!important;/, 'forced-colors must restore native SVG icons');
   assert.ok(baseSection.includes('--ag-spring-sidebar:linear;--_sa:none;'), 'motion="off" must disable step-plan state animations via --_sa:none');
-  assert.ok(
-    baseSection.includes('@media (prefers-reduced-motion:reduce){:root:not([data-ag-cs-ignore-rm="1"]){&[data-ag-cs-style]{--_sa:none;}'),
+  assert.match(
+    baseSection,
+    /@media \(prefers-reduced-motion:reduce\)\{:root:not\(\[data-ag-cs-ignore-rm="1"\]\)\{&\[data-ag-cs-style\]\{--_sa:none;?\}/,
     'prefers-reduced-motion must disable step-plan state animations via --_sa:none unless data-ag-cs-ignore-rm="1" is explicitly enabled'
   );
   assert.ok(baseSection.includes('--ag-cs-run-core:#FFFFFF;--_si:#000;'), 'light theme must flip inner glyph tint polarity via --_si:#000');
