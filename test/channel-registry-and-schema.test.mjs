@@ -502,3 +502,120 @@ test('Phase 4D: settings-panel schema aligns with schema.cjs, cdp.js prunes 8 zo
   assert.equal(rootAttrs.has('data-ag-prism-lang'), false, 'REMOVE_EXPRESSION must remove data-ag-prism-lang');
   assert.equal(rootAttrs.get('data-theme'), 'dark', 'REMOVE_EXPRESSION must NEVER delete host documentElement[data-theme]');
 });
+
+test('Native CdpClient.cs & CdpClient.swift align 100% bidirectionally with all 54 keys in src/config/schema.cjs', () => {
+  const schema = cdp.CONFIG_SCHEMA;
+  const allSchemaKeys = Object.keys(schema).sort();
+  assert.equal(allSchemaKeys.length, 54, 'CONFIG_SCHEMA expected 54 keys');
+
+  const canonicalLangs = [...schema.language.values];
+  const autoOnOff = ['auto', 'on', 'off'];
+  const onOff = ['on', 'off'];
+  const expandSpec = (spec) => (spec === 'L' ? canonicalLangs : spec === 'A' ? autoOnOff : spec === 'O' ? onOff : spec.split(','));
+
+  const parseStringArray = (src, re, label) => {
+    const m = src.match(re);
+    assert.ok(m, `Missing ${label}`);
+    return [...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]);
+  };
+
+  const verifyNativeSchema = (label, src, patterns) => {
+    // 1) All 54 schema keys must be explicitly present in native source
+    for (const k of allSchemaKeys) {
+      assert.ok(src.includes(`"${k}"`), `${label} missing explicit schema key "${k}"`);
+    }
+
+    // 2) Extract declarative enum/bool/string/integer definitions and derive defaults + validators
+    const enumBlock = src.match(patterns.enumBlock);
+    assert.ok(enumBlock, `${label} missing declarative enum schema table`);
+    const enumRows = [...enumBlock[1].matchAll(patterns.enumRow)];
+    assert.ok(enumRows.length >= 40, `${label} expected >= 40 enum schema entries, got ${enumRows.length}`);
+
+    const defaults = {};
+    const validators = {};
+    for (const row of enumRows) {
+      const [, k, defVal, spec] = row;
+      assert.equal(Object.prototype.hasOwnProperty.call(defaults, k), false, `${label} duplicate enum key ${k}`);
+      defaults[k] = defVal;
+      validators[k] = expandSpec(spec);
+    }
+    for (const k of parseStringArray(src, patterns.boolTrue, `${label} boolTrue`)) {
+      defaults[k] = true;
+      validators[k] = 'boolean';
+    }
+    for (const k of parseStringArray(src, patterns.boolFalse, `${label} boolFalse`)) {
+      defaults[k] = false;
+      validators[k] = 'boolean';
+    }
+    for (const k of parseStringArray(src, patterns.strKeys, `${label} strKeys`)) {
+      defaults[k] = '';
+      validators[k] = 'string';
+    }
+    assert.match(src, patterns.pollDefault, `${label} must set default pollIntervalMs = 2500`);
+    defaults.pollIntervalMs = 2500;
+
+    // Bidirectional 1:1 parity for all 52 non-optional keys & defaults and all 51 validators
+    assert.deepEqual(Object.keys(defaults).sort(), Object.keys(cdp.DEFAULT_CONFIG).sort(), `${label} default keys must match DEFAULT_CONFIG 1:1`);
+    assert.deepEqual(defaults, cdp.DEFAULT_CONFIG, `${label} default values must match DEFAULT_CONFIG 100%`);
+    assert.deepEqual(Object.keys(validators).sort(), Object.keys(cdp.VALIDATORS).sort(), `${label} validator keys must match VALIDATORS 1:1`);
+    assert.deepEqual(validators, cdp.VALIDATORS, `${label} validator rules must match VALIDATORS 100%`);
+
+    // Controlled non-validator keys (pollIntervalMs 500..60000 + 2 optional strictBoolean keys)
+    for (const token of patterns.controlledTokens) {
+      assert.ok(src.includes(token), `${label} missing controlled schema contract token: ${token}`);
+    }
+
+    // Coercion / legacyMap / mascot / yue migration rules parity
+    const strictOn = parseStringArray(src, patterns.strictOn, `${label} strictOn`).sort();
+    const notOff = parseStringArray(src, patterns.notOff, `${label} notOff`).sort();
+    const boolToOnOff = parseStringArray(src, patterns.boolToOnOff, `${label} boolToOnOff`).sort();
+    const expectedStrictOn = Object.entries(schema).filter(([, s]) => s.stringBoolMode === 'strictOn').map(([k]) => k).sort();
+    const expectedNotOff = Object.entries(schema).filter(([, s]) => s.stringBoolMode === 'notOff').map(([k]) => k).sort();
+    const expectedBoolToOnOff = Object.entries(schema).filter(([, s]) => s.coerceBoolToOnOff).map(([k]) => k).sort();
+    assert.deepEqual(strictOn, expectedStrictOn, `${label} strictOn boolean keys must match schema.cjs 100%`);
+    assert.deepEqual(notOff, expectedNotOff, `${label} notOff boolean keys must match schema.cjs 100%`);
+    assert.deepEqual(boolToOnOff, expectedBoolToOnOff, `${label} coerceBoolToOnOff keys must match schema.cjs 100%`);
+  };
+
+  const cdpCs = fs.readFileSync(path.join(ROOT, 'installer', 'common', 'CdpClient.cs'), 'utf8');
+  verifyNativeSchema('CdpClient.cs', cdpCs, {
+    enumBlock: /EnumSchemaSpecs\s*=\s*new\s+string\[,\]\s*\{([\s\S]*?)\n\s*\};/,
+    enumRow: /\{\s*"([^"]+)",\s*"([^"]*)",\s*"([^"]+)"\s*\}/g,
+    boolTrue: /BoolSchemaDefaultTrueKeys\s*=\s*new\s+string\[\]\s*\{([^}]+)\}/,
+    boolFalse: /BoolSchemaDefaultFalseKeys\s*=\s*new\s+string\[\]\s*\{([^}]+)\}/,
+    strKeys: /StringSchemaKeys\s*=\s*new\s+string\[\]\s*\{([^}]+)\}/,
+    pollDefault: /d\["pollIntervalMs"\]\s*=\s*2500L;/,
+    strictOn: /StrictOnBoolKeys\s*=\s*new\s+string\[\]\s*\{([^}]+)\}/,
+    notOff: /NotOffBoolKeys\s*=\s*new\s+string\[\]\s*\{([^}]+)\}/,
+    boolToOnOff: /BoolToOnOffKeys\s*=\s*new\s+string\[\]\s*\{([^}]+)\}/,
+    controlledTokens: [
+      'iv >= 500L && iv <= 60000L',
+      'key == "autoPromptCdpRelaunch" || key == "autoRelaunchOnBareLaunch"',
+      'NormalizeMascotConfigValue',
+      'SanitizeCustomFont',
+      '"cantonese"',
+      '"eco"',
+    ],
+  });
+
+  const cdpSwift = fs.readFileSync(path.join(ROOT, 'installer', 'macos', 'Common', 'CdpClient.swift'), 'utf8');
+  verifyNativeSchema('CdpClient.swift', cdpSwift, {
+    enumBlock: /enumSchemaSpecs:\s*\[\(String,\s*String,\s*String\)\]\s*=\s*\[([\s\S]*?)\n\s*\]/,
+    enumRow: /\(\s*"([^"]+)",\s*"([^"]*)",\s*"([^"]+)"\s*\)/g,
+    boolTrue: /boolSchemaDefaultTrueKeys\s*=\s*\[([^\]]+)\]/,
+    boolFalse: /boolSchemaDefaultFalseKeys\s*=\s*\[([^\]]+)\]/,
+    strKeys: /stringSchemaKeys\s*=\s*\[([^\]]+)\]/,
+    pollDefault: /d\["pollIntervalMs"\]\s*=\s*\.int\(2500\)/,
+    strictOn: /strictOnBoolKeys\s*=\s*\[([^\]]+)\]/,
+    notOff: /notOffBoolKeys\s*=\s*\[([^\]]+)\]/,
+    boolToOnOff: /for k in \[([^\]]+)\] \{\s*\n\s*if let v = out\[k\], case \.bool/,
+    controlledTokens: [
+      'iv >= 500 && iv <= 60000',
+      'key == "autoPromptCdpRelaunch" || key == "autoRelaunchOnBareLaunch"',
+      'normalizeMascotConfigValue',
+      'sanitizeCustomFont',
+      '"cantonese"',
+      '"eco"',
+    ],
+  });
+});
