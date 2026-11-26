@@ -5,7 +5,7 @@ const G = root || (typeof globalThis !== 'undefined' ? globalThis : typeof windo
 if (!G) return;
 
 const INLINE_DIFF_STYLE_ID = 'ag-prism-inline-diff-css';
-const MAX_PENDING = 32, TIMEOUT_MS = 5500, CACHE_MAX = 32, CACHE_TTL = 15000, NEG_TTL = 8000, MAX_BYTES = 131072, MAX_LINE_CHARS = 240;
+const MAX_PENDING = 32, TIMEOUT_MS = 5500, CACHE_MAX = 32, CACHE_TTL = 15000, NEG_TTL = 8000, MAX_BYTES = 196608, MAX_LINE_CHARS = 240, MAX_CLIENT_LINES = 1200, PREVIEW_LIMIT = 120;
 const DET_ERR_RE = /^(?:not_found|blocked|outside_git_repo|invalid_uri|not_a_file|binary)/i;
 
 // Strictly pure ASCII, 0 :has(), balanced braces, zero pseudo-elements inside :is()
@@ -21,36 +21,31 @@ const INLINE_DIFF_CSS = [
 '& [data-ag-diff-chip-row="1"]{overflow-y:visible$I;}',
 '& [data-ag-diff-chip="1"]{display:inline-flex$I;align-items:center$I;gap:7px$I;min-height:22px$I;padding:1px 5px$I;margin:0 -2px$I;border-radius:4px$I;background:transparent$I;border:1px solid transparent$I;box-shadow:none$I;cursor:pointer$I;overflow:visible$I;transition:background-color 130ms ease,box-shadow 130ms ease$I;&:hover{background-color:$W.048)$I;& [data-ag-diff-chip-file="1"]{text-decoration-color:$W.36)$I;}}&[data-ag-inline-diff-open="1"]{background-color:$W.065)$I;box-shadow:inset 0 -1px 0 $W.22)$I;& [data-ag-diff-chip-file="1"]{text-decoration-color:transparent$I;}}& [data-ag-diff-chip-file="1"],& [data-ag-diff-chip-file="1"] :is([data-testid="entity-pill"],.inline-pill){background:transparent$I;border-color:transparent$I;box-shadow:none$I;padding:0$I;margin:0$I;color:var(--foreground)$I;font-weight:500;}& [data-ag-diff-chip-file="1"]{text-decoration:underline;text-decoration-color:$W.16);text-underline-offset:3px;text-decoration-thickness:1px;transition:text-decoration-color 130ms ease;}& [data-testid="diff-line-count"]{background:transparent$I;border:0$I;box-shadow:none$I;padding:0$I;margin:0$I;gap:5px$I;font-size:11.5px$I;font-weight:500;&::before{display:none$I;}}}',
 '& [data-testid="diff-line-count"]{display:inline-flex;align-items:center;gap:4px;border-radius:var(--ag-cs-r-sm)$I;border:1px solid transparent;padding:1px 5px$I;font-family:var(--ag-cs-mono-stack);font-size:11px;font-variant-numeric:tabular-nums;transition:background-color 130ms ease,border-color 130ms ease,color 130ms ease$I;& [data-ag-diff-stat="add"]{color:#5CE68B$I;text-shadow:0 0 9px rgba(74,222,128,.42);}& [data-ag-diff-stat="del"]{color:#FF857D$I;text-shadow:0 0 9px rgba(248,113,113,.40);}& [data-ag-diff-stat="zero"]{color:$W.28)$I;text-shadow:none$I;}}',
-'& $Cbox{display:block;box-sizing:border-box;width:100%;max-width:100%;align-self:stretch;margin:0;padding:0;transform-origin:50% 0%;contain:layout style;&[data-ag-diff-anim="1"]{will-change:transform,opacity;animation:ag-cs-diff-unfold 150ms var(--ag-ease-out,cubic-bezier(.16,1,.3,1)) both;}&[data-ag-diff-state="closing"]{will-change:transform,opacity;pointer-events:none;animation:ag-cs-diff-fold 120ms cubic-bezier(.32,0,.67,0) forwards;}}',
-'& $Ccard{position:relative;margin:6px 0 12px;padding:0;border-radius:10px;border:1px solid $W.10);background-color:rgba(11,13,17,.94);background-image:linear-gradient(180deg,$W.028) 0%,transparent 34px);box-shadow:inset 0 1px 0 $W.08),0 12px 30px -12px rgba(0,0,0,.64);overflow:hidden;}',
-'& $Cbar{display:flex;align-items:center;justify-content:space-between;gap:8px;height:30px;padding:0 8px 0 11px;border-bottom:1px solid $W.075);background-color:$W.026);user-select:none;}',
-'& $Cmeta{display:flex;align-items:center;gap:7px;min-width:0;flex:1 1 auto;}& $Cfile{font-family:var(--ag-cs-mono-stack);font-size:11.5px;font-weight:500;color:var(--foreground);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:-.01em;}',
-'& $Cstats{display:inline-flex;align-items:center;gap:4px;flex-shrink:0;padding:1px 6px;border-radius:999px;background:$W.045);border:1px solid $W.075);font-family:var(--ag-cs-mono-stack);font-size:10.5px;font-weight:600;font-variant-numeric:tabular-nums;line-height:1.35;}& $Cst-add{color:#4ADE80;}& $Cst-del{color:#F87171;}',
-'& $Csrc{display:inline-flex;align-items:center;flex-shrink:0;height:17px;padding:0 6px;border-radius:4px;font-family:var(--font-sans);font-size:10px;font-weight:500;background:rgba(148,163,184,.12);border:1px solid rgba(148,163,184,.22);color:rgba(226,232,240,.84);&[data-ag-diff-src="step-patch"]{background:rgba(56,189,248,.12);border-color:rgba(56,189,248,.28);color:#7DD3FC;}&[data-ag-diff-src="git-diff"]{background:rgba(74,222,128,.10);border-color:rgba(74,222,128,.24);color:#86EFAC;}&[data-ag-diff-src="snapshot"]{background:rgba(251,191,36,.10);border-color:rgba(251,191,36,.24);color:#FDE68A;}}',
-'& $Cacts{display:inline-flex;align-items:center;gap:2px;flex-shrink:0;}& $Cact-btn{appearance:none;display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0;border:0;border-radius:5px;background:transparent;color:var(--muted-foreground);cursor:pointer;transition:background-color 110ms ease,color 110ms ease;& svg{width:12px;height:12px;}&:hover{background-color:$W.09);color:var(--foreground);}}',
-'& $Cbody{max-height:360px;overflow:auto;padding:4px 0;font-family:var(--ag-cs-mono-stack);font-size:12px;line-height:1.62;tab-size:2;scroll-behavior:smooth;}',
-'& $Cnote{padding:4px 12px 6px;margin-bottom:4px;border-bottom:1px solid $W.06);font-family:var(--font-sans);font-size:11px;line-height:1.45;color:var(--muted-foreground);opacity:.82;}',
+'& $Cbox{display:block;box-sizing:border-box;width:100%;max-width:100%;align-self:stretch;margin:0;padding:0;transform-origin:50% 0%;contain:layout style;&[data-ag-diff-anim="1"]{will-change:transform,opacity;animation:ag-cs-diff-unfold 150ms var(--ag-ease-out,cubic-bezier(.16,1,.3,1)) both;}&[data-ag-diff-state="closing"]{will-change:transform,opacity;pointer-events:none;animation:ag-cs-diff-fold 120ms cubic-bezier(.32,0,.67,0) forwards;}&[data-ag-diff-expanded="1"] $Cbody{max-height:540px;}}',
+'& $Ccard{position:relative;margin:6px 0 12px;padding:0;border-radius:10px;border:1px solid $W.085);background-color:rgba(10,11,14,.92);background-image:radial-gradient(85% 52px at 50% 0%,$W.042),transparent);box-shadow:inset 0 1px 0 $W.095),0 14px 34px -12px rgba(0,0,0,.64);overflow:hidden;&:hover $Cfloat-acts{opacity:.96;}}',
+'& $Cfloat-acts{position:absolute;top:6px;right:8px;z-index:3;display:inline-flex;align-items:center;gap:2px;padding:2px;border-radius:6px;background:rgba(12,14,18,.78);border:1px solid $W.08);box-shadow:inset 0 1px 0 $W.07),0 4px 12px -4px rgba(0,0,0,.5);opacity:.38;transition:opacity 140ms ease;&:focus-within{opacity:.96;}}',
+'& $Cact-btn{appearance:none;display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0;border:0;border-radius:4px;background:transparent;color:var(--muted-foreground);cursor:pointer;transition:background-color 110ms ease,color 110ms ease;& svg{width:12px;height:12px;}&:hover{background-color:$W.10);color:var(--foreground);}}',
+'& $Cbody{max-height:360px;overflow:auto;padding:6px 0;font-family:var(--ag-cs-mono-stack);font-size:12px;line-height:1.62;tab-size:2;scroll-behavior:smooth;}',
+'& $Cnote{padding:4px 58px 6px 14px;margin-bottom:4px;border-bottom:1px solid $W.06);font-family:var(--font-sans);font-size:11px;line-height:1.45;color:var(--muted-foreground);opacity:.78;}',
 '& $Cwrap-tag{display:inline-flex;align-items:center;height:15px;padding:0 5px;margin:auto 12px auto 4px;border-radius:3px;background:$W.05);border:1px solid $W.09);color:var(--muted-foreground);font-family:var(--font-sans);font-size:10px;line-height:1;flex-shrink:0;}',
-'& $Cmore-bar{appearance:none;display:flex;align-items:center;justify-content:center;width:100%;padding:6px 12px 3px;margin-top:4px;border:0;border-top:1px solid $W.06);background:transparent;color:var(--muted-foreground);font-family:var(--font-sans);font-size:11px;cursor:pointer;transition:color 120ms ease;&:hover{color:var(--foreground);}}',
-'& $Cline{display:flex;align-items:stretch;min-width:100%;width:max-content;box-sizing:border-box;white-space:pre;color:color-mix(in srgb,var(--secondary-foreground) 88%,transparent);&:is(.is-add,.is-del) $Csign{font-weight:600;opacity:1;&.is-cont{opacity:.42;font-weight:400;text-shadow:none$I;}}&.is-add{background:linear-gradient(90deg,rgba(46,160,67,.16) 0%,rgba(46,160,67,.10) 45%,rgba(46,160,67,.05) 100%)$I;color:var(--foreground);& $Cln{background-color:rgba(22,52,32,.96);color:rgba(134,239,172,.90);box-shadow:inset 2px 0 0 #3FB950;}& $Csign{color:#56D364$I;}}&.is-del{background:linear-gradient(90deg,rgba(248,81,73,.15) 0%,rgba(248,81,73,.09) 45%,rgba(248,81,73,.045) 100%)$I;color:color-mix(in srgb,var(--foreground) 92%,transparent);& $Cln{background-color:rgba(56,22,26,.96);color:rgba(252,165,165,.90);box-shadow:inset 2px 0 0 #F85149;}& $Csign{color:#FF7B72$I;}}&.is-hunk{align-items:center;height:21px;margin:2px 0;background-color:rgba(96,165,250,.085);border-top:1px solid rgba(147,197,253,.14);border-bottom:1px solid rgba(147,197,253,.14);& $Cln{height:100%;display:inline-flex;align-items:center;justify-content:center;background-color:rgba(20,28,42,.96);color:rgba(147,197,253,.78);padding:0 8px;}}}',
-'& $Cgap-rule{flex:1 1 auto;height:1px;margin:0 14px;background:linear-gradient(90deg,rgba(147,197,253,.24),rgba(147,197,253,.04));pointer-events:none;}',
-'& $Cln{position:sticky;left:0;z-index:1;flex:none;width:48px;box-sizing:border-box;padding:0 10px 0 8px;text-align:right;background-color:rgba(13,15,20,.97);border-right:1px solid $W.075);color:rgba(148,163,184,.52);user-select:none;font-variant-numeric:tabular-nums;font-size:11px;}',
-'& $Csign{flex:none;width:20px;text-align:center;user-select:none;opacity:.78;}& $Ccode{flex:1 1 auto;min-width:0;padding:0 16px 0 3px;}',
-'& $Cloading{display:flex;align-items:center;gap:10px;height:30px;padding:0 14px;font-family:var(--font-sans);font-size:11.5px;color:var(--muted-foreground);&::before{content:"";width:38px;height:2.5px;border-radius:999px;background:color-mix(in srgb,var(--primary) 46%,var(--ag-cs-border-2));animation:ag-cs-diff-pulse 1.2s ease-in-out infinite;}}',
-'& $Cempty{padding:10px 14px;font-family:var(--font-sans);font-size:12px;line-height:1.5;color:var(--muted-foreground);}',
+'& $Cmore-bar{appearance:none;display:flex;align-items:center;justify-content:center;width:100%;padding:6px 12px 3px;margin-top:4px;border:0;border-top:1px solid $W.06);background:transparent;color:var(--muted-foreground);font-family:var(--font-sans);font-size:11px;cursor:pointer;transition:color 120ms ease,background-color 120ms ease;&:hover{color:var(--foreground);background-color:$W.028);}&:disabled{opacity:.6;cursor:wait;}}',
+'& $Cline{display:flex;align-items:stretch;min-width:100%;width:max-content;box-sizing:border-box;white-space:pre;color:color-mix(in srgb,var(--secondary-foreground) 86%,transparent);&:is(.is-add,.is-del) $Csign{font-weight:600;opacity:1;&.is-cont{opacity:.42;font-weight:400;text-shadow:none$I;}}&.is-add{background:linear-gradient(90deg,rgba(46,184,92,.16) 0%,rgba(46,184,92,.09) 42%,rgba(46,184,92,.045) 100%)$I;color:var(--foreground);& $Cln{background-color:rgba(18,44,28,.96);color:rgba(134,239,172,.88);box-shadow:inset 2px 0 0 #4ADE80,inset 7px 0 12px -4px rgba(74,222,128,.34);}& $Csign{color:#6EE7B7$I;text-shadow:0 0 9px rgba(74,222,128,.62),0 0 2px rgba(167,243,208,.45);}}&.is-del{background:linear-gradient(90deg,rgba(239,68,68,.15) 0%,rgba(239,68,68,.085) 42%,rgba(239,68,68,.04) 100%)$I;color:color-mix(in srgb,var(--foreground) 92%,transparent);& $Cln{background-color:rgba(48,20,24,.96);color:rgba(252,165,165,.88);box-shadow:inset 2px 0 0 #F87171,inset 7px 0 12px -4px rgba(248,113,113,.32);}& $Csign{color:#FCA5A5$I;text-shadow:0 0 9px rgba(248,113,113,.60),0 0 2px rgba(254,202,202,.42);}}&.is-hunk{align-items:center;height:22px;margin:3px 0;background-color:$W.022);border-top:1px solid $W.05);border-bottom:1px solid $W.05);& $Cln{height:100%;display:inline-flex;align-items:center;justify-content:center;background-color:rgba(14,15,19,.96);color:$W.40);padding:0 8px;}}}',
+'& $Cgap-rule{flex:1 1 auto;height:1px;margin:0 16px;background:linear-gradient(90deg,$W.09),$W.02));pointer-events:none;}',
+'& $Cln{position:sticky;left:0;z-index:1;flex:none;width:46px;box-sizing:border-box;padding:0 10px 0 8px;text-align:right;background-color:rgba(12,13,17,.96);border-right:1px solid $W.06);color:$W.36);user-select:none;font-variant-numeric:tabular-nums;font-size:11px;}',
+'& $Csign{flex:none;width:22px;text-align:center;user-select:none;opacity:.76;}& $Ccode{flex:1 1 auto;min-width:0;padding:0 16px 0 2px;}',
+'& $Cloading{display:flex;align-items:center;gap:10px;height:30px;padding:0 58px 0 14px;font-family:var(--font-sans);font-size:11.5px;color:var(--muted-foreground);&::before{content:"";width:38px;height:2.5px;border-radius:999px;background:color-mix(in srgb,var(--primary) 46%,var(--ag-cs-border-2));animation:ag-cs-diff-pulse 1.2s ease-in-out infinite;}}',
+'& $Cempty{padding:10px 58px 10px 14px;font-family:var(--font-sans);font-size:12px;line-height:1.5;color:var(--muted-foreground);}',
 '& .ag-cs-diff-ctx-menu{position:fixed;z-index:9999;min-width:184px;padding:4px;border-radius:10px;background-color:rgba(14,16,22,.96);background-image:linear-gradient(rgba(164,196,255,.05) 0%,transparent 44%);backdrop-filter:blur(16px) saturate(140%);border:1px solid rgba(214,226,255,.12);box-shadow:inset 0 1px 0 rgba(232,240,255,.12),0 18px 40px -10px rgba(0,0,0,.64);display:flex;flex-direction:column;gap:2px;animation:ag-cs-diff-in 110ms var(--ag-ease-out,ease-out);}',
 '& .ag-cs-diff-ctx-item{appearance:none;width:100%;height:28px;padding:0 9px;border:0;border-radius:7px;background:transparent;color:var(--secondary-foreground);font-family:var(--font-sans);font-size:12px;font-weight:450;display:flex;align-items:center;gap:8px;cursor:pointer;text-align:left;white-space:nowrap;transition:background-color 110ms ease,color 110ms ease;& svg{width:13px;height:13px;flex-shrink:0;opacity:.78;}&:hover{background-color:rgba(164,196,255,.09);color:var(--foreground);& svg{opacity:1;}}}',
 '}',
 '$H[data-ag-cs-theme="light"],$H>body:is(.theme-light,.light-theme,.light){',
 '& [data-ag-diff-chip="1"]{background:transparent$I;border-color:transparent$I;box-shadow:none$I;& [data-ag-diff-chip-file="1"]{text-decoration-color:$L.20);}&:hover{background-color:$L.048)$I;& [data-ag-diff-chip-file="1"]{text-decoration-color:$L.42)$I;}}&[data-ag-inline-diff-open="1"]{background-color:$L.068)$I;box-shadow:inset 0 -1px 0 $L.24)$I;}}',
 '& [data-testid="diff-line-count"]{& [data-ag-diff-stat="add"]{color:#15803D$I;text-shadow:none;}& [data-ag-diff-stat="del"]{color:#B91C1C$I;text-shadow:none;}& [data-ag-diff-stat="zero"]{color:$L.34)$I;text-shadow:none;}}',
-'& $Ccard{background:#FAFBFD;border-color:$L.12);box-shadow:0 8px 22px -10px $L.12);}& $Cbar{background-color:$L.032);border-bottom-color:$L.08);}',
-'& $Cstats{background:$L.045);border-color:$L.09);}& $Cst-add{color:#15803D;}& $Cst-del{color:#B91C1C;}',
-'& $Csrc{background:rgba(100,116,139,.10);border-color:rgba(100,116,139,.22);color:#334155;&[data-ag-diff-src="step-patch"]{background:rgba(2,132,199,.10);border-color:rgba(2,132,199,.24);color:#0369A1;}&[data-ag-diff-src="git-diff"]{background:rgba(22,163,74,.10);border-color:rgba(22,163,74,.24);color:#15803D;}&[data-ag-diff-src="snapshot"]{background:rgba(217,119,6,.10);border-color:rgba(217,119,6,.24);color:#B45309;}}',
-'& $Cact-btn:hover{background-color:$L.08);}& $Cmore-bar{border-top-color:$L.08);}& $Cwrap-tag{background:$L.045);border-color:$L.10);}& $Cln{background-color:#F3F5F9;border-right-color:$L.09);color:rgba(71,85,105,.68);}',
+'& $Ccard{background:#FAFBFD;border-color:$L.10);box-shadow:0 8px 22px -10px $L.11);}& $Cfloat-acts{background:rgba(250,251,253,.88);border-color:$L.10);box-shadow:0 2px 8px -2px $L.12);}',
+'& $Cact-btn:hover{background-color:$L.08);}& $Cmore-bar{border-top-color:$L.08);&:hover{background-color:$L.03);}}& $Cwrap-tag{background:$L.045);border-color:$L.10);}& $Cln{background-color:#F3F5F9;border-right-color:$L.08);color:rgba(71,85,105,.64);}',
 '& .ag-cs-diff-ctx-menu{background:rgba(252,253,255,.96);border-color:$L.12);box-shadow:0 12px 30px -8px $L.16),0 0 0 1px $L.06);& .ag-cs-diff-ctx-item:hover{background-color:rgba(37,99,235,.07);}}',
-'& $Cline{&:is(.is-add,.is-del) $Csign{font-weight:600;opacity:1;text-shadow:none;&.is-cont{opacity:.38;font-weight:400;}}&.is-add{background:rgba(22,163,74,.10)$I;& $Cln{background-color:#E6F6EC;color:#15803D;box-shadow:inset 2px 0 0 #16A34A;}& $Csign{color:#15803D$I;}}&.is-del{background:rgba(220,38,38,.09)$I;& $Cln{background-color:#FDECEC;color:#B91C1C;box-shadow:inset 2px 0 0 #DC2626;}& $Csign{color:#B91C1C$I;}}}',
-'& $Cline.is-hunk{background-color:rgba(59,130,246,.075);border-color:rgba(59,130,246,.16);& $Cln{background-color:#EBF2FE;color:#3B82F6;}}& $Cgap-rule{background:linear-gradient(90deg,rgba(59,130,246,.26),rgba(59,130,246,.05));}',
+'& $Cline{&:is(.is-add,.is-del) $Csign{font-weight:600;opacity:1;text-shadow:none;&.is-cont{opacity:.38;font-weight:400;}}&.is-add{background:rgba(22,163,74,.095)$I;& $Cln{background-color:#E7F6EC;color:#15803D;box-shadow:inset 2px 0 0 #16A34A;}& $Csign{color:#15803D$I;}}&.is-del{background:rgba(220,38,38,.088)$I;& $Cln{background-color:#FDECEC;color:#B91C1C;box-shadow:inset 2px 0 0 #DC2626;}& $Csign{color:#B91C1C$I;}}}',
+'& $Cline.is-hunk{background-color:$L.026);border-color:$L.065);& $Cln{background-color:#EEF1F6;color:rgba(71,85,105,.58);}}& $Cgap-rule{background:linear-gradient(90deg,$L.12),$L.03));}',
 '}',
 '@media (prefers-reduced-motion:reduce){:root:not([data-ag-cs-ignore-rm="1"]) :is($Cloading::before,.ag-cs-diff-ctx-menu){animation:none$I;}:root:not([data-ag-cs-ignore-rm="1"]) .ag-cs-diff-ctx-menu{backdrop-filter:none$I;}$H:not([data-ag-cs-ignore-rm="1"]):not([data-ag-cs-motion="ultra"]):not([data-ag-cs-motion="standard"]) $Cbox{animation:none$I;filter:none$I;}}',
 '$H[data-ag-cs-win-blur="1"] $Cloading::before{animation-play-state:paused$I;}',
@@ -63,7 +58,8 @@ const NO_TR_ATTRS = [['translate', 'no'], ['data-no-translate', 'true'], ['data-
 const S_CNT = '[data-testid="diff-line-count"]', S_CHG = '[data-testid="changed-files-card"]', P = 'ag-cs-inline-diff-';
 const ga = (e, k) => e?.getAttribute?.(k), sa = (e, k, v) => e?.setAttribute?.(k, String(v)), ra = (e, k) => e?.removeAttribute?.(k);
 const qs = (e, s) => e?.querySelector?.(s) || null, qa = (e, s) => e?.querySelectorAll?.(s) || [], cl = (e, s) => e?.closest?.(s) || null;
-const tagU = (e) => String(e?.tagName || '').toUpperCase(), isEl = (n) => Boolean(n && (n.nodeType === 1 || (n.nodeType === undefined && typeof n.tagName === 'string')));
+const isStr = (v) => typeof v === 'string', isObj = (v) => Boolean(v && typeof v === 'object'), stopEv = (e) => { e?.preventDefault?.(); e?.stopPropagation?.(); };
+const tagU = (e) => String(e?.tagName || '').toUpperCase(), isEl = (n) => Boolean(n && (n.nodeType === 1 || (n.nodeType === undefined && isStr(n.tagName))));
 const trunc = (s) => { const v = String(s ?? ''); return v.length > MAX_LINE_CHARS ? v.slice(0, MAX_LINE_CHARS - 1) + '…' : v; };
 
 function markNoTrOwned(el) {
@@ -88,7 +84,7 @@ const ls = s.split(/\r?\n/);
 return ls.length >= 2 && ls.some((l) => l[0] === '+' || l[0] === '-') && ls.every((l) => !l || l[0] === '+' || l[0] === '-' || l[0] === ' ' || l.startsWith('@@') || l[0] === '\\');
 }
 
-function parseUnifiedDiffLines(rawText, maxLines = 160) {
+function parseUnifiedDiffLines(rawText, maxLines = MAX_CLIENT_LINES) {
 const raw = String(rawText || '');
 if (raw.length > MAX_BYTES) return [];
 const ls = raw.replace(/\r\n/g, '\n').split('\n'), out = [];
@@ -112,7 +108,15 @@ if (arr.length > 1 && arr[arr.length - 1] === '') arr.pop();
 return arr;
 }
 
-function buildPairDiffLines(oldText, newText, startLine = 1, maxLines = 160) {
+function buildNewFileLines(rawText, maxLines = MAX_CLIENT_LINES) {
+const raw = String(rawText || '');
+if (!raw || raw.length > MAX_BYTES) return { lines: [], total: 0 };
+const ls = splitDiffLines(raw), out = [];
+for (let i = 0; i < ls.length && out.length < maxLines; i++) out.push({ kind: 'add', ln: String(i + 1), sign: '+', text: trunc(ls[i]) });
+return { lines: out, total: ls.length };
+}
+
+function buildPairDiffLines(oldText, newText, startLine = 1, maxLines = MAX_CLIENT_LINES) {
 const sO = String(oldText || ''), sN = String(newText || '');
 if (sO === sN || sO.length + sN.length > MAX_BYTES) return [];
 const base = Math.max(1, Number(startLine) || 1), a = splitDiffLines(sO), b = splitDiffLines(sN), out = [];
@@ -160,9 +164,9 @@ for (let i = sbI + 1, te = Math.min(b.length, sbI + 3); i < te; i++) push('ctx',
 return out;
 }
 
-function normLines(arr) {
+function normLines(arr, maxLines = MAX_CLIENT_LINES) {
 const out = [];
-for (let i = 0; i < arr.length && out.length < 160; i++) {
+for (let i = 0; i < arr.length && out.length < maxLines; i++) {
 const it = arr[i];
 if (!it || typeof it !== 'object') continue;
 const rk = String(it.kind || it.type || '').toLowerCase();
@@ -172,7 +176,7 @@ out.push({ kind, ln: String(it.ln ?? it.lineNumber ?? it.newLine ?? it.oldLine ?
 return out;
 }
 
-function parseHunks(hunks, maxLines = 160) {
+function parseHunks(hunks, maxLines = MAX_CLIENT_LINES) {
 const out = [];
 for (let i = 0; i < hunks.length && out.length < maxLines; i++) {
 const h = hunks[i];
@@ -185,7 +189,7 @@ if (typeof ln === 'string') {
 if (ln[0] === '+') out.push({ kind: 'add', ln: String(nLn++), sign: '+', text: trunc(ln.slice(1)) });
 else if (ln[0] === '-') out.push({ kind: 'del', ln: String(oLn++), sign: '-', text: trunc(ln.slice(1)) });
 else { out.push({ kind: 'ctx', ln: String(nLn++), sign: ' ', text: trunc(ln[0] === ' ' ? ln.slice(1) : ln) }); oLn++; }
-} else if (ln && typeof ln === 'object') { const nm = normLines([ln]); if (nm.length) out.push(nm[0]); }
+} else if (ln && typeof ln === 'object') { const nm = normLines([ln], 1); if (nm.length) out.push(nm[0]); }
 }
 }
 return out;
@@ -195,126 +199,127 @@ const PAIR_KEYS = [['TargetContent', 'ReplacementContent'], ['targetContent', 'r
 const DIFF_STR_KEYS = ['unifiedDiff', 'unified_diff', 'unified', 'diff', 'patch', 'diffText', 'rawDiff', 'gitDiff', 'codeDiff'];
 const CHUNK_KEYS = ['ReplacementChunks', 'replacementChunks', 'replacement_chunks', 'edits', 'chunks', 'changes'];
 const URI_KEYS = ['uri', 'fileUri', 'filePath', 'TargetFile', 'targetFile', 'target_file', 'AbsolutePath', 'absolutePath', 'path', 'Path'];
-const SKIP_KEYS = new Set(['return', 'child', 'sibling', 'alternate', 'stateNode', '_owner', 'ownerDocument', 'parentNode', 'parentElement', 'children', 'props']);
+const PRIO_KEYS = ['step', 'value', 'args', 'result', 'data', 'contentBlocks', 'fileDiff', 'diff', 'toolCall', 'edit', 'payload'];
+const SKIP_KEYS = new Set(['return', 'child', 'sibling', 'alternate', 'stateNode', '_owner', 'ownerDocument', 'parentNode', 'parentElement', 'children', 'props', 'metadata', 'lexicalEditor', 'userStatus', 'cascadeModelConfigData', 'tokenizationService', 'customLinks', 'chatPills']);
+const CREATED_TOOL_RE = /^(?:write_file|write_to_file|create_file|create_new_file)$/i;
+const CREATED_ROW_RE = /(?:^|[\s\u3000:])(?:Created|Wrote)(?=[\s\u3000:]|$)|已创建|创建了|新建/i;
 
-function extractPair(obj, maxLines = 160) {
-if (!obj || typeof obj !== 'object') return [];
+function extractPair(obj, maxLines = MAX_CLIENT_LINES) {
+if (!isObj(obj)) return [];
 const sl = Number(obj.StartLine ?? obj.startLine ?? obj.start_line ?? obj.lineNumber ?? obj.oldStart) || 1;
 for (let i = 0; i < PAIR_KEYS.length; i++) {
 const ov = obj[PAIR_KEYS[i][0]], nv = obj[PAIR_KEYS[i][1]];
-if ((typeof ov === 'string' || typeof nv === 'string') && (ov || nv) && ov !== nv) {
-const built = buildPairDiffLines(typeof ov === 'string' ? ov : '', typeof nv === 'string' ? nv : '', sl, maxLines);
+if ((isStr(ov) || isStr(nv)) && (ov || nv) && ov !== nv) {
+const built = buildPairDiffLines(isStr(ov) ? ov : '', isStr(nv) ? nv : '', sl, maxLines);
 if (built.length) return built;
 }
 }
 return [];
 }
-
-function extractChunks(chunks, maxLines = 160) {
+function extractChunks(chunks, maxLines = MAX_CLIENT_LINES) {
 if (!Array.isArray(chunks) || !chunks.length) return [];
 const out = [];
 for (let i = 0; i < chunks.length && out.length < maxLines; i++) {
 const ch = chunks[i];
-if (!ch || typeof ch !== 'object') continue;
-const seg = typeof ch.unifiedDiff === 'string' && isLikelyUnifiedDiff(ch.unifiedDiff) ? parseUnifiedDiffLines(ch.unifiedDiff, maxLines - out.length) : typeof ch.diff === 'string' && isLikelyUnifiedDiff(ch.diff) ? parseUnifiedDiffLines(ch.diff, maxLines - out.length) : extractPair(ch, maxLines - out.length);
+if (!isObj(ch)) continue;
+const seg = isStr(ch.unifiedDiff) && isLikelyUnifiedDiff(ch.unifiedDiff) ? parseUnifiedDiffLines(ch.unifiedDiff, maxLines - out.length) : isStr(ch.diff) && isLikelyUnifiedDiff(ch.diff) ? parseUnifiedDiffLines(ch.diff, maxLines - out.length) : extractPair(ch, maxLines - out.length);
 if (seg.length) {
 if (out.length > 0 && out.length < maxLines) out.push({ kind: 'hunk', ln: '', sign: '@@', text: `@@ -${Number(ch.StartLine ?? ch.startLine ?? 1) || 1} @@` });
 for (let j = 0; j < seg.length && out.length < maxLines; j++) out.push(seg[j]);
 }
 }
-if (out.length) return out;
-return chunks.some((c) => c && typeof c === 'object' && (c.kind || c.type) && (c.text !== undefined || c.content !== undefined || c.value !== undefined || c.line !== undefined)) ? normLines(chunks) : [];
+return out.length ? out : chunks.some((c) => isObj(c) && (c.kind || c.type) && (c.text !== undefined || c.content !== undefined || c.value !== undefined || c.line !== undefined)) ? normLines(chunks, maxLines) : [];
 }
-
-const isPathStr = (v) => typeof v === 'string' && Boolean(v.trim()) && v.length <= 1024 && (v.trim().startsWith('file:') || v.includes('/') || v.includes('\\') || /^[A-Za-z0-9._-]+\.[A-Za-z0-9]{1,8}$/.test(v.trim()));
-
+const isPathStr = (v) => isStr(v) && Boolean(v.trim()) && v.length <= 1024 && (v.trim().startsWith('file:') || v.includes('/') || v.includes('\\') || /^[A-Za-z0-9._-]+\.[A-Za-z0-9]{1,8}$/.test(v.trim()));
 function scanObj(rootObj, st) {
-if (!rootObj || typeof rootObj !== 'object') return;
+if (!isObj(rootObj)) return;
 const q = [{ obj: rootObj, d: 0 }];
-while (q.length && st.nodes < 96) {
+while (q.length && st.nodes < 220) {
 const { obj, d } = q.shift();
-if (!obj || typeof obj !== 'object' || st.visited.has(obj) || obj.nodeType === 1 || obj.nodeType === 9 || typeof obj.addEventListener === 'function') continue;
+if (!isObj(obj) || st.visited.has(obj) || obj.nodeType === 1 || obj.nodeType === 9 || typeof obj.addEventListener === 'function') continue;
 st.visited.add(obj); st.nodes++;
-if (!st.uri) for (let i = 0; i < URI_KEYS.length; i++) { const v = obj[URI_KEYS[i]]; if (isPathStr(v)) { st.uri = v.trim(); if (!st.fileName) st.fileName = basenameFromUri(st.uri); break; } }
+let hasOwnPath = false;
+for (let i = 0; i < URI_KEYS.length; i++) { const v = obj[URI_KEYS[i]]; if (isPathStr(v)) { hasOwnPath = true; if (!st.uri) { st.uri = v.trim(); if (!st.fileName) st.fileName = basenameFromUri(st.uri); } break; } }
 if (!st.fileName && isPathStr(obj.file)) st.fileName = basenameFromUri(obj.file);
-if (!st.stepCtx && obj.diffContext && typeof obj.diffContext === 'object') st.stepCtx = obj.diffContext;
+if (!st.stepCtx && isObj(obj.diffContext)) st.stepCtx = obj.diffContext;
+if (CREATED_TOOL_RE.test(String(obj.toolName || obj.tool || obj.name || '')) || obj.isCreated === true || obj.isNewFile === true || obj.newFile === true) st.isCreated = true;
 const ds = obj.diffStats || obj.stats || obj;
-if (ds && typeof ds === 'object') {
+if (isObj(ds)) {
 const a = Number(ds.additions ?? ds.linesAdded), dl = Number(ds.deletions ?? ds.linesRemoved);
 if (!st.additions && Number.isFinite(a) && a > 0) st.additions = Math.trunc(a);
 if (!st.deletions && Number.isFinite(dl) && dl > 0) st.deletions = Math.trunc(dl);
 }
-if (!st.lines.length) for (let i = 0; i < DIFF_STR_KEYS.length; i++) { const dv = obj[DIFF_STR_KEYS[i]]; if (typeof dv === 'string' && isLikelyUnifiedDiff(dv)) { const ps = parseUnifiedDiffLines(dv); if (ps.length) { st.lines = ps; break; } } }
-if (!st.lines.length && Array.isArray(obj.hunks) && obj.hunks.length) st.lines = parseHunks(obj.hunks);
-if (!st.lines.length) for (let i = 0; i < CHUNK_KEYS.length; i++) if (Array.isArray(obj[CHUNK_KEYS[i]]) && obj[CHUNK_KEYS[i]].length) { const ex = extractChunks(obj[CHUNK_KEYS[i]]); if (ex.length) { st.lines = ex; break; } }
-if (!st.lines.length) { const pl = extractPair(obj); if (pl.length) st.lines = pl; }
+if (!st.lines.length) for (let i = 0; i < DIFF_STR_KEYS.length; i++) { const dv = obj[DIFF_STR_KEYS[i]]; if (isStr(dv) && isLikelyUnifiedDiff(dv)) { const ps = parseUnifiedDiffLines(dv, MAX_CLIENT_LINES); if (ps.length) { st.lines = ps; break; } } }
+if (!st.lines.length && Array.isArray(obj.hunks) && obj.hunks.length) st.lines = parseHunks(obj.hunks, MAX_CLIENT_LINES);
+if (!st.lines.length) for (let i = 0; i < CHUNK_KEYS.length; i++) if (Array.isArray(obj[CHUNK_KEYS[i]]) && obj[CHUNK_KEYS[i]].length) { const ex = extractChunks(obj[CHUNK_KEYS[i]], MAX_CLIENT_LINES); if (ex.length) { st.lines = ex; break; } }
+if (!st.lines.length) { const pl = extractPair(obj, MAX_CLIENT_LINES); if (pl.length) st.lines = pl; }
+if (!st.lines.length && !st.writeLines.length && !obj.Append && (hasOwnPath || st.isCreated) && !PAIR_KEYS.some((p) => isStr(obj[p[0]]) && obj[p[0]].length > 0)) {
+const expC = isStr(obj.Content) ? obj.Content : isStr(obj.CodeContent) ? obj.CodeContent : '', cv = expC || (st.isCreated && isStr(obj.content) ? obj.content : '');
+if (cv && cv.length <= MAX_BYTES) { const built = buildNewFileLines(cv, MAX_CLIENT_LINES); if (built.lines.length) { st.writeLines = built.lines; st.writeTotal = built.total; if (expC) st.isCreated = true; } }
+}
 if (st.lines.length && st.uri) return;
-if (d >= 5) continue;
-if (Array.isArray(obj)) { for (let i = 0; i < Math.min(obj.length, 8); i++) if (obj[i] && typeof obj[i] === 'object') q.push({ obj: obj[i], d: d + 1 }); }
-else { const ks = Object.keys(obj); for (let i = 0; i < Math.min(ks.length, 28); i++) { const k = ks[i]; if (!SKIP_KEYS.has(k) && !k.startsWith('__react') && obj[k] && typeof obj[k] === 'object') q.push({ obj: obj[k], d: d + 1 }); } }
+if (d >= 8) continue;
+if (Array.isArray(obj)) { for (let i = 0; i < Math.min(obj.length, 12); i++) if (isObj(obj[i])) q.push({ obj: obj[i], d: d + 1 }); }
+else {
+const seenK = new Set();
+for (let i = 0; i < PRIO_KEYS.length; i++) { const k = PRIO_KEYS[i]; if (isObj(obj[k])) { seenK.add(k); q.push({ obj: obj[k], d: d + 1 }); } }
+const ks = Object.keys(obj);
+for (let i = 0; i < Math.min(ks.length, 40); i++) { const k = ks[i]; if (!seenK.has(k) && !SKIP_KEYS.has(k) && !k.startsWith('__react') && isObj(obj[k])) q.push({ obj: obj[k], d: d + 1 }); }
 }
 }
-
+}
 function extractInlineDiffPayload(badgeEl, rowEl, winRef) {
-let uri = '', fileName = '', additions = 0, deletions = 0, lines = [], source = '';
+let uri = '', fileName = '', additions = 0, deletions = 0, lines = [], totalLines = 0, source = '', isCreated = false, writeLines = [], writeTotal = 0;
 const uAttr = ga(badgeEl, 'data-ag-diff-uri') || ga(rowEl, 'data-ag-diff-uri');
-if (typeof uAttr === 'string' && uAttr.trim()) { uri = uAttr.trim(); fileName = basenameFromUri(uri); }
+if (isStr(uAttr) && uAttr.trim()) { uri = uAttr.trim(); fileName = basenameFromUri(uri); }
 const rawJson = ga(badgeEl, 'data-ag-diff-json') || ga(rowEl, 'data-ag-diff-json');
 if (rawJson && rawJson.length <= MAX_BYTES) {
 try {
 const p = JSON.parse(rawJson);
-if (p && typeof p === 'object') {
-if (!uri) { const c = p.uri || p.filePath || p.path; if (typeof c === 'string' && c.trim()) uri = c.trim(); }
-if (typeof p.file === 'string') fileName = basenameFromUri(p.file);
+if (isObj(p)) {
+if (!uri) { const c = p.uri || p.filePath || p.path; if (isStr(c) && c.trim()) uri = c.trim(); }
+if (isStr(p.file)) fileName = basenameFromUri(p.file);
 if (!fileName && uri) fileName = basenameFromUri(uri);
 if (typeof p.additions === 'number') additions = p.additions;
 if (typeof p.deletions === 'number') deletions = p.deletions;
-if (Array.isArray(p.lines)) lines = normLines(p.lines);
-else if (typeof p.unified === 'string' || typeof p.unifiedDiff === 'string') lines = parseUnifiedDiffLines(p.unified || p.unifiedDiff);
-else lines = extractPair(p);
+if (p.isCreated === true || p.isNewFile === true) isCreated = true;
+lines = Array.isArray(p.lines) ? normLines(p.lines, MAX_CLIENT_LINES) : (isStr(p.unified) || isStr(p.unifiedDiff)) ? parseUnifiedDiffLines(p.unified || p.unifiedDiff, MAX_CLIENT_LINES) : extractPair(p, MAX_CLIENT_LINES);
 if (lines.length) source = 'step-patch';
 }
 } catch {}
 }
 if ((!lines.length || !uri) && (badgeEl || rowEl)) {
 try {
-const st = { uri, fileName, additions, deletions, lines, stepCtx: null, visited: new WeakSet(), nodes: 0 };
+const st = { uri, fileName, additions, deletions, lines, writeLines: [], writeTotal: 0, isCreated, stepCtx: null, visited: new WeakSet(), nodes: 0 };
 const scanNode = (el, maxUp) => {
 if (!el) return;
 const fk = Object.keys(el).find((k) => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
 for (let d = 0, f = fk ? el[fk] : null; d < maxUp && f; d++, f = f.return) {
-if (f.memoizedProps && typeof f.memoizedProps === 'object') scanObj(f.memoizedProps, st);
-if (!st.lines.length && f.memoizedState && typeof f.memoizedState === 'object') {
-for (let hs = 0, h = f.memoizedState; hs < 10 && h && typeof h === 'object'; hs++, h = h.next) {
-if (h.memoizedState && typeof h.memoizedState === 'object') scanObj(h.memoizedState, st);
-if (st.lines.length && st.uri) break;
-}
-}
+if (isObj(f.memoizedProps)) scanObj(f.memoizedProps, st);
+if (!st.lines.length && isObj(f.memoizedState)) for (let hs = 0, h = f.memoizedState; hs < 10 && isObj(h); hs++, h = h.next) { if (isObj(h.memoizedState)) scanObj(h.memoizedState, st); if (st.lines.length && st.uri) break; }
 if (st.lines.length && st.uri) break;
 }
 };
 scanNode(badgeEl, 28);
 if (!st.lines.length || !st.uri) scanNode(rowEl, 16);
 uri = st.uri || uri; fileName = st.fileName || fileName; additions = st.additions || additions; deletions = st.deletions || deletions;
+isCreated = Boolean(isCreated || st.isCreated); writeLines = st.writeLines; writeTotal = st.writeTotal;
 if (st.lines.length) { lines = st.lines; source = 'step-patch'; }
 const W = winRef || (typeof window !== 'undefined' ? window : G);
 if (!lines.length && typeof W?.__agPrismResolveInlineDiff === 'function') {
 const ext = W.__agPrismResolveInlineDiff({ uri, fileName, additions, deletions, diffContext: st.stepCtx, badgeEl, rowEl });
-if (Array.isArray(ext?.lines)) lines = normLines(ext.lines);
-else if (typeof ext?.unified === 'string') lines = parseUnifiedDiffLines(ext.unified);
+lines = Array.isArray(ext?.lines) ? normLines(ext.lines, MAX_CLIENT_LINES) : isStr(ext?.unified) ? parseUnifiedDiffLines(ext.unified, MAX_CLIENT_LINES) : [];
 if (lines.length) source = 'step-patch';
 }
 } catch {}
 }
-if (!additions && !deletions) {
-const txt = String(badgeEl?.textContent || ''), am = txt.match(/\+(\d+)/), dm = txt.match(/-(\d+)/);
-if (am) additions = Number(am[1]) || 0;
-if (dm) deletions = Number(dm[1]) || 0;
-}
+if (!additions && !deletions) { const txt = String(badgeEl?.textContent || ''), am = txt.match(/\+(\d+)/), dm = txt.match(/-(\d+)/); if (am) additions = Number(am[1]) || 0; if (dm) deletions = Number(dm[1]) || 0; }
+if (!isCreated && (ga(badgeEl, 'data-ag-diff-created') === '1' || ga(rowEl, 'data-ag-diff-created') === '1' || (deletions === 0 && CREATED_ROW_RE.test(String(rowEl?.textContent || ''))))) isCreated = true;
+if (!lines.length && writeLines.length && (isCreated || deletions === 0)) { lines = writeLines; totalLines = writeTotal || writeLines.length; source = 'new-file'; isCreated = true; }
 if (lines.length && !additions && !deletions) for (let i = 0; i < lines.length; i++) { if (lines[i].kind === 'add') additions++; else if (lines[i].kind === 'del') deletions++; }
 if (!fileName && uri) fileName = basenameFromUri(uri);
 if (!fileName && rowEl) { const fm = String(rowEl.textContent || '').trim().match(/([A-Za-z0-9._-]+\.[A-Za-z0-9]{1,8})/); if (fm) fileName = fm[1]; }
-return { uri, fileName: fileName || 'Diff Preview', additions, deletions, lines, source };
+return { uri, fileName: fileName || 'Diff Preview', additions, deletions, lines, totalLines: totalLines || lines.length, source, isCreated };
 }
 
 const DIFF_FALLBACK = {
@@ -330,9 +335,8 @@ inlineDiffMenuExpand:{'zh-CN':'展开行内对比','zh-TW':'展開行內對比',
 inlineDiffMenuCollapse:{'zh-CN':'收起行内对比','zh-TW':'收合行內對比',en:'Collapse inline diff',ja:'インライン差分を閉じる',ko:'인라인 차이 접기',es:'Contraer diff en línea',fr:'Replier le diff en ligne',de:'Inline-Diff einklappen',tr:'Satır içi diff’i daralt'},
 inlineDiffMenuCopyPath:{'zh-CN':'复制文件路径','zh-TW':'複製檔案路徑',en:'Copy file path',ja:'ファイルパスをコピー',ko:'파일 경로 복사',es:'Copiar ruta del archivo',fr:'Copier le chemin du fichier',de:'Dateipfad kopieren',tr:'Dosya yolunu kopyala'},
 inlineDiffLargeExpandBtn:{'zh-CN':'⋯ 大文件仅节选关键片段 · 点击在右侧栏查看完整对比','zh-TW':'⋯ 大檔案僅節選關鍵片段 · 點擊在右側欄檢視完整對比',en:'⋯ Showing key hunks · Click to open full diff in Sidebar',ja:'⋯ 大きなファイルのため一部のみ表示 · クリックしてサイドバーで全体を見る',ko:'⋯ 대용량 파일 주요 변경만 표시 · 클릭하여 사이드바에서 전체 보기',es:'⋯ Mostrando fragmentos clave · Haz clic para abrir el diff completo',fr:'⋯ Extraits clés affichés · Cliquer pour ouvrir le diff complet',de:'⋯ Wichtige Bereiche angezeigt · Klicken für vollständigen Diff',tr:'⋯ Önemli bölümler gösteriliyor · Tam diff’i kenar çubuğunda açmak için tıklayın'},
-inlineDiffSrcPatch:{'zh-CN':'步骤补丁','zh-TW':'步驟修補',en:'Step patch',ja:'ステップ差分',ko:'단계 패치',es:'Parche del paso',fr:'Correctif',de:'Schritt-Patch',tr:'Adım yaması'},
-inlineDiffSrcGit:{'zh-CN':'Git 差异','zh-TW':'Git 差異',en:'Git diff',ja:'Git 差分',ko:'Git 차이',es:'Diff de Git',fr:'Diff Git',de:'Git-Diff',tr:'Git diff'},
-inlineDiffSrcSnapshot:{'zh-CN':'当前快照','zh-TW':'目前快照',en:'Snapshot',ja:'スナップショット',ko:'스냅샷',es:'Instantánea',fr:'Instantané',de:'Schnappschuss',tr:'Anlık görüntü'},
+inlineDiffExpandAll:{'zh-CN':'展开全部（剩余 {n} 行）','zh-TW':'展開全部（剩餘 {n} 行）',en:'Expand all ({n} more lines)',ja:'すべて展開（残り {n} 行）',ko:'전체 펼치기 ({n}줄 더 있음)',es:'Expandir todo ({n} líneas más)',fr:'Tout déplier ({n} lignes de plus)',de:'Alle ausklappen ({n} weitere Zeilen)',tr:'Tümünü genişlet ({n} satır daha)'},
+inlineDiffExpandAllPlain:{'zh-CN':'展开全部','zh-TW':'展開全部',en:'Expand all',ja:'すべて展開',ko:'전체 펼치기',es:'Expandir todo',fr:'Tout déplier',de:'Alle ausklappen',tr:'Tümünü genişlet'},
 };
 
 function createInlineDiffClient(options = {}) {
@@ -452,15 +456,19 @@ return bw === 0 ? cands.find((c) => c.classList?.contains?.('w-full')) || best :
 return spanHost || cl(badgeEl, 'button, [role="button"]') || badgeEl.parentElement || null;
 }
 
-function requestDaemon(uri, hints) {
+function requestDaemon(uri, hints, expand = false) {
 if (isDead() || !uri || typeof win?.__agPrismInlineDiffCall !== 'function') return null;
-const key = `${uri}|${Number(hints?.additions) || 0}:${Number(hints?.deletions) || 0}`, hit = cache.get(key);
+const isCr = Boolean(hints?.isCreated), expFlag = Boolean(expand);
+const key = `${uri}|${Number(hints?.additions) || 0}:${Number(hints?.deletions) || 0}|${isCr ? 1 : 0}|${expFlag ? 1 : 0}`, hit = cache.get(key);
 if (hit) { if (Date.now() - hit.at <= (hit.ttl || CACHE_TTL)) return { reqId: reqSeq++, cached: hit.resp, promise: Promise.resolve(hit.resp) }; cache.delete(key); }
 const ex = inflight.get(key);
 if (ex) return { reqId: reqSeq++, promise: ex };
 try { win.__agPrismInlineDiffResolve = onResolve; } catch {}
 while (pending.size >= MAX_PENDING) { const ok = pending.keys().next().value, o = pending.get(ok); pending.delete(ok); if (o?.timer) clearTimeout(o.timer); try { o?.resolve?.({ ok: false, error: 'evicted' }); } catch {} }
-const reqId = reqSeq++, ch = hints && (hints.additions > 0 || hints.deletions > 0) ? { additions: Math.max(0, Math.trunc(Number(hints.additions) || 0)), deletions: Math.max(0, Math.trunc(Number(hints.deletions) || 0)) } : undefined;
+const reqId = reqSeq++;
+const ch = hints && (hints.additions > 0 || hints.deletions > 0 || isCr)
+? { additions: Math.max(0, Math.trunc(Number(hints.additions) || 0)), deletions: Math.max(0, Math.trunc(Number(hints.deletions) || 0)), ...(isCr ? { isCreated: true } : {}) }
+: undefined;
 const promise = new Promise((resolve) => {
 const timer = setTimeout(() => { if (!pending.delete(reqId)) return; inflight.delete(key); resolve({ ok: false, error: 'timeout' }); }, TIMEOUT_MS);
 pending.set(reqId, {
@@ -477,53 +485,34 @@ resolve(resp);
 },
 timer,
 });
-try { win.__agPrismInlineDiffCall(JSON.stringify(ch ? { id: reqId, action: 'readInlineDiff', uri, hints: ch } : { id: reqId, action: 'readInlineDiff', uri })); }
+const reqObj = { id: reqId, action: 'readInlineDiff', uri };
+if (ch) reqObj.hints = ch;
+if (expFlag) reqObj.expand = true;
+try { win.__agPrismInlineDiffCall(JSON.stringify(reqObj)); }
 catch { const r = pending.get(reqId); if (r) { pending.delete(reqId); if (r.timer) clearTimeout(r.timer); } inflight.delete(key); resolve({ ok: false, error: 'rpc-error' }); }
 });
 if (inflight.size < 16) inflight.set(key, promise);
 return { reqId, promise };
 }
 
-function createTopBar(fileName, stepStats, srcMode, onOpenSb, onCollapse) {
-const fileEl = mk('span', P + 'file', fileName || 'Diff Preview'), statsEl = mk('span', P + 'stats'), srcEl = mk('span', P + 'src');
-const mkBtn = (act, ic, lbl, fn) => {
-const b = mk('button', P + 'act-btn', null, mkSvg(ic, 12));
-b.type = 'button'; sa(b, 'data-ag-diff-act', act); sa(b, 'title', lbl); sa(b, 'aria-label', lbl);
-b.addEventListener('click', (ev) => { ev.preventDefault?.(); ev.stopPropagation?.(); fn(); });
-return b;
-};
-const barEl = mk('div', P + 'bar', null, mk('div', P + 'meta', null, fileEl, statsEl, srcEl), mk('div', P + 'acts', null, mkBtn('sidebar', 'external', getUiText('inlineDiffOpenSidebar'), onOpenSb), mkBtn('collapse', 'close', getUiText('inlineDiffCollapse'), onCollapse)));
-const update = (nf, na, nd, nm) => {
-if (nf) fileEl.textContent = nf;
-while (statsEl.firstChild) statsEl.removeChild(statsEl.firstChild);
-const a = Math.max(0, Number(na) || 0), d = Math.max(0, Number(nd) || 0);
-if (a > 0 || d > 0) { statsEl.appendChild(mk('span', P + 'st-add', `+${a}`)); statsEl.appendChild(mk('span', P + 'st-del', `-${d}`)); if (statsEl.style) statsEl.style.display = ''; }
-else if (statsEl.style) statsEl.style.display = 'none';
-const bdg = nm === 'step-patch' ? ['step-patch', getUiText('inlineDiffSrcPatch', 'Step patch')] : (nm === 'git-diff' || nm === 'new-file') ? ['git-diff', getUiText('inlineDiffSrcGit', 'Git diff')] : nm === 'snapshot' ? ['snapshot', getUiText('inlineDiffSrcSnapshot', 'Snapshot')] : null;
-if (bdg) { srcEl.textContent = bdg[1]; sa(srcEl, 'data-ag-diff-src', bdg[0]); if (srcEl.style) srcEl.style.display = ''; }
-else { srcEl.textContent = ''; ra(srcEl, 'data-ag-diff-src'); if (srcEl.style) srcEl.style.display = 'none'; }
-};
-update(fileName, stepStats?.additions, stepStats?.deletions, srcMode);
-return { barEl, update };
+function createFloatActs(onOpenSb, onCollapse) {
+const mkBtn = (act, ic, lbl, fn) => { const b = mk('button', P + 'act-btn', null, mkSvg(ic, 12)); b.type = 'button'; sa(b, 'data-ag-diff-act', act); sa(b, 'title', lbl); sa(b, 'aria-label', lbl); b.addEventListener('click', (ev) => { stopEv(ev); fn(); }); return b; };
+return mk('div', P + 'float-acts', null, mkBtn('sidebar', 'external', getUiText('inlineDiffOpenSidebar'), onOpenSb), mkBtn('collapse', 'close', getUiText('inlineDiffCollapse'), onCollapse));
 }
-
-function renderBody(bodyEl, lines, stateKind, metaMode, _stepStats, totalStats, onOpenSb) {
+function renderBody(bodyEl, lines, stateKind, metaMode, totalStats, opts = null) {
 if (!doc || !bodyEl) return;
 while (bodyEl.firstChild) bodyEl.removeChild(bodyEl.firstChild);
 if (Array.isArray(lines) && lines.length > 0) {
 if (metaMode === 'snapshot') bodyEl.appendChild(mk('div', P + 'note', getUiText('inlineDiffSnapshotNotice')));
-const rows = [];
-let seen = false, gap = false, gapTitle = '';
-for (let i = 0; i < Math.min(lines.length, 160); i++) {
-const r = lines[i];
-if (!r || typeof r !== 'object') continue;
+const allRows = []; let seen = false, gap = false, gapTitle = '';
+for (let i = 0; i < Math.min(lines.length, MAX_CLIENT_LINES); i++) {
+const r = lines[i]; if (!isObj(r)) continue;
 const kind = r.kind === 'add' || r.kind === 'del' || r.kind === 'hunk' ? r.kind : 'ctx';
 if (kind === 'hunk') { if (seen) { gap = true; gapTitle = String(r.text || ''); } continue; }
-if (gap) { gap = false; rows.push({ kind: 'hunk', ln: '⋯', sign: '', text: gapTitle }); gapTitle = ''; }
-seen = true;
-rows.push({ kind, ln: String(r.ln ?? ''), sign: String(r.sign ?? (kind === 'add' ? '+' : kind === 'del' ? '-' : ' ')), text: trunc(r.text ?? '') });
+if (gap) { gap = false; allRows.push({ kind: 'hunk', ln: '⋯', sign: '', text: gapTitle }); gapTitle = ''; }
+seen = true; allRows.push({ kind, ln: String(r.ln ?? ''), sign: String(r.sign ?? (kind === 'add' ? '+' : kind === 'del' ? '-' : ' ')), text: trunc(r.text ?? '') });
 }
-const llbl = getUiText('inlineDiffLongLinesTag', 'long line');
+const expanded = Boolean(opts?.expanded), onExpandAll = opts?.onExpandAll, onOpenSb = opts?.onOpenSb, rows = allRows.length > (expanded ? MAX_CLIENT_LINES : PREVIEW_LIMIT) ? allRows.slice(0, expanded ? MAX_CLIENT_LINES : PREVIEW_LIMIT) : allRows, llbl = getUiText('inlineDiffLongLinesTag', 'long line');
 for (let i = 0; i < rows.length; i++) {
 const r = rows[i];
 if (r.kind === 'hunk') { const hl = mk('div', P + 'line is-hunk', null, mk('span', P + 'ln', '⋯'), mk('span', P + 'gap-rule')); if (r.text) sa(hl, 'title', r.text); bodyEl.appendChild(hl); continue; }
@@ -531,10 +520,12 @@ const chg = r.kind === 'add' || r.kind === 'del', pSame = chg && i > 0 && rows[i
 const gc = chg && (pSame || nSame) ? (!pSame ? ' is-grp-start' : !nSame ? ' is-grp-end' : ' is-grp-mid') : '';
 bodyEl.appendChild(mk('div', `${P}line is-${r.kind}${gc}`, null, mk('span', P + 'ln', r.ln), mk('span', pSame ? P + 'sign is-cont' : P + 'sign', pSame ? '┆' : r.sign), mk('span', P + 'code', r.text), r.text.endsWith('…') ? mk('span', P + 'wrap-tag', llbl) : null));
 }
-if (totalStats?.truncated && typeof onOpenSb === 'function') {
-const mb = mk('button', P + 'more-bar', getUiText('inlineDiffLargeExpandBtn'));
-mb.type = 'button'; mb.addEventListener('click', (ev) => { ev.preventDefault?.(); ev.stopPropagation?.(); onOpenSb(); });
-bodyEl.appendChild(mb);
+const mkMore = (act, lbl, fn) => { const b = mk('button', P + 'more-bar', lbl); b.type = 'button'; sa(b, 'data-ag-diff-act', act); b.addEventListener('click', (ev) => { stopEv(ev); fn(b); }); bodyEl.appendChild(b); };
+if (!expanded && (allRows.length > PREVIEW_LIMIT || Boolean(totalStats?.truncated)) && typeof onExpandAll === 'function') {
+const rem = Math.max(0, Math.max(allRows.length, Number(totalStats?.totalLines) || 0) - rows.length);
+mkMore('expand-all', rem > 0 ? getUiText('inlineDiffExpandAll', 'Expand all ({n} more lines)').replace('{n}', String(rem)) : getUiText('inlineDiffExpandAllPlain', 'Expand all'), onExpandAll);
+} else if (expanded && (Boolean(totalStats?.truncated) || Number(totalStats?.totalLines) > rows.length || lines.length >= MAX_CLIENT_LINES) && typeof onOpenSb === 'function') {
+mkMore('open-sidebar', getUiText('inlineDiffLargeExpandBtn'), onOpenSb);
 }
 return;
 }
@@ -673,29 +664,34 @@ return true;
 if (opts && opts.closeOnly) return false;
 const payload = extractInlineDiffPayload(badgeEl, rowEl, win);
 if (!payload.lines.length && !(payload.uri && typeof win?.__agPrismInlineDiffCall === 'function')) return false;
-const stepStats = { additions: payload.additions || 0, deletions: payload.deletions || 0 };
+const stepStats = { additions: payload.additions || 0, deletions: payload.deletions || 0, isCreated: Boolean(payload.isCreated) };
 const openSb = () => { allowNative = true; try { badgeEl.click?.(); } finally { allowNative = false; } };
-const topBar = createTopBar(payload.fileName, stepStats, payload.lines.length ? payload.source || 'step-patch' : '', openSb, () => toggleInlineDiffPreview(badgeEl, { closeOnly: true, noAnim }));
-const body = mk('div', P + 'body'), box = markNoTrOwned(mk('div', BC, null, mk('div', P + 'card', null, topBar.barEl, body)));
+const floatActs = createFloatActs(openSb, () => toggleInlineDiffPreview(badgeEl, { closeOnly: true, noAnim }));
+const body = mk('div', P + 'body'), box = markNoTrOwned(mk('div', BC, null, mk('div', P + 'card', null, floatActs, body)));
 sa(box, 'data-ag-cs-inline-diff', '1'); box._agDiffBadge = badgeEl; box._agDiffReqId = 0;
+let curLines = [], curMode = '', curTotalStats = null, expanded = false;
+const draw = () => renderBody(body, curLines, 'lines', curMode, curTotalStats, { expanded, onExpandAll, onOpenSb: openSb });
+const onExpandAll = (btnEl) => {
+if (expanded) return;
+const done = (r) => {
+expanded = true;
+mut(() => { sa(box, 'data-ag-diff-expanded', '1'); if (r?.ok && Array.isArray(r.lines) && r.lines.length) { curLines = r.lines; curMode = r.mode || curMode; curTotalStats = r; } draw(); });
+};
+if (!curTotalStats?.truncated || !payload.uri || typeof win?.__agPrismInlineDiffCall !== 'function') { done(null); return; }
+if (btnEl) { btnEl.disabled = true; btnEl.textContent = getUiText('inlineDiffLoading', 'Loading diff...'); }
+const req = requestDaemon(payload.uri, stepStats, true);
+if (!req) { done(null); return; }
+const eid = req.reqId; box._agDiffReqId = eid;
+const finish = (r) => { if (!isDead() && box.isConnected !== false && box._agDiffReqId === eid) done(r); };
+if (req.cached) finish(req.cached); else req.promise.then(finish);
+};
 const applyResp = (resp) => {
-if (resp?.ok && Array.isArray(resp.lines) && resp.lines.length > 0) {
-const a = resp.mode === 'snapshot' ? stepStats.additions : (resp.additions || stepStats.additions);
-const d = resp.mode === 'snapshot' ? stepStats.deletions : (resp.deletions || stepStats.deletions);
-topBar.update(resp.fileName || payload.fileName, a, d, resp.mode || 'git-diff');
-renderBody(body, resp.lines, 'lines', resp.mode, stepStats, resp, openSb);
-} else {
-topBar.update(resp?.fileName || payload.fileName, stepStats.additions, stepStats.deletions, '');
-renderBody(body, [], resp?.mode === 'binary' ? 'binary' : resp?.error === 'blocked_sensitive' ? 'sensitive' : 'empty');
-}
+if (resp?.ok && Array.isArray(resp.lines) && resp.lines.length > 0) { curLines = resp.lines; curMode = resp.mode || 'git-diff'; curTotalStats = resp; draw(); }
+else renderBody(body, [], resp?.mode === 'binary' ? 'binary' : resp?.error === 'blocked_sensitive' ? 'sensitive' : 'empty');
 };
 let pendingRpc = null;
-if (payload.lines.length) renderBody(body, payload.lines, 'lines', payload.source || 'step-patch', stepStats, null, openSb);
-else {
-pendingRpc = requestDaemon(payload.uri, stepStats);
-if (pendingRpc?.cached) { applyResp(pendingRpc.cached); pendingRpc = null; }
-else { renderBody(body, [], 'loading'); if (pendingRpc) box._agDiffReqId = pendingRpc.reqId; }
-}
+if (payload.lines.length) { curLines = payload.lines; curMode = payload.source || 'step-patch'; curTotalStats = { totalLines: payload.totalLines || payload.lines.length, truncated: false }; draw(); }
+else { pendingRpc = requestDaemon(payload.uri, stepStats, false); if (pendingRpc?.cached) { applyResp(pendingRpc.cached); pendingRpc = null; } else { renderBody(body, [], 'loading'); if (pendingRpc) box._agDiffReqId = pendingRpc.reqId; } }
 sa(box, AS, 'open');
 if (allowAnim) sa(box, AA, '1');
 mut(() => {
@@ -750,8 +746,8 @@ clearHover();
 hoverTmr = setTimeout(() => {
 hoverTmr = 0;
 if (isDead() || db.isConnected === false) return;
-const p = extractInlineDiffPayload(db, null, win);
-if (p.uri && !p.lines.length) requestDaemon(p.uri, { additions: p.additions || 0, deletions: p.deletions || 0 });
+const p = extractInlineDiffPayload(db, findHostRow(db), win);
+if (p.uri && !p.lines.length) requestDaemon(p.uri, { additions: p.additions || 0, deletions: p.deletions || 0, isCreated: Boolean(p.isCreated) }, false);
 }, 110);
 } catch {}
 };
@@ -793,7 +789,7 @@ qa(doc, `${S_CNT}, [data-ag-diff-chip-file="1"]`).forEach((el) => {
 if (el._agOrigTooltipId) { sa(el, 'data-tooltip-id', el._agOrigTooltipId); delete el._agOrigTooltipId; }
 delete el._agSyncedTxt; delete el._agSyncedChip;
 });
-for (const k of 'diff-chip|diff-chip-file|diff-chip-row|diff-stat|inline-diff-open|inline-diff-host|diff-anim|diff-state|cs-inline-diff'.split('|')) qa(doc, `[data-ag-${k}]`).forEach((el) => ra(el, 'data-ag-' + k));
+for (const k of 'diff-chip|diff-chip-file|diff-chip-row|diff-stat|inline-diff-open|inline-diff-host|diff-anim|diff-state|diff-expanded|cs-inline-diff'.split('|')) qa(doc, `[data-ag-${k}]`).forEach((el) => ra(el, 'data-ag-' + k));
 });
 }
 mut(() => { try { ((typeof doc?.getElementById === 'function' ? doc.getElementById(INLINE_DIFF_STYLE_ID) : null) || styleEl)?.remove?.(); } catch {} });

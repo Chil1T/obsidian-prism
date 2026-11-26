@@ -9,6 +9,9 @@ import {
   INLINE_DIFF_MAX_SNAPSHOT_LINES,
   INLINE_DIFF_MAX_LINE_CHARS,
   INLINE_DIFF_MAX_READ_BYTES,
+  INLINE_DIFF_EXPAND_MAX_DIFF_LINES,
+  INLINE_DIFF_EXPAND_MAX_SNAPSHOT_LINES,
+  INLINE_DIFF_EXPAND_MAX_READ_BYTES,
   INLINE_DIFF_GIT_MAX_BUFFER,
   INLINE_DIFF_REV_PARSE_TIMEOUT_MS,
   INLINE_DIFF_GIT_DIFF_TIMEOUT_MS,
@@ -346,12 +349,12 @@ async function runWithInlineDiffSemaphore(taskFn) {
   }
 }
 
-function projectInlineDiffEntry(rawEntry, { maxDiffLines, maxSnapshotLines, maxLineChars, hintAdd, hintDel }) {
+function projectInlineDiffEntry(rawEntry, { maxDiffLines, maxSnapshotLines, maxLineChars, hintAdd, hintDel, hintIsCreated }) {
   if (!rawEntry || !rawEntry.ok) {
     return rawEntry || { ok: false, error: 'read_failed' };
   }
   if (rawEntry.kind === 'binary') {
-    return { ok: true, mode: 'binary', fileName: rawEntry.fileName, additions: 0, deletions: 0, truncated: false, lines: [] };
+    return { ok: true, mode: 'binary', fileName: rawEntry.fileName, additions: 0, deletions: 0, truncated: false, totalLines: 0, lines: [] };
   }
   if (rawEntry.kind === 'git-diff') {
     const parsed = parseInlineUnifiedDiff(rawEntry.rawDiff, {
@@ -363,7 +366,7 @@ function projectInlineDiffEntry(rawEntry, { maxDiffLines, maxSnapshotLines, maxL
       return { ok: false, reason: 'blocked', error: 'blocked' };
     }
     if (parsed.isBinary) {
-      return { ok: true, mode: 'binary', fileName: rawEntry.fileName, additions: 0, deletions: 0, truncated: false, lines: [] };
+      return { ok: true, mode: 'binary', fileName: rawEntry.fileName, additions: 0, deletions: 0, truncated: false, totalLines: 0, lines: [] };
     }
     return {
       ok: true,
@@ -373,6 +376,7 @@ function projectInlineDiffEntry(rawEntry, { maxDiffLines, maxSnapshotLines, maxL
       deletions: parsed.deletions,
       truncated: parsed.truncated || Boolean(rawEntry.bufferTruncated),
       focused: Boolean(parsed.focusedByHint),
+      totalLines: Number.isFinite(parsed.totalLines) ? parsed.totalLines : parsed.lines.length,
       lines: parsed.lines,
     };
   }
@@ -382,7 +386,7 @@ function projectInlineDiffEntry(rawEntry, { maxDiffLines, maxSnapshotLines, maxL
   }
   const lineTruncated = textLines.length > maxSnapshotLines;
   const capped = lineTruncated ? textLines.slice(0, maxSnapshotLines) : textLines;
-  const isNewFile = !rawEntry.isNonGit && Boolean(rawEntry.isUntracked || (hintAdd > 0 && hintDel === 0));
+  const isNewFile = Boolean(rawEntry.isUntracked || hintIsCreated);
   const mode = isNewFile ? 'new-file' : 'snapshot';
   const kind = isNewFile ? 'add' : 'ctx';
   const sign = isNewFile ? '+' : ' ';
@@ -399,21 +403,27 @@ function projectInlineDiffEntry(rawEntry, { maxDiffLines, maxSnapshotLines, maxL
     additions: isNewFile ? lines.length : 0,
     deletions: 0,
     truncated: Boolean(rawEntry.byteTruncated || lineTruncated),
+    totalLines: textLines.length,
     lines,
   };
 }
 
 // 受限只读行内 Diff 读取器：严防 UNC/NT 设备路径/路径穿越/符号链接逃逸/敏感凭据读取、非 Git 越界读取与 Shell 注入
 export async function readSafeInlineDiff(rawUri, opts = {}) {
-  const maxDiffLines = clampPositiveInt(opts?.maxDiffLines, INLINE_DIFF_MAX_DIFF_LINES, INLINE_DIFF_MAX_DIFF_LINES);
-  const maxSnapshotLines = clampPositiveInt(opts?.maxSnapshotLines, INLINE_DIFF_MAX_SNAPSHOT_LINES, INLINE_DIFF_MAX_SNAPSHOT_LINES);
+  const expand = opts?.expand === true;
+  const defaultDiffLines = expand ? INLINE_DIFF_EXPAND_MAX_DIFF_LINES : INLINE_DIFF_MAX_DIFF_LINES;
+  const defaultSnapshotLines = expand ? INLINE_DIFF_EXPAND_MAX_SNAPSHOT_LINES : INLINE_DIFF_MAX_SNAPSHOT_LINES;
+  const defaultReadBytes = expand ? INLINE_DIFF_EXPAND_MAX_READ_BYTES : INLINE_DIFF_MAX_READ_BYTES;
+  const maxDiffLines = clampPositiveInt(opts?.maxDiffLines, defaultDiffLines, INLINE_DIFF_EXPAND_MAX_DIFF_LINES);
+  const maxSnapshotLines = clampPositiveInt(opts?.maxSnapshotLines, defaultSnapshotLines, INLINE_DIFF_EXPAND_MAX_SNAPSHOT_LINES);
   const maxLineChars = clampPositiveInt(opts?.maxLineChars, INLINE_DIFF_MAX_LINE_CHARS, INLINE_DIFF_MAX_LINE_CHARS);
-  const maxReadBytes = clampPositiveInt(opts?.maxReadBytes, INLINE_DIFF_MAX_READ_BYTES, INLINE_DIFF_MAX_READ_BYTES);
+  const maxReadBytes = clampPositiveInt(opts?.maxReadBytes, defaultReadBytes, INLINE_DIFF_EXPAND_MAX_READ_BYTES);
   const revParseTimeoutMs = clampPositiveInt(opts?.revParseTimeoutMs, INLINE_DIFF_REV_PARSE_TIMEOUT_MS, INLINE_DIFF_REV_PARSE_TIMEOUT_MS * 2);
   const diffTimeoutMs = clampPositiveInt(opts?.diffTimeoutMs, INLINE_DIFF_GIT_DIFF_TIMEOUT_MS, INLINE_DIFF_GIT_DIFF_TIMEOUT_MS * 2);
   const gitMaxBuffer = clampPositiveInt(opts?.gitMaxBuffer, INLINE_DIFF_GIT_MAX_BUFFER, INLINE_DIFF_GIT_MAX_BUFFER);
   const hintAdd = Number.isFinite(Number(opts?.hints?.additions)) ? Math.max(0, Math.trunc(Number(opts.hints.additions))) : 0;
   const hintDel = Number.isFinite(Number(opts?.hints?.deletions)) ? Math.max(0, Math.trunc(Number(opts.hints.deletions))) : 0;
+  const hintIsCreated = Boolean(opts?.hints?.isCreated);
 
   const resolved = resolveInlineDiffCandidatePath(rawUri);
   if (!resolved.ok) return resolved;
@@ -485,9 +495,9 @@ export async function readSafeInlineDiff(rawUri, opts = {}) {
   }
 
   const skipGitSubprocess = isNonGit || hasUnsafeGitConfig(realGitDir, realCommonGitDir);
-  const wantCommitFallback = !isNonGit && hintDel > 0 ? 1 : 0;
+  const wantCommitFallback = !isNonGit && (hintAdd > 0 || hintDel > 0) && !hintIsCreated ? 1 : 0;
   const rawCacheKey = `${realPath}|${st.mtimeMs}|${st.size}|${isNonGit ? 'nogit' : gitIndexMtimeMs}|${skipGitSubprocess ? 1 : 0}|${wantCommitFallback}|${maxReadBytes}|${gitMaxBuffer}`;
-  const projectionOpts = { maxDiffLines, maxSnapshotLines, maxLineChars, hintAdd, hintDel };
+  const projectionOpts = { maxDiffLines, maxSnapshotLines, maxLineChars, hintAdd, hintDel, hintIsCreated };
 
   if (!opts?.noCache) {
     const cachedRaw = getInlineDiffCached(rawCacheKey);

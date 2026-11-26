@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
 
@@ -184,7 +185,7 @@ function createDiffClientMiniDom(lang = 'zh-CN') {
       matches(sel) {
         return String(sel || '').split(',').map((p) => p.trim()).some((part) => {
           if (!part) return false;
-          if (part.startsWith('.')) return cls.has(part.slice(1));
+          if (part.startsWith('.')) return part.slice(1).split('.').every((c) => cls.has(c));
           if (part.startsWith('#')) return am.get('id') === part.slice(1);
           const m = /^\[([a-zA-Z0-9_-]+)(?:="([^"]*)")?\]$/.exec(part);
           if (m) return m[2] === undefined ? am.has(m[1]) : am.get(m[1]) === m[2];
@@ -332,7 +333,7 @@ test('W5-1 (Issue #112): host-i18n skips all Monaco/Diff/Code viewer containers 
   }
 });
 
-test('W5-2: v2.35.2 React Fiber patch extraction (TargetContent/ReplacementContent, oldString/newString, unifiedDiff, multi-chunk & LCS) + Agent review topbar', async () => {
+test('W5-2: v2.35.2 React Fiber patch extraction (CortexStepGeneric edit_file/write_file, TargetContent/ReplacementContent, oldString/newString, unifiedDiff, multi-chunk & LCS) + glow-minimal card & inline expand-all', async () => {
   const { win, doc, body, makeNode } = createDiffClientMiniDom('zh-CN');
 
   // 2a) TargetContent / ReplacementContent nested inside Fiber memoizedProps (v2.35.2 style)
@@ -362,6 +363,62 @@ test('W5-2: v2.35.2 React Fiber patch extraction (TargetContent/ReplacementConte
   assert.ok(p1.lines.some((l) => l.kind === 'del' && l.ln === '11' && l.text === 'oldLine'));
   assert.ok(p1.lines.some((l) => l.kind === 'add' && l.ln === '11' && l.text === 'newLineA'));
   assert.ok(p1.lines.some((l) => l.kind === 'add' && l.ln === '12' && l.text === 'newLineB'));
+
+  // 2a-2) v2.35.2 CortexStepGeneric edit_file (deeply nested behind huge noise fields) & write_file (471 lines -> full new-file)
+  const noiseObj = Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`noise_${i}`, { deep: { x: i } }]));
+  const genericEditBadge = makeNode('span', { 'data-testid': 'diff-line-count' });
+  genericEditBadge.__reactFiber$genEdit = {
+    memoizedProps: {
+      metadata: noiseObj,
+      lexicalEditor: noiseObj,
+      cascadeModelConfigData: noiseObj,
+      step: {
+        case: 'generic',
+        value: {
+          toolName: 'edit_file',
+          args: {
+            Path: 'C:\\repo\\src\\core.mjs',
+            Target: 'const mode = "old";\n',
+            Replacement: 'const mode = "new";\n',
+          },
+          result: { data: { ok: true }, stepRenderInfo: {} },
+        },
+      },
+    },
+    return: null,
+  };
+  const pGenEdit = inlineDiff.extractInlineDiffPayload(genericEditBadge, null, win);
+  assert.equal(pGenEdit.source, 'step-patch');
+  assert.equal(pGenEdit.fileName, 'core.mjs');
+  assert.ok(pGenEdit.lines.some((l) => l.kind === 'del' && l.text === 'const mode = "old";'));
+  assert.ok(pGenEdit.lines.some((l) => l.kind === 'add' && l.text === 'const mode = "new";'));
+
+  const writeFileContent = Array.from({ length: 260 }, (_, i) => `print("line_${i + 1}")`).join('\n') + '\n';
+  const genericWriteBadge = makeNode('span', { 'data-testid': 'diff-line-count' });
+  genericWriteBadge.textContent = '+260 -0';
+  genericWriteBadge.__reactFiber$genWrite = {
+    memoizedProps: {
+      metadata: noiseObj,
+      step: {
+        case: 'generic',
+        value: {
+          toolName: 'write_file',
+          args: {
+            Path: 'C:\\non-git\\resolve_civitai_plan.py',
+            Content: writeFileContent,
+          },
+          result: { data: {}, stepRenderInfo: {} },
+        },
+      },
+    },
+    return: null,
+  };
+  const pGenWrite = inlineDiff.extractInlineDiffPayload(genericWriteBadge, null, win);
+  assert.equal(pGenWrite.source, 'new-file');
+  assert.equal(pGenWrite.isCreated, true);
+  assert.equal(pGenWrite.fileName, 'resolve_civitai_plan.py');
+  assert.equal(pGenWrite.lines.length, 260);
+  assert.equal(pGenWrite.lines.every((l) => l.kind === 'add' && l.sign === '+'), true);
 
   // 2b) oldString / newString inside Fiber memoizedState hook chain (non-contiguous LCS folds unchanged middle)
   const unchangedMid = Array.from({ length: 8 }, (_, i) => `keep_${i}`);
@@ -423,7 +480,16 @@ test('W5-2: v2.35.2 React Fiber patch extraction (TargetContent/ReplacementConte
   assert.equal(p4.deletions, 2);
   assert.ok(p4.lines.some((l) => l.kind === 'hunk'), 'Multiple replacementChunks must be separated by hunk divider');
 
-  // 2d) Agent-grade review card topbar: filename + +/- chips + source badge + sidebar/collapse icon buttons
+  // 2d) Clean headerless glow-aesthetic card: 0 .ag-cs-inline-diff-bar, top-right .ag-cs-inline-diff-float-acts, glow CSS, 0ms client expand-all & RPC expand:true
+  assert.equal(inlineDiff.INLINE_DIFF_CSS.includes('.ag-cs-inline-diff-bar'), false, 'Must remove bloated .ag-cs-inline-diff-bar CSS');
+  assert.ok(
+    inlineDiff.INLINE_DIFF_CSS.includes('radial-gradient(85% 52px at 50% 0%') &&
+      inlineDiff.INLINE_DIFF_CSS.includes('inset 7px 0 12px -4px') &&
+      inlineDiff.INLINE_DIFF_CSS.includes('text-shadow:0 0 9px rgba(74,222,128,.62)') &&
+      inlineDiff.INLINE_DIFF_CSS.includes('.ag-cs-inline-diff-float-acts'),
+    'INLINE_DIFF_CSS must restore radial top highlight, red/green inner glow & text-shadow, and minimal .ag-cs-inline-diff-float-acts'
+  );
+
   let nativeClicks = 0;
   badge1.addEventListener('click', () => { nativeClicks++; });
   const col = makeNode('div', { class: 'flex flex-col' });
@@ -438,46 +504,73 @@ test('W5-2: v2.35.2 React Fiber patch extraction (TargetContent/ReplacementConte
     const box = col.querySelector('.ag-cs-inline-diff-box');
     assert.ok(box, 'Diff box must mount');
     assert.equal(box.querySelector('.ag-cs-inline-diff-head'), null, 'Must preserve D12 compatibility (no legacy .ag-cs-inline-diff-head)');
-    const bar = box.querySelector('.ag-cs-inline-diff-bar');
-    assert.ok(bar, 'Must render clean single-row .ag-cs-inline-diff-bar');
-    assert.equal(bar.querySelector('.ag-cs-inline-diff-file')?.textContent, 'SKILL.md');
-    assert.equal(bar.querySelector('.ag-cs-inline-diff-st-add')?.textContent, '+2');
-    assert.equal(bar.querySelector('.ag-cs-inline-diff-st-del')?.textContent, '-1');
-    const srcBadge = bar.querySelector('.ag-cs-inline-diff-src');
-    assert.equal(srcBadge?.getAttribute('data-ag-diff-src'), 'step-patch');
-    assert.equal(srcBadge?.textContent, '步骤补丁');
+    assert.equal(box.querySelector('.ag-cs-inline-diff-bar'), null, 'Must render headerless clean card with 0 .ag-cs-inline-diff-bar');
+    const floatActs = box.querySelector('.ag-cs-inline-diff-float-acts');
+    assert.ok(floatActs, 'Must render minimal top-right .ag-cs-inline-diff-float-acts overlay');
 
-    const openSbBtn = bar.querySelector('[data-ag-diff-act="sidebar"]');
-    const collapseBtn = bar.querySelector('[data-ag-diff-act="collapse"]');
-    assert.ok(openSbBtn && collapseBtn, 'Topbar must provide minimal sidebar & collapse icon buttons');
+    const openSbBtn = floatActs.querySelector('[data-ag-diff-act="sidebar"]');
+    const collapseBtn = floatActs.querySelector('[data-ag-diff-act="collapse"]');
+    assert.ok(openSbBtn && collapseBtn, 'Float acts must provide minimal sidebar & collapse icon buttons');
     openSbBtn.click();
     assert.equal(nativeClicks, 1, 'Sidebar icon button must trigger native sidebar diff click');
     collapseBtn.click();
     assert.equal(Boolean(col.querySelector('.ag-cs-inline-diff-box')), false, 'Collapse icon button must close inline diff card');
 
-    // RPC snapshot updates topbar badge to 当前快照
-    const rpcRow = makeNode('div', { class: 'group flex w-full', 'data-testid': 'tool-call-row', 'data-ag-diff-uri': 'file:///C:/non-git/SKILL.md' });
+    // Client-side write_file 260 lines: first paint 120 lines (0 snapshot note) -> click expand-all -> 0ms in-place 260 green lines
+    const writeRow = makeNode('div', { class: 'group flex w-full', 'data-testid': 'tool-call-row' });
+    writeRow.appendChild(genericWriteBadge);
+    col.appendChild(writeRow);
+    assert.equal(client.toggleInlineDiffPreview(genericWriteBadge, { noAnim: true }), true);
+    const writeBox = writeRow.nextElementSibling;
+    assert.equal(writeBox.querySelector('.ag-cs-inline-diff-note'), null, 'new-file must NEVER render .ag-cs-inline-diff-note');
+    assert.equal(writeBox.querySelectorAll('.ag-cs-inline-diff-line.is-add').length, 120, 'First paint caps at 120 rows for comfort');
+    const clientExpBtn = writeBox.querySelector('[data-ag-diff-act="expand-all"]');
+    assert.ok(clientExpBtn && clientExpBtn.textContent.includes('140'), 'Expand-all button must show remaining 140 lines');
+    clientExpBtn.click();
+    assert.equal(writeBox.getAttribute('data-ag-diff-expanded'), '1');
+    assert.equal(writeBox.querySelectorAll('.ag-cs-inline-diff-line.is-add').length, 260, 'Clicking expand-all must expand all 260 lines in place at 0ms');
+    assert.equal(writeBox.querySelector('[data-ag-diff-act="expand-all"]'), null, 'Expand-all button disappears once fully expanded');
+
+    // RPC Created +150 -0 non-Git flow: sends hints.isCreated=true, renders new-file green lines (no snapshot note), click expand-all sends expand:true
+    const rpcRow = makeNode('div', { class: 'group flex w-full', 'data-testid': 'tool-call-row', 'data-ag-diff-uri': 'file:///C:/non-git/resolve_civitai_plan.py' });
+    const verb = makeNode('span');
+    verb.textContent = 'Created resolve_civitai_plan.py ';
     const rpcBadge = makeNode('span', { 'data-testid': 'diff-line-count' });
-    rpcBadge.textContent = '+5 -0';
+    rpcBadge.textContent = '+150 -0';
+    rpcRow.appendChild(verb);
     rpcRow.appendChild(rpcBadge);
     col.appendChild(rpcRow);
+    const rpcCalls = [];
     win.__agPrismInlineDiffCall = (raw) => {
       const req = JSON.parse(raw);
+      rpcCalls.push(req);
+      const count = req.expand ? 150 : 80;
       queueMicrotask(() => win.__agPrismInlineDiffResolve?.(req.id, {
         ok: true,
-        mode: 'snapshot',
-        fileName: 'SKILL.md',
-        additions: 0,
+        mode: 'new-file',
+        fileName: 'resolve_civitai_plan.py',
+        additions: count,
         deletions: 0,
-        truncated: false,
-        lines: [{ kind: 'ctx', ln: '1', sign: ' ', text: '# Skill Doc' }],
+        truncated: !req.expand,
+        totalLines: 150,
+        lines: Array.from({ length: count }, (_, i) => ({ kind: 'add', ln: String(i + 1), sign: '+', text: `line_${i + 1}` })),
       }));
     };
     assert.equal(client.toggleInlineDiffPreview(rpcBadge, { noAnim: true }), true);
     await new Promise((r) => setTimeout(r, 20));
-    const snapBox = rpcRow.nextElementSibling;
-    assert.equal(snapBox?.querySelector('.ag-cs-inline-diff-src')?.getAttribute('data-ag-diff-src'), 'snapshot');
-    assert.equal(snapBox?.querySelector('.ag-cs-inline-diff-src')?.textContent, '当前快照');
+    assert.equal(rpcCalls[0]?.hints?.isCreated, true, 'Created row must forward hints.isCreated=true in RPC');
+    assert.equal(Boolean(rpcCalls[0]?.expand), false);
+    const rpcBox = rpcRow.nextElementSibling;
+    assert.equal(rpcBox.querySelector('.ag-cs-inline-diff-note'), null, 'RPC new-file must NOT render .ag-cs-inline-diff-note');
+    assert.equal(rpcBox.querySelectorAll('.ag-cs-inline-diff-line.is-add').length, 80);
+    const rpcExpBtn = rpcBox.querySelector('[data-ag-diff-act="expand-all"]');
+    assert.ok(rpcExpBtn && rpcExpBtn.textContent.includes('70'), 'RPC truncated card must show remaining 70 lines');
+    rpcExpBtn.click();
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(rpcCalls.length, 2);
+    assert.equal(rpcCalls[1]?.expand, true, 'Clicking expand-all on server-truncated card must request expand:true');
+    assert.equal(rpcBox.getAttribute('data-ag-diff-expanded'), '1');
+    assert.equal(rpcBox.querySelectorAll('.ag-cs-inline-diff-line.is-add').length, 150, 'expand:true must render all 150 green lines inline');
   } finally {
     client.destroy();
   }
@@ -505,14 +598,29 @@ test('W5-3: non-Git normal source/SKILL.md returns safe bounded snapshot while s
       { kind: 'ctx', ln: '3', sign: ' ', text: 'Line 3' },
     ]);
 
-    // Line & byte truncation enforcement in non-Git directory
+    // Line & byte truncation enforcement in non-Git directory + expand:true full unlock + non-Git isCreated new-file mode
     const longFile = path.join(skillDir, 'long-guide.md');
     fs.writeFileSync(longFile, Array.from({ length: 120 }, (_, i) => `row-${i + 1}`).join('\n') + '\n', 'utf8');
     const longRes = await readSafeInlineDiff(longFile);
     assert.equal(longRes.ok, true);
     assert.equal(longRes.mode, 'snapshot');
     assert.equal(longRes.truncated, true);
+    assert.equal(longRes.totalLines, 120);
     assert.equal(longRes.lines.length, 80);
+
+    const expandedLong = await readSafeInlineDiff(longFile, { expand: true });
+    assert.equal(expandedLong.ok, true);
+    assert.equal(expandedLong.mode, 'snapshot');
+    assert.equal(expandedLong.truncated, false);
+    assert.equal(expandedLong.totalLines, 120);
+    assert.equal(expandedLong.lines.length, 120);
+
+    const nonGitCreated = await readSafeInlineDiff(longFile, { hints: { additions: 120, deletions: 0, isCreated: true }, expand: true });
+    assert.equal(nonGitCreated.ok, true);
+    assert.equal(nonGitCreated.mode, 'new-file', 'Non-Git created file with hints.isCreated=true must return mode=new-file');
+    assert.equal(nonGitCreated.truncated, false);
+    assert.equal(nonGitCreated.lines.length, 120);
+    assert.equal(nonGitCreated.lines.every((l) => l.kind === 'add' && l.sign === '+'), true);
 
     // Binary file detection still works in non-Git directory
     const binFile = path.join(skillDir, 'icon.bin');
@@ -557,6 +665,38 @@ test('W5-3: non-Git normal source/SKILL.md returns safe bounded snapshot while s
     const badRes = await readSafeInlineDiff(badTarget);
     assert.equal(badRes.ok, false);
     assert.equal(badRes.error, 'outside_git_repo');
+
+    // Committed pure-addition edit (+2 -0, not created) uses git log -n 1 -p fallback instead of painting entire file green
+    const gitRepo = path.join(tmpDir, 'commit-fallback-repo');
+    fs.mkdirSync(gitRepo, { recursive: true });
+    const gitEnv = {
+      ...process.env,
+      GIT_TERMINAL_PROMPT: '0',
+      GIT_AUTHOR_NAME: 'Prism Test',
+      GIT_AUTHOR_EMAIL: 'prism-test@example.invalid',
+      GIT_COMMITTER_NAME: 'Prism Test',
+      GIT_COMMITTER_EMAIL: 'prism-test@example.invalid',
+    };
+    const runGit = (args) => execFileSync('git', ['-C', gitRepo, ...args], { encoding: 'utf8', windowsHide: true, env: gitEnv });
+    runGit(['init']);
+    runGit(['config', 'user.name', 'Prism Test']);
+    runGit(['config', 'user.email', 'prism-test@example.invalid']);
+    runGit(['config', 'core.autocrlf', 'false']);
+    const trackedFile = path.join(gitRepo, 'module.js');
+    const baseLines = Array.from({ length: 20 }, (_, i) => `const line_${i + 1} = ${i + 1};`);
+    fs.writeFileSync(trackedFile, baseLines.join('\n') + '\n', 'utf8');
+    runGit(['add', 'module.js']);
+    runGit(['commit', '-m', 'init']);
+    fs.writeFileSync(trackedFile, [...baseLines, 'const added_a = 101;', 'const added_b = 102;'].join('\n') + '\n', 'utf8');
+    runGit(['add', 'module.js']);
+    runGit(['commit', '-m', 'append two lines']);
+    const commitFbRes = await readSafeInlineDiff(trackedFile, { hints: { additions: 2, deletions: 0 } });
+    assert.equal(commitFbRes.ok, true);
+    assert.equal(commitFbRes.mode, 'git-diff', 'Committed +2 -0 edit must recover actual git-diff hunk via commit fallback');
+    assert.equal(commitFbRes.additions, 2);
+    assert.equal(commitFbRes.deletions, 0);
+    assert.ok(commitFbRes.lines.some((l) => l.kind === 'add' && l.text === 'const added_a = 101;'));
+    assert.equal(commitFbRes.lines.some((l) => l.kind === 'add' && l.text === 'const line_1 = 1;'), false, 'Old unchanged lines must NOT be painted green');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
@@ -585,7 +725,7 @@ test('W5-4: 0 innerHTML, 0 :has(), pure ASCII CSS, 8-locale 0-CJK leak, 0 BOM/CR
     'INLINE_DIFF_CSS braces must balance'
   );
 
-  // 9-locale completeness & 0 CJK in non-CJK locales for all DIFF_FALLBACK keys (including new source badges)
+  // 9-locale completeness & 0 CJK in non-CJK locales for all DIFF_FALLBACK keys (including expand-all copy)
   const clientSrc = fs.readFileSync(path.join(ROOT, 'vendor/inline-diff/inline-diff-client.js'), 'utf8');
   const CJK_RE = /[\u3400-\u9FFF\uF900-\uFAFF]/;
   const LOCALES = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de', 'tr'];
@@ -594,7 +734,7 @@ test('W5-4: 0 innerHTML, 0 :has(), pure ASCII CSS, 8-locale 0-CJK leak, 0 BOM/CR
     'inlineDiffOpenSidebar', 'inlineDiffCollapse', 'inlineDiffLoading', 'inlineDiffBinary',
     'inlineDiffNoPreview', 'inlineDiffSensitive', 'inlineDiffSnapshotNotice', 'inlineDiffLongLinesTag',
     'inlineDiffMenuExpand', 'inlineDiffMenuCollapse', 'inlineDiffMenuCopyPath', 'inlineDiffLargeExpandBtn',
-    'inlineDiffSrcPatch', 'inlineDiffSrcGit', 'inlineDiffSrcSnapshot',
+    'inlineDiffExpandAll', 'inlineDiffExpandAllPlain',
   ]) {
     const km = new RegExp(`${key}\\s*:\\s*\\{([^\\n]+)\\}`).exec(clientSrc);
     assert.ok(km, `DIFF_FALLBACK missing key ${key}`);

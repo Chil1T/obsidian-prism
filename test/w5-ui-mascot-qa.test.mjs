@@ -361,6 +361,21 @@ test('1) CSS bucket classifier: 0 mixed-rule misrouting, step-plan/overview rim-
   // Active dark-chat CSS budget (< 180 KB)
   const darkChatActive = ['core', 'viewSidebar', 'motionFull'].reduce((s, k) => s + Buffer.byteLength(buckets[k] || '', 'utf8'), 0);
   assert.ok(darkChatActive < 180 * 1024, `Dark-chat active CSS (${darkChatActive} B) must stay strictly < 180 KB`);
+
+  // Sidebar selected & selected-running ambient glow distinction + strict 0 content-visibility on conversation-row-sidebar
+  assert.ok(
+    rawCss.includes('[data-testid="conversation-row-sidebar"],.agy-sidebar-row') &&
+      rawCss.includes('radial-gradient(92% 130% at 14% 50%') &&
+      rawCss.includes('&[data-ag-cs-row-running="1"]') &&
+      rawCss.includes('&[data-selected="true"]{background-image:radial-gradient(96% 140% at 12% 50%'),
+    'style.css must provide distinct ambient glow + optical ring for selected and selected-running sidebar rows'
+  );
+  const sbRowRules = coreRules.concat(cssPack.splitTopLevelCssRules(buckets.viewSidebar)).filter((r) => r.includes('conversation-row-sidebar'));
+  assert.equal(
+    sbRowRules.some((r) => r.includes('content-visibility')),
+    false,
+    'conversation-row-sidebar must NEVER use content-visibility'
+  );
 });
 
 test('2) PR #114 home top-toolbar clearance + ask_question frame-0 peek/pointer-events/prism-rim without session switch', async () => {
