@@ -1604,7 +1604,6 @@ uniform highp float uTime;
 uniform float uDark;
 uniform float uReach;
 uniform float uIntensity;
-uniform float uStretch;
 uniform float uPresence;
 uniform float uPrism;
 uniform float uSurge;

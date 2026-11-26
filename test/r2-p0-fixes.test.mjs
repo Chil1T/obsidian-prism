@@ -7,6 +7,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
+import vm from 'node:vm';
 
 import {
   isSensitiveInlineDiffPath,
@@ -18,6 +19,12 @@ const require = createRequire(import.meta.url);
 const ROOT = path.resolve(import.meta.dirname, '..');
 const hostBridge = require(path.join(ROOT, 'vendor', 'periodic-picker', 'host-bridge.js'));
 const inlineDiffClientMod = require(path.join(ROOT, 'vendor', 'inline-diff', 'inline-diff-client.js'));
+const stubMod = require(path.join(ROOT, 'vendor', 'periodic-picker', 'periodic-picker-stub.js'));
+const { tokenizeJs } = require(path.join(ROOT, 'src', 'compiler', 'js-tokenizer.cjs'));
+const { mangleSafeLocals } = require(path.join(ROOT, 'src', 'compiler', 'js-mangler.cjs'));
+const { serializeTokens } = require(path.join(ROOT, 'src', 'compiler', 'js-serializer.cjs'));
+const vialCore = require(path.join(ROOT, 'vial-core.js'));
+const cdp = require(path.join(ROOT, 'cdp.js'));
 
 function makeMockBox({ ariaLabel = '', disabled = false, attrs = {}, className = '', withCancelBtn = true, cancelHidden = false } = {}) {
   const attrMap = new Map(Object.entries(attrs));
@@ -304,4 +311,262 @@ test('P0 Bug B (Client UI): inline-diff-client renders explicit 8-locale privacy
     'blocked_sensitive must render explicit privacy-protection message'
   );
   client.destroy();
+});
+
+test('Redteam P0 #1: js-mangler distinguishes LHS/RHS in declarations (free var in object shorthand never renamed) and preserves export names', () => {
+  const src1 = `
+    function run() {
+      const res = { freeGlobalVar, use: () => freeGlobalVar };
+      const { a = { anotherFreeVar }, b } = { a: undefined, b: 2 };
+      return { res, a, b };
+    }
+    run();
+  `;
+  const mangled1 = serializeTokens(mangleSafeLocals(tokenizeJs(src1)));
+  assert.ok(mangled1.includes('freeGlobalVar'), `freeGlobalVar must not be mangled: ${mangled1}`);
+  assert.ok(mangled1.includes('anotherFreeVar'), `anotherFreeVar in destructuring default must not be mangled: ${mangled1}`);
+  const out = vm.runInNewContext(mangled1, { freeGlobalVar: 'G_OK', anotherFreeVar: 'D_OK' });
+  assert.equal(out.res.freeGlobalVar, 'G_OK');
+  assert.equal(out.res.use(), 'G_OK');
+  assert.equal(out.a.anotherFreeVar, 'D_OK');
+  assert.equal(out.b, 2);
+
+  const src2 = `
+    export function testExp(x) { const localLongName = x + 1; return localLongName + localLongName; }
+    export async function testAsyncExp(v) { const innerVal = v * 2; return innerVal + innerVal; }
+    export const exportedAlpha = 10, exportedBeta = 20;
+    export class ExportedBox { get() { return exportedAlpha + exportedBeta; } }
+  `;
+  const mangled2 = serializeTokens(mangleSafeLocals(tokenizeJs(src2)));
+  assert.ok(/export function testExp\(/.test(mangled2), `export function name must not be mangled: ${mangled2}`);
+  assert.ok(/export async function testAsyncExp\(/.test(mangled2), `export async function name must not be mangled: ${mangled2}`);
+  assert.ok(mangled2.includes('exportedAlpha') && mangled2.includes('exportedBeta'), `export const names must not be mangled: ${mangled2}`);
+  assert.ok(/export class ExportedBox\b/.test(mangled2), `export class name must not be mangled: ${mangled2}`);
+});
+
+test('Redteam P0 #2: periodic-picker-stub stays <2KB, renders first-frame [10Ne] mini-keycap badges, blocks short-click (<260ms) 3D open, and opens smoothly on >=260ms hold', async () => {
+  const stubSrc = fs.readFileSync(path.join(ROOT, 'vendor', 'periodic-picker', 'periodic-picker-stub.js'), 'utf8');
+  assert.ok(Buffer.byteLength(stubSrc, 'utf8') < 2048, `periodic-picker-stub.js must be <2048B, got ${Buffer.byteLength(stubSrc, 'utf8')}B`);
+  assert.equal(/[^\x00-\x7f]/.test(stubSrc), false, 'periodic-picker-stub.js must be pure ASCII');
+  assert.equal(stubSrc.includes('innerHTML'), false, 'periodic-picker-stub.js must contain 0 innerHTML');
+
+  const mkEl = (tag, attrs = {}, txt = '') => {
+    const am = new Map(Object.entries(attrs));
+    const kids = [];
+    let t = txt;
+    const el = {
+      tagName: tag.toUpperCase(),
+      id: attrs.id || '',
+      className: attrs.class || '',
+      children: kids,
+      childNodes: kids,
+      parentNode: null,
+      get textContent() { return t || kids.map((c) => c.textContent).join(''); },
+      set textContent(v) { t = String(v ?? ''); },
+      setAttribute(k, v) { am.set(k, String(v)); if (k === 'id') el.id = String(v); if (k === 'class') el.className = String(v); },
+      getAttribute(k) { return am.has(k) ? am.get(k) : null; },
+      appendChild(c) { c.parentNode = el; kids.push(c); return c; },
+      remove() { if (el.parentNode) { const i = el.parentNode.children.indexOf(el); if (i >= 0) el.parentNode.children.splice(i, 1); el.parentNode = null; } },
+      closest(sel) { let p = el; while (p) { if (sel === '[data-testid="model-selector-trigger"]' && p.getAttribute('data-testid') === 'model-selector-trigger') return p; p = p.parentNode; } return null; },
+      querySelector(sel) { return el.querySelectorAll(sel)[0] || null; },
+      querySelectorAll(sel) {
+        const out = [];
+        const walk = (n) => {
+          for (const c of n.children) {
+            const match =
+              (sel === '[data-testid="model-selector-trigger"]' && c.getAttribute('data-testid') === 'model-selector-trigger') ||
+              (sel === '.ag-pp-mini-keycap' && c.className.split(/\s+/).includes('ag-pp-mini-keycap')) ||
+              (sel === '[data-ag-pp-stub="1"]' && c.getAttribute('data-ag-pp-stub') === '1') ||
+              (sel.startsWith('#') && c.id === sel.slice(1));
+            if (match) out.push(c);
+            walk(c);
+          }
+        };
+        walk(el);
+        return out;
+      },
+    };
+    return el;
+  };
+
+  const listeners = new Map();
+  const html = mkEl('html');
+  const head = mkEl('head');
+  const body = mkEl('body');
+  html.appendChild(head);
+  html.appendChild(body);
+  const neonBtn = mkEl('button', { 'data-testid': 'model-selector-trigger', 'aria-label': 'Gemini 4 Neon' }, 'Gemini 4 Neon');
+  const carbonBtn = mkEl('button', { 'data-testid': 'model-selector-trigger' }, 'Gemini 4 Carbon (High)');
+  body.appendChild(neonBtn);
+  body.appendChild(carbonBtn);
+  const doc = {
+    documentElement: html, head, body, readyState: 'complete', title: 'Antigravity',
+    createElement: (t) => mkEl(t),
+    getElementById: (id) => html.querySelector('#' + id),
+    querySelector: (s) => html.querySelector(s),
+    querySelectorAll: (s) => html.querySelectorAll(s),
+    addEventListener(k, fn) { if (!listeners.has(k)) listeners.set(k, new Set()); listeners.get(k).add(fn); },
+    removeEventListener(k, fn) { listeners.get(k)?.delete(fn); },
+  };
+  const win = { document: doc, __agPrismSetting() {}, Date, JSON, String, Number, Boolean, Object, Array, Math, setTimeout, clearTimeout };
+  win.window = win; win.globalThis = win; win.self = win; win.top = win;
+
+  // 1) 首帧 stub 挂载即刻渲染 [10Ne] 与 [6C] 迷你键帽徽章
+  const stub = stubMod.mountPeriodicPickerStub({ root: win, doc });
+  const neBadge = neonBtn.querySelector('.ag-pp-mini-keycap');
+  const cBadge = carbonBtn.querySelector('.ag-pp-mini-keycap');
+  assert.ok(neBadge, 'First-frame stub must render .ag-pp-mini-keycap on Neon trigger');
+  assert.equal(neBadge.getAttribute('data-z'), '10');
+  assert.equal(neBadge.getAttribute('data-symbol'), 'Ne');
+  assert.equal(neBadge.children[0].textContent, '10');
+  assert.equal(neBadge.children[1].textContent, 'Ne');
+  assert.ok(cBadge && cBadge.getAttribute('data-z') === '6' && cBadge.getAttribute('data-symbol') === 'C');
+
+  // 2) 短按 (<260ms): pointerdown -> 立刻 pointerup -> 置 autoOpen=false, releasedEarly=true，绝不弹 3D 键盘
+  for (const fn of listeners.get('pointerdown') || []) fn({ target: neonBtn, button: 0 });
+  assert.equal(win.__agPeriodicPendingOpen.autoOpen, true);
+  for (const fn of listeners.get('pointerup') || []) fn({ target: neonBtn });
+  assert.equal(win.__agPeriodicPendingOpen.autoOpen, false, 'Short click <260ms must clear autoOpen');
+  assert.equal(win.__agPeriodicPendingOpen.releasedEarly, true, 'Short click <260ms must mark releasedEarly=true');
+
+  // 通过真实 buildPeriodicPickerExpression 的 consumePendingOpen 复用路径验证短按绝不 open、长按 >=260ms 正确 open
+  const fullExpr = cdp.buildPeriodicPickerExpression(cdp.DEFAULT_CONFIG, { noDiskCache: true });
+  const hashMatch = /const targetHash = ("[^"]+")/.exec(fullExpr);
+  assert.ok(hashMatch, 'targetHash must exist in buildPeriodicPickerExpression');
+  const targetHash = JSON.parse(hashMatch[1]);
+  const openCalls = [];
+  win.location = { href: 'vscode-file://vscode-app/index.html', protocol: 'vscode-file:' };
+  html.setAttribute('data-ag-prism-periodic-picker', '1');
+  win.__agPrismPeriodicPicker = {
+    __prismCodeHash: targetHash,
+    getStatus: () => ({ status: 'active', mode: 'on' }),
+    open: (trig) => openCalls.push(trig),
+  };
+  vm.runInNewContext(fullExpr, win);
+  assert.equal(openCalls.length, 0, 'Short click (<260ms) must NEVER open 3D keyboard when full bundle loads');
+  assert.equal(win.__agPrismPeriodicStub, undefined, 'Upgrade must destroy stub cleanly');
+
+  // 3) 长按 (>=260ms): pointerDownAt 距今 320ms 且未提前松手 -> 完整包接管时正确打开 3D 键盘
+  win.__agPeriodicPendingOpen = { trigger: neonBtn, pointerDownAt: Date.now() - 320, autoOpen: true, releasedAt: 0, releasedEarly: false };
+  vm.runInNewContext(fullExpr, win);
+  assert.equal(openCalls.length, 1, 'Hold >=260ms must smoothly open 3D keyboard on full bundle handoff');
+  assert.equal(openCalls[0], neonBtn);
+  stub.destroy();
+});
+
+test('Redteam P1 #4 & #5: sidebar/storage/usage/config.backup & worktree .git are blocked_sensitive, and multi-locale /btw + title unlock works', () => {
+  // P1 #4: 新增敏感路径 100% 拦截
+  const extraBlocked = [
+    'C:\\Users\\Administrator\\.gemini\\config\\obsidian-prism-sidebar.json',
+    'C:\\Users\\Administrator\\.gemini\\config\\obsidian-prism-storage-guard.json',
+    'C:\\Users\\Administrator\\.gemini\\config\\obsidian-prism-usage-rollup.json',
+    'C:\\Users\\Administrator\\.gemini\\config\\obsidian-prism-usage-rollup-cache.json',
+    'C:\\Users\\Administrator\\.gemini\\config\\config.backup.json',
+    'C:\\Users\\Administrator\\.gemini\\config\\skills\\demo\\config.backup.2026',
+    'C:\\Users\\Administrator\\.gemini\\antigravity\\worktrees\\obsidian-prism\\feat\\.git',
+    '/home/alice/.gemini/antigravity/worktrees/proj/.git',
+  ];
+  for (const p of extraBlocked) {
+    assert.equal(isSensitiveInlineDiffPath(p), true, `Expected sensitive path blocked: ${p}`);
+  }
+
+  // P1 #5: 日/韩/法/德/西/繁中 /btw 以及 title 属性解锁，同时 title 真禁用仍锁
+  const multiLocaleUnlock = [
+    { attrs: { 'aria-label': 'Gemini 4 Carbon（/btw に適用）' } },
+    { attrs: { 'aria-label': 'Gemini 4 Carbon (/btw 에 적용)' } },
+    { attrs: { 'aria-label': 'Gemini 4 Carbon (S’applique à /btw)' } },
+    { attrs: { 'aria-label': 'Gemini 4 Carbon (Gilt für /btw)' } },
+    { attrs: { 'aria-label': 'Gemini 4 Carbon', title: 'Applies to /btw and subsequent turns' } },
+  ];
+  for (const tc of multiLocaleUnlock) {
+    const { doc, triggerBtn } = makeMockBox({ ...tc, withCancelBtn: true });
+    assert.equal(hostBridge.isModelTriggerLocked(triggerBtn, doc), false, `Multi-locale /btw or title hint must unlock: ${JSON.stringify(tc)}`);
+  }
+  const { doc: lockDoc, triggerBtn: lockBtn } = makeMockBox({
+    attrs: { 'aria-label': 'Gemini 4 Carbon', title: 'Model cannot be changed while running' },
+    withCancelBtn: true,
+  });
+  assert.equal(hostBridge.isModelTriggerLocked(lockBtn, lockDoc), true, 'title true-disabled signal must still lock');
+});
+
+test('Redteam P1 #6: vial-core swaps canvas on webglcontextlost so 2D fallback draws non-empty frame even when WebGL2 canvas returns null for 2d', () => {
+  let draw2dOps = 0;
+  const make2dCtx = () => ({
+    save() { draw2dOps++; }, restore() {}, clearRect() {}, beginPath() {}, closePath() {},
+    moveTo() {}, lineTo() {}, arc() {}, arcTo() {}, ellipse() {}, quadraticCurveTo() {}, bezierCurveTo() {},
+    roundRect() {}, rect() {}, clip() {}, setLineDash() {}, measureText: () => ({ width: 20 }),
+    fill() { draw2dOps++; }, stroke() { draw2dOps++; },
+    fillRect() { draw2dOps++; }, strokeRect() { draw2dOps++; }, fillText() { draw2dOps++; }, strokeText() {},
+    setTransform() {}, transform() {}, resetTransform() {}, translate() {}, scale() {}, rotate() {},
+    createLinearGradient: () => ({ addColorStop() {} }),
+    createRadialGradient: () => ({ addColorStop() {} }),
+  });
+
+  const glListeners = new Map();
+  let glLost = false;
+  const mockGl = {
+    VERTEX_SHADER: 0x8b31, FRAGMENT_SHADER: 0x8b30, COMPILE_STATUS: 0x8b81, LINK_STATUS: 0x8b82,
+    ARRAY_BUFFER: 0x8892, STATIC_DRAW: 0x88e4, FLOAT: 0x1406, COLOR_BUFFER_BIT: 0x4000, TRIANGLE_STRIP: 5,
+    TEXTURE0: 0x84c0, TEXTURE_2D: 0x0de1, RGBA: 0x1908, UNSIGNED_BYTE: 0x1401, NEAREST: 0x2600, LINEAR: 0x2601,
+    CLAMP_TO_EDGE: 0x812f, TEXTURE_MIN_FILTER: 0x2801, TEXTURE_MAG_FILTER: 0x2800, TEXTURE_WRAP_S: 0x2802, TEXTURE_WRAP_T: 0x2803,
+    createShader: () => ({}), shaderSource() {}, compileShader() {}, getShaderParameter: () => true, deleteShader() {},
+    createProgram: () => ({}), attachShader() {}, linkProgram() {}, getProgramParameter: () => true, deleteProgram() {},
+    createBuffer: () => ({}), bindBuffer() {}, bufferData() {}, deleteBuffer() {},
+    getAttribLocation: () => 0, enableVertexAttribArray() {}, vertexAttribPointer() {}, useProgram() {},
+    createTexture: () => ({}), activeTexture() {}, bindTexture() {}, texParameteri() {}, texImage2D() {}, texSubImage2D() {}, deleteTexture() {},
+    getUniformLocation: () => ({}), uniform1i() {}, uniform1f() {}, uniform2f() {}, uniform3f() {}, uniform3fv() {}, uniform4fv() {}, uniform2fv() {},
+    viewport() {}, clearColor() {}, clear() {}, drawArrays() {},
+    isContextLost: () => glLost,
+    getExtension: () => ({ loseContext() {} }),
+  };
+
+  const parent = {
+    children: [],
+    replaceChild(nextCv, oldCv) {
+      const i = this.children.indexOf(oldCv);
+      if (i >= 0) this.children[i] = nextCv;
+      nextCv.parentNode = this;
+      oldCv.parentNode = null;
+    },
+  };
+  const ownerDoc = {
+    createElement(tag) {
+      assert.equal(tag, 'canvas');
+      return {
+        width: 0, height: 0, className: '', style: { cssText: '' }, parentNode: null, ownerDocument: ownerDoc,
+        addEventListener() {}, removeEventListener() {},
+        getBoundingClientRect: () => ({ left: 0, top: 0, width: 68, height: 212 }),
+        getContext: (kind) => (kind === '2d' ? make2dCtx() : null),
+      };
+    },
+  };
+  const glCanvas = {
+    width: 68, height: 212, className: 'vial-cv', style: { cssText: 'width:68px;height:212px' },
+    parentNode: parent, ownerDocument: ownerDoc,
+    addEventListener(k, fn) { glListeners.set(k, fn); },
+    removeEventListener(k) { glListeners.delete(k); },
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 68, height: 212 }),
+    // 严格模拟 HTML5 Canvas 规范：已绑定 webgl2 的节点调用 getContext('2d') 恒返回 null！
+    getContext: (kind) => (kind === 'webgl2' ? mockGl : null),
+  };
+  parent.children.push(glCanvas);
+
+  const vial = vialCore.mountPhysicalWaterVial(glCanvas, { cssWidth: 68, cssHeight: 212, fill: 0.45 });
+  assert.equal(vial.getDebugState().rendererMode, 'webgl2');
+
+  // 触发 webglcontextlost -> 必须换入新 2D canvas 并绘制非空画面！
+  glLost = true;
+  glListeners.get('webglcontextlost')?.({ preventDefault() {} });
+  assert.equal(vial.getDebugState().rendererMode, '2d');
+  assert.notEqual(parent.children[0], glCanvas, 'Must swap to a fresh 2D canvas node when WebGL2 canvas returns null for 2d');
+  draw2dOps = 0;
+  vial.step(0.016);
+  assert.ok(draw2dOps > 10, `2D fallback must draw non-empty vial + scale marks after webglcontextlost (got ${draw2dOps} ops)`);
+
+  // 触发 webglcontextrestored -> 还原 WebGL2 节点
+  glLost = false;
+  glListeners.get('webglcontextrestored')?.({});
+  assert.equal(vial.getDebugState().rendererMode, 'webgl2');
+  assert.equal(parent.children[0], glCanvas, 'webglcontextrestored must restore original WebGL2 canvas');
+  vial.dispose();
 });

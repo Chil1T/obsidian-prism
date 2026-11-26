@@ -155,10 +155,11 @@ function createCh1Templates({
         }
         if (e?.periodicModelPicker === 'off' || e?.periodicModelPicker === false) {
           T(() => {
+            W.__agPrismPeriodicStub?.destroy?.();
             W.__agPrismPeriodicPicker?.destroy?.();
             ra('data-ag-prism-periodic-picker,data-ag-pp-open,data-ag-pp-holding');
-            rm('#ag-prism-periodic-picker-css,#ag-prism-periodic-picker-root,.ag-pp-hold-ring,.ag-pp-mini-keycap');
-            dw('__agPrismPeriodicPicker,__agPrismPeriodicPickerFactory,__agPrismKeyboard3D,__agPrismPeriodicKeyboard3D,__agPrismOledScreen,__agPrismGrainAssets,__agPeriodicAudioFx,__agPeriodicModelCatalog,__agPeriodicHostBridge,__agPeriodicBentoUi,__agPeriodicPbrGrainAssets,__agPeriodicOledScreen,__agPeriodicKeyboard3D');
+            rm('#ag-prism-periodic-stub-css,#ag-prism-periodic-picker-css,#ag-prism-periodic-picker-root,.ag-pp-hold-ring,.ag-pp-mini-keycap');
+            dw('__agPrismPeriodicStub,__agPrismPeriodicStubFactory,__agPeriodicPendingOpen,__agPeriodicFullLoaded,__agPeriodicStubHash,__agPrismPeriodicPicker,__agPrismPeriodicPickerFactory,__agPrismKeyboard3D,__agPrismPeriodicKeyboard3D,__agPrismOledScreen,__agPrismGrainAssets,__agPeriodicAudioFx,__agPeriodicModelCatalog,__agPeriodicHostBridge,__agPeriodicBentoUi,__agPeriodicPbrGrainAssets,__agPeriodicOledScreen,__agPeriodicKeyboard3D');
           });
         }
         if (de) {
@@ -239,7 +240,7 @@ function createCh1Templates({
         const buckets = parseBuckets(getCss()), SC = W.CSSStyleSheet || (typeof CSSStyleSheet === 'function' ? CSSStyleSheet : null);
         const canA = () => Boolean(T(() => SC && isF(SC.prototype?.replaceSync) && isF(D.adoptedStyleSheets?.[Symbol.iterator])));
         const sheets = new Map(), owned = new Set();
-        let lastSig = '', mo = null, lastCfg = null;
+        let lastSig = '', mo = null, moB = null, bPend = 0, lastCfg = null;
         const calcKeys = (cfg, h) => {
           const de = D.documentElement, hc = isO(cfg), c = hc ? cfg : lastCfg || W.__agPrism?.getState?.()?.cfg || {};
           const ga = (k) => de?.getAttribute?.(k), on = (hv, fn) => hv === true || (hv !== false && fn());
@@ -297,15 +298,17 @@ function createCh1Templates({
           },
           _armObserver() {
             if (mgr._disposed || mo || !canA() || !D.documentElement || !isF(W.MutationObserver)) return;
+            const sched = () => { if (bPend || mgr._disposed) return; bPend = 1; Promise.resolve().then(() => { bPend = 0; if (!mgr._disposed) T(() => mgr.sync(null)); }); };
             T(() => {
               mo = new W.MutationObserver(() => T(() => mgr.sync(null)));
               mo.observe(D.documentElement, { attributes: true, attributeFilter: sp('theme,palette,light-preset,accent,motion,sidebar,home,conv-ripple').map((s) => 'data-ag-cs-' + s).concat('data-ag-prism-thought-view') });
+              if (D.body) { moB = new W.MutationObserver(sched); moB.observe(D.body, { childList: true }); }
             });
           },
           destroy(opts) {
             if (mgr._disposed) return;
             mgr._disposed = true;
-            T(() => mo?.disconnect?.()); mo = null;
+            T(() => mo?.disconnect?.()); T(() => moB?.disconnect?.()); mo = moB = null;
             if (owned.size && isF(D.adoptedStyleSheets?.[Symbol.iterator])) T(() => { D.adoptedStyleSheets = Array.from(D.adoptedStyleSheets).filter((s) => !owned.has(s)); });
             owned.clear(); sheets.clear(); lastSig = ''; mgr.activeKeys = []; mgr.activeBytes = 0;
             T(() => { const s = gid(SID); if (s) { if (opts?.keepStyleNode) s.textContent = ''; else s.remove?.(); } });
@@ -325,7 +328,7 @@ function createCh1Templates({
         const wrap = (k, fn) => { const o = isF(api[k]) ? api[k].bind(api) : null; if (o) api[k] = (...a) => fn(o, a); };
         wrap('refreshConfig', (o, a) => { const r = o(...a); T(() => W.__agPrismCssMgr?.sync?.(api.getState?.()?.cfg || a[0])); return r; });
         wrap('sync', (o, a) => { const r = o(...a); T(() => W.__agPrismCssMgr?.sync?.(api.getState?.()?.cfg)); return r; });
-        wrap('destroy', (o, a) => { T(() => W.__agPrismCssMgr?.destroy?.({ keepStyleNode: true })); return o(...a); });
+        wrap('destroy', (o, a) => { T(() => W.__agPrismCssMgr?.destroy?.()); return o(...a); });
       };
 
       const mkRpc = (bk, lim, onTo, onErr, disp) => {
@@ -410,16 +413,16 @@ function createCh1Templates({
       };
 
       const stripForeign = () => {
-        destroyMods('__agPrism,__agPrismInlineDiff,__agPrismHostI18n,__agPrismPeriodicPicker,__agPrismCssMgr');
+        destroyMods('__agPrism,__agPrismInlineDiff,__agPrismHostI18n,__agPrismPeriodicStub,__agPrismPeriodicPicker,__agPrismCssMgr');
         T(() => {
           const de = D.documentElement;
           for (const a of sp('data-ag-prism-host-i18n,data-ag-prism-periodic-picker,data-ag-pp-open,data-ag-cs-model-menu')) de?.removeAttribute?.(a);
           qa('[data-ag-cs-aux-dual],[data-ag-cs-model-overlay]').forEach((el) => { el.removeAttribute('data-ag-cs-aux-dual'); el.removeAttribute('data-ag-cs-model-overlay'); });
-          qa('[data-testid="prism-thought-ai-config"],[data-testid="prism-thought-general-config"],.ag-cs-ctx-menu,.ag-cs-ctx-toast,.ag-cs-inline-diff-box,.ag-cs-diff-ctx-menu').forEach((el) => el.remove());
+          qa('[data-testid="prism-thought-ai-config"],[data-testid="prism-thought-general-config"],.ag-cs-ctx-menu,.ag-cs-ctx-toast,.ag-cs-inline-diff-box,.ag-cs-diff-ctx-menu,.ag-pp-hold-ring,.ag-pp-mini-keycap').forEach((el) => el.remove());
         });
         for (const k of sp('__agPrismRepoBridge,__agPrismThoughtBridge,__agPrismUsageBridge,__agPrismOmniBridge')) T(() => W[k]?.dispose?.());
-        for (const id of [SID, LSID, ...sp('ag-prism-settings-v101-css,ag-prism-studio-v101-css,ag-prism-omni-css,ag-prism-inline-diff-css')]) T(() => gid(id)?.remove());
-        for (const k of sp('__agPrismCssMgr,__agPrismThought,__agPrismThoughtSettingsUi,__agPrismInlineDiff,__agPrismInlineDiffFactory,__agPrismInlineDiffResolve,__agPrismOmni,__agPrismContextMenu,__agPrism,__agClaudeStyle')) { delete W[k]; delete G[k]; }
+        for (const id of [SID, LSID, ...sp('ag-prism-settings-v101-css,ag-prism-studio-v101-css,ag-prism-omni-css,ag-prism-inline-diff-css,ag-prism-periodic-stub-css,ag-prism-periodic-picker-css')]) T(() => gid(id)?.remove());
+        for (const k of sp('__agPrismCssMgr,__agPrismPeriodicStub,__agPrismPeriodicStubFactory,__agPeriodicPendingOpen,__agPeriodicFullLoaded,__agPeriodicStubHash,__agPrismThought,__agPrismThoughtSettingsUi,__agPrismInlineDiff,__agPrismInlineDiffFactory,__agPrismInlineDiffResolve,__agPrismOmni,__agPrismContextMenu,__agPrism,__agClaudeStyle')) { delete W[k]; delete G[k]; }
       };
 
       const hasMarkers = () => Boolean(T(() => {

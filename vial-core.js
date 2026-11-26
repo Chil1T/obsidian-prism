@@ -23,124 +23,69 @@
 
     const getSurfaceYNormalized = () => 1 - fill;
 
-    const getSurfacePixelY = () => {
-      const top = LIP_Y + 8;
-      const bot = HEM_Y + 14;
-      return bot - fill * (bot - top);
-    };
-
-    const sampleWaveAt = (normX) => {
-      const t = Math.max(0, Math.min(1, (normX + 1) * 0.5)) * (WAVE_NODES - 1);
-      const i0 = Math.min(WAVE_NODES - 2, Math.floor(t));
-      const f = t - i0;
+    const getSurfacePixelY = () => (HEM_Y + 14) - fill * ((HEM_Y + 14) - (LIP_Y + 8));
+    const sampleWaveAt = (nx) => {
+      const t = Math.max(0, Math.min(1, (nx + 1) * 0.5)) * (WAVE_NODES - 1), i0 = Math.min(WAVE_NODES - 2, Math.floor(t)), f = t - i0;
       return waveH[i0] * (1 - f) + waveH[i0 + 1] * f;
     };
-
     const localSurfaceY = (xPx) => getSurfacePixelY() + Math.tan(tiltAngle) * xPx + sampleWaveAt(xPx / TUBE_IN_R);
-
     const boreHalfWidthAt = (yPx) => {
       if (yPx <= TOP_IN || yPx >= FLOOR_IN) return 0;
       const cyTop = TOP_IN + RC_TOP_IN;
-      if (yPx < cyTop) {
-        const dt = cyTop - yPx;
-        return TUBE_IN_R - RC_TOP_IN + Math.sqrt(Math.max(0, RC_TOP_IN * RC_TOP_IN - dt * dt));
-      }
-      const cyBot = FLOOR_IN - RC_IN;
-      const db = yPx - cyBot;
-      if (db <= 0) return TUBE_IN_R;
-      return db >= RC_IN ? TUBE_IN_R - RC_IN : TUBE_IN_R - RC_IN + Math.sqrt(Math.max(0, RC_IN * RC_IN - db * db));
+      if (yPx < cyTop) { const dt = cyTop - yPx; return TUBE_IN_R - RC_TOP_IN + Math.sqrt(Math.max(0, RC_TOP_IN * RC_TOP_IN - dt * dt)); }
+      const db = yPx - (FLOOR_IN - RC_IN);
+      return db <= 0 ? TUBE_IN_R : db >= RC_IN ? TUBE_IN_R - RC_IN : TUBE_IN_R - RC_IN + Math.sqrt(Math.max(0, RC_IN * RC_IN - db * db));
     };
-
     const spawnSplashBubbles = (normX, count, gentle = false) => {
       const surfY = getSurfacePixelY();
       for (let i = 0; i < count; i++) {
         if (bubbles.length >= 10) bubblePool.push(bubbles.shift());
-        const b = bubblePool.pop() || {};
-        const jitterX = (Math.random() - 0.5) * 8.0;
-        b.y = gentle
-          ? Math.min(HEM_Y + 10, Math.max(surfY + 14, FLOOR_IN - 12 - Math.random() * 18))
-          : Math.min(HEM_Y + 11, surfY + 5 + Math.random() * 14);
+        const b = bubblePool.pop() || {}, jx = (Math.random() - 0.5) * 8.0;
+        b.y = gentle ? Math.min(HEM_Y + 10, Math.max(surfY + 14, FLOOR_IN - 12 - Math.random() * 18)) : Math.min(HEM_Y + 11, surfY + 5 + Math.random() * 14);
         b.r = gentle ? 0.95 + Math.random() * 0.65 : 1.3 + Math.random() * 1.45;
         const maxX = Math.max(2, boreHalfWidthAt(b.y) - b.r - 1.2);
-        b.x = Math.max(-maxX, Math.min(maxX, normX * (TUBE_IN_R - 4) + jitterX));
-        b.vx = (Math.random() - 0.5) * (gentle ? 3.5 : 9.0);
-        b.vy = gentle ? -(14 + Math.random() * 9) : -(22 + Math.random() * 24);
-        b.phase = Math.random() * Math.PI * 2;
-        b.aspect = 1.0;
-        b.alpha = gentle ? 0.72 : 0.92;
-        b.gentle = gentle;
+        b.x = Math.max(-maxX, Math.min(maxX, normX * (TUBE_IN_R - 4) + jx));
+        b.vx = (Math.random() - 0.5) * (gentle ? 3.5 : 9.0); b.vy = gentle ? -(14 + Math.random() * 9) : -(22 + Math.random() * 24);
+        b.phase = Math.random() * Math.PI * 2; b.aspect = 1.0; b.alpha = gentle ? 0.72 : 0.92; b.gentle = gentle;
         bubbles.push(b);
       }
     };
-
-    const injectWaveRange = (centerNorm, widthNodes, ampVel) => {
-      const idxF = Math.max(0, Math.min(WAVE_NODES - 1, ((centerNorm + 1) * 0.5) * (WAVE_NODES - 1)));
+    const injectWaveRange = (cN, wN, aV) => {
+      const idxF = Math.max(0, Math.min(WAVE_NODES - 1, ((cN + 1) * 0.5) * (WAVE_NODES - 1)));
       for (let i = 0; i < WAVE_NODES; i++) {
         const d = Math.abs(i - idxF);
-        if (d <= widthNodes) {
-          const w = 0.5 * (1 + Math.cos((d / Math.max(1, widthNodes)) * Math.PI));
-          waveV[i] = Math.max(-65, Math.min(65, waveV[i] + ampVel * w));
-        }
+        if (d <= wN) waveV[i] = Math.max(-65, Math.min(65, waveV[i] + aV * 0.5 * (1 + Math.cos((d / Math.max(1, wN)) * Math.PI))));
       }
     };
-
     const injectSlosh = (impulse = 1.6) => {
       const s = Math.max(-3.8, Math.min(3.8, Number(impulse) || 0));
       tiltVel += s * 1.85;
-      for (let i = 0; i < WAVE_NODES; i++) {
-        const norm = (i / (WAVE_NODES - 1)) * 2 - 1;
-        waveV[i] += norm * s * 18.0 + Math.sin(norm * 4.2) * Math.abs(s) * 4.2;
-      }
-      if (Math.abs(s) > 0.85) {
-        spawnSplashBubbles(s > 0 ? 0.25 : -0.25, 2, false);
-      }
+      for (let i = 0; i < WAVE_NODES; i++) { const nm = (i / (WAVE_NODES - 1)) * 2 - 1; waveV[i] += nm * s * 18.0 + Math.sin(nm * 4.2) * Math.abs(s) * 4.2; }
+      if (Math.abs(s) > 0.85) spawnSplashBubbles(s > 0 ? 0.25 : -0.25, 2, false);
     };
 
     const injectTilt = (angleOrImpulse = 0.18) => {
       const s = Math.max(-1.6, Math.min(1.6, Number(angleOrImpulse) || 0));
-      tiltAngle = Math.max(-0.48, Math.min(0.48, tiltAngle + s * 0.45));
-      tiltVel += s * 2.2;
-      for (let i = 0; i < WAVE_NODES; i++) {
-        const norm = (i / (WAVE_NODES - 1)) * 2 - 1;
-        waveV[i] += norm * s * 12.0;
-      }
+      tiltAngle = Math.max(-0.48, Math.min(0.48, tiltAngle + s * 0.45)); tiltVel += s * 2.2;
+      for (let i = 0; i < WAVE_NODES; i++) waveV[i] += ((i / (WAVE_NODES - 1)) * 2 - 1) * s * 12.0;
     };
-
     const injectFingerPoke = (normX = 0, normY = 0.5, vx = 0, vy = 0) => {
-      const nx = Math.max(-1, Math.min(1, normX));
-      const surfNorm = getSurfaceYNormalized();
-      const nearSurface = Math.abs(normY - surfNorm) < 0.22;
-      const pushX = Math.max(-2.6, Math.min(2.6, vx * 0.14));
-      if (nearSurface) {
-        injectWaveRange(nx, 4.5, -24 + vy * 1.4);
-        tiltVel += pushX * 0.62;
+      const nx = Math.max(-1, Math.min(1, normX)), pushX = Math.max(-2.6, Math.min(2.6, vx * 0.14));
+      if (Math.abs(normY - getSurfaceYNormalized()) < 0.22) {
+        injectWaveRange(nx, 4.5, -24 + vy * 1.4); tiltVel += pushX * 0.62;
         if (nx < -0.35) wetLeft = Math.min(0.42, wetLeft + 0.16);
         if (nx > 0.35) wetRight = Math.min(0.42, wetRight + 0.16);
         spawnSplashBubbles(nx * 0.7, 2, false);
-      } else {
-        injectWaveRange(nx, 3.2, -11.5);
-        tiltVel += (pushX !== 0 ? pushX : nx * 0.4) * 0.44;
-      }
+      } else { injectWaveRange(nx, 3.2, -11.5); tiltVel += (pushX !== 0 ? pushX : nx * 0.4) * 0.44; }
     };
-
     const spawnDropletNow = () => {
       if (fallingDrops.length >= 4) return;
-      pendantProgress = 0;
-      dropCooldown = 0.72;
+      pendantProgress = 0; dropCooldown = 0.72;
       const d = dropPool.pop() || {};
-      d.x = (Math.random() - 0.5) * 1.8;
-      d.y = LIP_Y + 5.0;
-      d.vx = 0;
-      d.vy = 38.0;
-      d.r = 2.55;
+      d.x = (Math.random() - 0.5) * 1.8; d.y = LIP_Y + 5.0; d.vx = 0; d.vy = 38.0; d.r = 2.55;
       fallingDrops.push(d);
     };
-
-    const computeEnergy = () => {
-      let energy = 0;
-      for (let i = 0; i < WAVE_NODES; i++) energy += Math.abs(waveH[i]) + Math.abs(waveV[i]) * 0.05;
-      return energy;
-    };
+    const computeEnergy = () => { let e = 0; for (let i = 0; i < WAVE_NODES; i++) e += Math.abs(waveH[i]) + Math.abs(waveV[i]) * 0.05; return e; };
 
     const subStep = (dt) => {
       const diffFill = targetFill - fill;
@@ -209,133 +154,53 @@
       wetLeft = Math.max(0, wetLeft - dt * 0.14);
       wetRight = Math.max(0, wetRight - dt * 0.14);
 
-      // 3. 流式态舱底 3D 星尘微粒缓升
+      // 3. 流式微粒与下坠液滴/微泡物理
       pendantProgress = Math.max(0, pendantProgress - dt * 2.0);
       if (dropCooldown > 0) dropCooldown = Math.max(0, dropCooldown - dt);
-      if (streaming && fill > 0.14 && fallingDrops.length === 0) {
+      if (streaming && fill > 0.14 && !fallingDrops.length) {
         dustCooldown -= dt;
-        if (dustCooldown <= 0 && bubbles.length < 4) {
-          dustCooldown = 0.62 + Math.random() * 0.45;
-          spawnSplashBubbles((Math.random() - 0.5) * 1.1, 1, true);
-        }
+        if (dustCooldown <= 0 && bubbles.length < 4) { dustCooldown = 0.62 + Math.random() * 0.45; spawnSplashBubbles((Math.random() - 0.5) * 1.1, 1, true); }
       }
-
-      // 下坠液滴物理与落水激波
       for (let i = fallingDrops.length - 1; i >= 0; i--) {
         const d = fallingDrops[i];
-        d.vx += -GRAVITY * sinT * dt;
-        d.vy += GRAVITY * cosT * dt;
-        d.x += d.vx * dt;
-        d.y += d.vy * dt;
+        d.vx += -GRAVITY * sinT * dt; d.vy += GRAVITY * cosT * dt; d.x += d.vx * dt; d.y += d.vy * dt;
         const limD = Math.max(0, boreHalfWidthAt(d.y) - d.r - 0.6);
-        if (d.x < -limD) {
-          d.x = -limD;
-          d.vx = Math.abs(d.vx) * 0.12;
-          wetLeft = Math.max(wetLeft, 0.12);
-        } else if (d.x > limD) {
-          d.x = limD;
-          d.vx = -Math.abs(d.vx) * 0.12;
-          wetRight = Math.max(wetRight, 0.12);
-        }
+        if (d.x < -limD) { d.x = -limD; d.vx = Math.abs(d.vx) * 0.12; wetLeft = Math.max(wetLeft, 0.12); }
+        else if (d.x > limD) { d.x = limD; d.vx = -Math.abs(d.vx) * 0.12; wetRight = Math.max(wetRight, 0.12); }
         if (d.y >= localSurfaceY(d.x) - 1.5) {
-          const normDropX = d.x / TUBE_IN_R;
-          injectWaveRange(normDropX, 4.2, -32.0);
-          spawnSplashBubbles(normDropX, 3, false);
-          dropPool.push(d);
-          fallingDrops.splice(i, 1);
+          const nx = d.x / TUBE_IN_R; injectWaveRange(nx, 4.2, -32.0); spawnSplashBubbles(nx, 3, false);
+          dropPool.push(d); fallingDrops.splice(i, 1);
         }
       }
-
-      // 4. 舱内星尘微泡缓升
       for (let i = bubbles.length - 1; i >= 0; i--) {
         const b = bubbles[i];
         b.phase += dt * (b.gentle ? 3.8 : 5.8 + 2.0 / b.r);
-        const rise = b.gentle ? 16 + b.r * 5 : 25 + b.r * 8;
-        const relax = Math.min(1, dt * 3.0);
-        b.vx += (sinT * rise - b.vx) * relax;
-        b.vy += (-cosT * rise - b.vy) * relax;
+        const rise = b.gentle ? 16 + b.r * 5 : 25 + b.r * 8, relax = Math.min(1, dt * 3.0);
+        b.vx += (sinT * rise - b.vx) * relax; b.vy += (-cosT * rise - b.vy) * relax;
         const wob = Math.sin(b.phase) * (b.gentle ? 3.2 : 5.6 + b.r * 2.2);
-        b.x += (b.vx + cosT * wob) * dt;
-        b.y += (b.vy + sinT * wob) * dt;
+        b.x += (b.vx + cosT * wob) * dt; b.y += (b.vy + sinT * wob) * dt;
         b.aspect = 1 + (b.gentle ? 0.10 : 0.18) * Math.sin(b.phase * 2 + 0.6);
         const limB = Math.max(0, boreHalfWidthAt(b.y) - b.r - 1.0);
-        b.x = Math.max(-limB, Math.min(limB, b.x));
-        b.y = Math.min(HEM_Y + 11, b.y);
-        if (b.y <= localSurfaceY(b.x) + 2.5) {
-          injectWaveRange(b.x / TUBE_IN_R, 2.0, b.gentle ? -0.6 : -4.4);
-          bubblePool.push(b);
-          bubbles.splice(i, 1);
-        }
+        b.x = Math.max(-limB, Math.min(limB, b.x)); b.y = Math.min(HEM_Y + 11, b.y);
+        if (b.y <= localSurfaceY(b.x) + 2.5) { injectWaveRange(b.x / TUBE_IN_R, 2.0, b.gentle ? -0.6 : -4.4); bubblePool.push(b); bubbles.splice(i, 1); }
       }
     };
 
     const step = (dtRaw) => {
-      const dt = Math.max(0.001, Math.min(MAX_FRAME_DT, Number(dtRaw || 0.016)));
-      accumulator += dt;
+      accumulator += Math.max(0.001, Math.min(MAX_FRAME_DT, Number(dtRaw || 0.016)));
       let n = 0;
-      while (accumulator >= FIXED_DT && n < MAX_SUBSTEPS) {
-        subStep(FIXED_DT);
-        accumulator -= FIXED_DT;
-        n++;
-      }
+      while (accumulator >= FIXED_DT && n < MAX_SUBSTEPS) { subStep(FIXED_DT); accumulator -= FIXED_DT; n++; }
       if (n >= MAX_SUBSTEPS) accumulator = 0;
     };
-
-    const isSettled = () => {
-      if (streaming) return false;
-      if (fallingDrops.length > 0 || bubbles.length > 0) return false;
-      if (Math.abs(targetFill - fill) >= 0.001) return false;
-      if (Math.abs(tiltAngle) >= 0.005 || Math.abs(tiltVel) >= 0.015) return false;
-      if (computeEnergy() >= 0.24) return false;
-      if (wetLeft >= 0.06 || wetRight >= 0.06) return false;
-      return true;
-    };
-
-    const readSnapshotInto = (out) => {
-      out.fill = fill;
-      out.targetFill = targetFill;
-      out.fillError = Math.abs(targetFill - fill);
-      out.tiltAngle = tiltAngle;
-      out.tiltVel = tiltVel;
-      out.waveEnergy = computeEnergy();
-      out.pendantSize = pendantProgress;
-      out.fallingCount = fallingDrops.length;
-      out.bubbleCount = bubbles.length;
-      out.wetLeft = wetLeft;
-      out.wetRight = wetRight;
-      out.streaming = streaming;
-      return out;
-    };
-
-    const getSnapshot = () => {
-      const snap = readSnapshotInto({});
-      snap.waveEnergy = Number(snap.waveEnergy.toFixed(3));
-      return snap;
-    };
-
+    const isSettled = () => !streaming && !fallingDrops.length && !bubbles.length && Math.abs(targetFill - fill) < 0.001 && Math.abs(tiltAngle) < 0.005 && Math.abs(tiltVel) < 0.015 && computeEnergy() < 0.24 && wetLeft < 0.06 && wetRight < 0.06;
+    const readSnapshotInto = (out) => Object.assign(out, { fill, targetFill, fillError: Math.abs(targetFill - fill), tiltAngle, tiltVel, waveEnergy: computeEnergy(), pendantSize: pendantProgress, fallingCount: fallingDrops.length, bubbleCount: bubbles.length, wetLeft, wetRight, streaming });
+    const getSnapshot = () => { const s = readSnapshotInto({}); s.waveEnergy = Number(s.waveEnergy.toFixed(3)); return s; };
     return {
-      waveH,
-      fallingDrops,
-      bubbles,
-      readSnapshotInto,
-      setTargetFill(next) {
-        targetFill = clampFillVal(next ?? 0.46);
-      },
-      snapFillNow(next) {
-        targetFill = clampFillVal(next ?? targetFill);
-        fill = targetFill;
-      },
-      setStreaming(on) {
-        streaming = Boolean(on);
-      },
-      injectSlosh,
-      injectTilt,
-      injectFingerPoke,
-      spawnDropletNow,
-      getSurfacePixelY,
-      isSettled,
-      step,
-      getSnapshot,
+      waveH, fallingDrops, bubbles, readSnapshotInto,
+      setTargetFill(next) { targetFill = clampFillVal(next ?? 0.46); },
+      snapFillNow(next) { targetFill = fill = clampFillVal(next ?? targetFill); },
+      setStreaming(on) { streaming = Boolean(on); },
+      injectSlosh, injectTilt, injectFingerPoke, spawnDropletNow, getSurfacePixelY, isSettled, step, getSnapshot,
     };
   }
 
@@ -371,8 +236,6 @@
     uniform float u_hoverSlice;
     uniform sampler2D u_waveTex;
     uniform sampler2D u_scaleTex;
-    uniform float u_wave;
-    uniform float u_raySlope;
     uniform vec4 u_drops[4];
     uniform vec4 u_bubbles[8];
     uniform vec2 u_bubShape[8];
@@ -983,6 +846,9 @@
 
     let glState = null, glContextLost = false, lastScaleSig = '';
     let scaleCanvas = null, scaleCtx = null;
+    const glCanvas = canvas;
+    let fbCanvas = null;
+    let ptrToggle = null;
     const readVialPerf = () => {
       const rw = typeof globalThis !== 'undefined' && globalThis.__agPrismRippleWorker;
       if (rw && typeof rw.getPerfMode === 'function') return rw.getPerfMode();
@@ -1042,9 +908,29 @@
       };
     };
 
+    const swapCanvasFor2D = () => {
+      const docRef = canvas?.ownerDocument || (typeof document !== 'undefined' ? document : null), par = canvas?.parentNode;
+      if (!docRef?.createElement || !par?.replaceChild) return null;
+      try {
+        const cv = docRef.createElement('canvas'), c2 = cv?.getContext?.('2d');
+        if (!c2) return null;
+        cv.width = canvas.width || 0; cv.height = canvas.height || 0;
+        if (typeof canvas.className === 'string') cv.className = canvas.className;
+        if (canvas.style && cv.style && typeof canvas.style.cssText === 'string') cv.style.cssText = canvas.style.cssText;
+        ptrToggle?.(canvas, false); par.replaceChild(cv, canvas);
+        fbCanvas = canvas = cv; cachedCanvasRect = null; cachedCanvasRectAt = 0; ptrToggle?.(canvas, true);
+        return c2;
+      } catch { return null; }
+    };
+    const restoreGlCanvas = () => {
+      if (!fbCanvas || !glCanvas) return;
+      try { ptrToggle?.(fbCanvas, false); fbCanvas.parentNode?.replaceChild?.(glCanvas, fbCanvas); fbCanvas.width = fbCanvas.height = 0; } catch {}
+      fbCanvas = ctx2d = null; canvas = glCanvas; cachedCanvasRect = null; cachedCanvasRectAt = 0; ptrToggle?.(canvas, true);
+    };
     const ensure2dFallback = () => {
-      if (!ctx2d && canvas && typeof canvas.getContext === 'function') {
+      if (!ctx2d && canvas?.getContext) {
         try { ctx2d = canvas.getContext('2d'); } catch { ctx2d = null; }
+        if (!ctx2d && glContextLost) ctx2d = swapCanvasFor2D();
       }
       return ctx2d;
     };
@@ -1057,10 +943,11 @@
     };
 
     const onGlRestored = () => {
-      if (!canvas) return;
+      if (!glCanvas) return;
       try {
-        const gl = canvas.getContext('webgl2', glOpts());
+        const gl = glCanvas.getContext('webgl2', glOpts());
         if (gl) {
+          restoreGlCanvas();
           glState = buildGlState(gl); glContextLost = false; dirtyRender = true; lastScaleSig = '';
           if (typeof options.onWake === 'function') { try { options.onWake(); } catch {} }
         }
@@ -1161,11 +1048,14 @@
       cachedCanvasRectAt = 0;
     };
 
-    if (canvas && canvas.addEventListener) {
-      canvas.addEventListener('pointermove', onPointerMove);
-      canvas.addEventListener('pointerdown', onPointerDown);
-      canvas.addEventListener('pointerleave', onPointerLeave);
-    }
+    ptrToggle = (el, on) => {
+      const m = on ? 'addEventListener' : 'removeEventListener';
+      if (!el || typeof el[m] !== 'function') return;
+      el[m]('pointermove', onPointerMove);
+      el[m]('pointerdown', onPointerDown);
+      el[m]('pointerleave', onPointerLeave);
+    };
+    ptrToggle(canvas, true);
 
     // 右侧 512K 动态激光微刻标尺（浅色加深为清晰石板蓝灰 rgba(30, 41, 59, 0.62)）
     const drawScaleMarks = (ctx, st, curFill) => {
@@ -1624,12 +1514,17 @@
         };
       },
       dispose() {
-        if (canvas && canvas.removeEventListener) {
-          canvas.removeEventListener('pointermove', onPointerMove);
-          canvas.removeEventListener('pointerdown', onPointerDown);
-          canvas.removeEventListener('pointerleave', onPointerLeave);
-          canvas.removeEventListener('webglcontextlost', onGlLost);
-          canvas.removeEventListener('webglcontextrestored', onGlRestored);
+        if (ptrToggle) {
+          ptrToggle(canvas, false);
+          if (glCanvas && glCanvas !== canvas) ptrToggle(glCanvas, false);
+        }
+        if (glCanvas && glCanvas.removeEventListener) {
+          glCanvas.removeEventListener('webglcontextlost', onGlLost);
+          glCanvas.removeEventListener('webglcontextrestored', onGlRestored);
+        }
+        if (fbCanvas) {
+          try { fbCanvas.width = fbCanvas.height = 0; } catch {}
+          fbCanvas = null;
         }
         if (glState) {
           const { gl, prog, buf, waveTex, scaleTex } = glState;
