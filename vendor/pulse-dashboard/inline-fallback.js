@@ -197,88 +197,59 @@
       }
     };
 
+    const gBus = () => { const w = gW(); return w?.__agDomBus || w?.__agPrismDomBus || null; };
+    const subMo = (id, root, opt, fn, pri) => {
+      const b = gBus(), w = gW();
+      if (b?.subscribe) return { disconnect: b.subscribe(id, fn, { doc: gD(), win: w, priority: pri, observeOptions: opt }) };
+      if (!isFn(w?.MutationObserver) || !root) return null;
+      const mo = new w.MutationObserver(fn); try { mo.observe(root, opt); } catch {} return mo;
+    };
+    const readEntryW = (e) => (Array.isArray(e?.borderBoxSize) ? e.borderBoxSize[0] : e?.borderBoxSize)?.inlineSize ?? (Array.isArray(e?.contentBoxSize) ? e.contentBoxSize[0] : e?.contentBoxSize)?.inlineSize ?? e?.contentRect?.width;
     const schedTierRec = (rec, entries) => {
       if (entries && typeof entries.length === 'number') {
         let rw = NaN;
-        for (let i = entries.length - 1; i >= 0; i--) {
-          const w0 = entries[i]?.contentRect?.width;
-          if (isFin(w0) && w0 >= 0) { rw = w0; break; }
-        }
+        for (let i = entries.length - 1; i >= 0; i--) { const w0 = readEntryW(entries[i]); if (isFin(w0) && w0 >= 0) { rw = w0; break; } }
         if (isFin(rw)) { rec.pendW = rw; rec.hasPendW = true; }
-      } else {
-        rec.hasPendW = false;
-      }
-      if (!rec.raf && mode !== 'off') {
-        const w = gW();
-        rec.raf = w?.requestAnimationFrame ? w.requestAnimationFrame(() => applyTierRec(rec, false)) : (applyTierRec(rec, false), 0);
-      }
+      } else rec.hasPendW = false;
+      if (!rec.raf && mode !== 'off') { const w = gW(); rec.raf = w?.requestAnimationFrame ? w.requestAnimationFrame(() => applyTierRec(rec, false)) : (applyTierRec(rec, false), 0); }
     };
-
     const ensWinResize = () => {
       const w = gW();
       if (!winResOff && w && isFn(w.addEventListener)) {
-        const onR = () => {
-          for (const it of insts.values()) schedTierRec(it, null);
-          for (const et of extTiers.values()) schedTierRec(et, null);
-        };
-        w.addEventListener('resize', onR, { passive: true });
-        winResOff = () => w.removeEventListener?.('resize', onR);
+        const onR = () => { for (const it of insts.values()) schedTierRec(it, null); for (const et of extTiers.values()) schedTierRec(et, null); };
+        w.addEventListener('resize', onR, { passive: true }); winResOff = () => w.removeEventListener?.('resize', onR);
       }
     };
-
     const attachTierRec = (rec) => {
       const w = gW();
       if (!w || !rec?.anc || mode === 'off') return;
-      if (!rec.ro && isFn(w.ResizeObserver)) {
-        try {
-          rec.ro = new w.ResizeObserver((entries) => schedTierRec(rec, entries));
-          rec.ro.observe(rec.anc);
-        } catch {}
+      if (!rec.ro) {
+        const b = gBus();
+        if (b?.observeSize) try { rec.ro = { disconnect: b.observeSize(rec.anc, (sz, en) => schedTierRec(rec, [en || { borderBoxSize: [{ inlineSize: sz.width }] }])) }; } catch {}
+        else if (isFn(w.ResizeObserver)) try { rec.ro = new w.ResizeObserver((es) => schedTierRec(rec, es)); rec.ro.observe(rec.anc); } catch {}
       }
-      ensWinResize();
-      if (!rec.lastTv || !rec.ro) applyTierRec(rec, true);
+      ensWinResize(); if (!rec.lastTv || !rec.ro) applyTierRec(rec, true);
     };
-
     const detachTierRec = (rec) => {
       if (!rec) return;
       try { if (rec.raf) gW()?.cancelAnimationFrame?.(rec.raf); rec.ro?.disconnect?.(); rec.anc?.removeAttribute?.(TIER_ATTR); } catch {}
       rec.raf = 0; rec.ro = null; rec.curTier = 0; rec.pendW = 0; rec.hasPendW = false; rec.lastTv = '';
     };
-
-    const clrExtTiers = () => {
-      for (const et of extTiers.values()) detachTierRec(et);
-      extTiers.clear();
-    };
-
+    const clrExtTiers = () => { for (const et of extTiers.values()) detachTierRec(et); extTiers.clear(); };
     const clrTier = () => {
       for (const it of insts.values()) detachTierRec(it);
-      clrExtTiers();
-      try { winResOff?.(); } catch {}
-      winResOff = null;
-      for (const b of gD()?.querySelectorAll?.(`#${PRISM_BAR_ID},[${PRISM_BAR_ATTR}],#${BAR_ID},[id^="${BAR_ID}"],[data-ag-pulse-bar]`) || []) {
-        try { b.removeAttribute?.(TIER_ATTR); b.shadowRoot?.querySelector?.(`style[${TIER_STYLE_ATTR}="1"]`)?.remove?.(); } catch {}
-      }
+      clrExtTiers(); try { winResOff?.(); } catch {} winResOff = null;
+      for (const b of gD()?.querySelectorAll?.(`#${PRISM_BAR_ID},[${PRISM_BAR_ATTR}],#${BAR_ID},[id^="${BAR_ID}"],[data-ag-pulse-bar]`) || []) try { b.removeAttribute?.(TIER_ATTR); b.shadowRoot?.querySelector?.(`style[${TIER_STYLE_ATTR}="1"]`)?.remove?.(); } catch {}
     };
-
     const ensTierObs = () => {
       const doc = gD();
       if (!doc || mode === 'off') return;
-      if (insts.size > 0) {
-        clrExtTiers();
-        for (const it of insts.values()) attachTierRec(it);
-        return;
-      }
-      const fts = findAnchors(doc, true);
-      const ftSet = new Set(fts);
-      for (const [anc, et] of extTiers) {
-        if (!ftSet.has(anc) || !isConn(doc, anc)) { detachTierRec(et); extTiers.delete(anc); }
-      }
+      if (insts.size > 0) { clrExtTiers(); for (const it of insts.values()) attachTierRec(it); return; }
+      const fts = findAnchors(doc, true), ftSet = new Set(fts);
+      for (const [anc, et] of extTiers) if (!ftSet.has(anc) || !isConn(doc, anc)) { detachTierRec(et); extTiers.delete(anc); }
       for (const ft of fts) {
         let et = extTiers.get(ft);
-        if (!et) {
-          et = { anc: ft, host: null, ro: null, raf: 0, curTier: 0, pendW: 0, hasPendW: false, lastTv: '' };
-          extTiers.set(ft, et);
-        }
+        if (!et) extTiers.set(ft, et = { anc: ft, host: null, ro: null, raf: 0, curTier: 0, pendW: 0, hasPendW: false, lastTv: '' });
         attachTierRec(et);
       }
     };
@@ -290,19 +261,12 @@
         mRes = (id, pl) => {
           const it = pend.get(id);
           if (!it) return;
-          clearTimeout(it.timer);
-          pend.delete(id);
+          clearTimeout(it.timer); pend.delete(id);
           if (pl && pl.connection !== 'local-estimate' && pl.groups?.length > 0) {
             const prev = (it.cid && snapByCid.get(it.cid)) || lastSnap;
-            const keepSpeed = !pl.speed && prev?.speed;
-            const keepConvs = !pl.conversations?.length && prev?.conversations?.length;
-            const merged = keepSpeed || keepConvs
-              ? { ...pl, ...(keepSpeed ? { speed: prev.speed } : {}), ...(keepConvs ? { conversations: prev.conversations } : {}) }
-              : pl;
-            if (it.cid) {
-              snapByCid.set(it.cid, merged);
-              if (snapByCid.size > 32) snapByCid.delete(snapByCid.keys().next().value);
-            }
+            const ks = !pl.speed && prev?.speed, kc = !pl.conversations?.length && prev?.conversations?.length;
+            const merged = ks || kc ? { ...pl, ...(ks ? { speed: prev.speed } : {}), ...(kc ? { conversations: prev.conversations } : {}) } : pl;
+            if (it.cid) { snapByCid.set(it.cid, merged); if (snapByCid.size > 32) snapByCid.delete(snapByCid.keys().next().value); }
             if (!lastSnap || !it.cid || resolveActiveInst()?.cid === it.cid) lastSnap = merged;
           }
           it.resolve(pl);
@@ -310,23 +274,15 @@
       }
       if (w.__agPrismMetricsResolve !== mRes) w.__agPrismMetricsResolve = mRes;
     };
-
-    const clrWait = () => {
-      if (waitTm !== null) { clearTimeout(waitTm); waitTm = null; }
-      if (rescTm !== null) { clearTimeout(rescTm); rescTm = null; }
-    };
-    const clrPoll = () => {
-      if (pollTm !== null) { clearInterval(pollTm); pollTm = null; }
-    };
+    const clrWait = () => { if (waitTm !== null) { clearTimeout(waitTm); waitTm = null; } if (rescTm !== null) { clearTimeout(rescTm); rescTm = null; } };
+    const clrPoll = () => { if (pollTm !== null) { clearInterval(pollTm); pollTm = null; } };
     const isBlur = () => { const d = gD(); return !!(d?.hidden || d?.documentElement?.getAttribute?.('data-ag-cs-win-blur') === '1' || winBlur); };
     const clrBlur = () => { try { blurOff?.(); blurObs?.disconnect?.(); } catch {} blurOff = blurObs = null; winBlur = pollSusp = false; };
     const startPoll = () => {
       clrPoll();
       if (insts.size === 0 || mode === 'off') return;
       if (isBlur()) { pollSusp = true; return; }
-      pollSusp = false;
-      pollTm = setInterval(() => { isBlur() ? (pollSusp = true, clrPoll()) : void refresh(); }, 4000);
-      pollTm?.unref?.();
+      pollSusp = false; pollTm = setInterval(() => { isBlur() ? (pollSusp = true, clrPoll()) : void refresh(); }, 4000); pollTm?.unref?.();
     };
     const syncBlur = (res) => {
       if (insts.size === 0 || mode === 'off') { clrPoll(); pollSusp = false; return; }
@@ -343,9 +299,7 @@
         w.addEventListener('blur', onB); w.addEventListener('focus', onF); d.addEventListener?.('visibilitychange', onV);
         blurOff = () => { w.removeEventListener?.('blur', onB); w.removeEventListener?.('focus', onF); d.removeEventListener?.('visibilitychange', onV); };
       }
-      if (!blurObs && isFn(w.MutationObserver) && d.documentElement) {
-        try { blurObs = new w.MutationObserver(() => { const b = gD()?.documentElement?.getAttribute?.('data-ag-cs-win-blur') === '1'; if (!b) winBlur = false; syncBlur(!b); }); blurObs.observe(d.documentElement, { attributes: true, attributeFilter: ['data-ag-cs-win-blur'] }); } catch {}
-      }
+      if (!blurObs && d.documentElement) try { blurObs = subMo('pulse-blur', d.documentElement, { childList: false, subtree: false, attributes: true, attributeFilter: ['data-ag-cs-win-blur'] }, () => { const b = gD()?.documentElement?.getAttribute?.('data-ag-cs-win-blur') === '1'; if (!b) winBlur = false; syncBlur(!b); }, 'high'); } catch {}
     };
     const clrSeat = () => {
       if (healTm !== null) { clearTimeout(healTm); healTm = null; }
@@ -353,41 +307,26 @@
       if (popOff) { try { popOff(); } catch {} popOff = null; }
       clrTier();
     };
-
     const isConv = (doc, w, anc) => {
       if (!doc || anc?.closest?.('.agy-home') || doc.querySelector?.('.agy-home, [data-testid="home-greeting"]')) return false;
       const pn = w?.location?.pathname;
-      if (typeof pn === 'string' && pn && !/\/c\/[0-9a-f-]{8,}/i.test(pn)) {
-        if (!doc.querySelector?.('[data-testid="conversation-view"]') && !anc?.closest?.('[data-cascade-id]') && !doc.querySelector?.('[data-cascade-id]')) {
-          return false;
-        }
-      }
+      if (typeof pn === 'string' && pn && !/\/c\/[0-9a-f-]{8,}/i.test(pn) && !doc.querySelector?.('[data-testid="conversation-view"]') && !anc?.closest?.('[data-cascade-id]') && !doc.querySelector?.('[data-cascade-id]')) return false;
       return true;
     };
-
     const HIDE_PROPS = 'position:fixed|left:-9999px|top:-9999px|width:1px|height:1px|opacity:0|pointer-events:none|visibility:hidden|overflow:hidden'.split('|').map((s) => s.split(':'));
-
     const findExtBars = (doc) => {
       if (!doc) return [];
       const seen = new Set(), out = [], add = (el) => { if (el && !seen.has(el)) { seen.add(el); out.push(el); } };
-      if (isFn(doc.querySelectorAll)) {
-        try {
-          const s = doc.querySelectorAll('#' + BAR_ID + ',[id^="' + BAR_ID + '"],[data-ag-pulse-bar="true"]');
-          for (let i = 0; i < s.length; i++) add(s[i]);
-        } catch {}
-      }
+      if (isFn(doc.querySelectorAll)) try { const s = doc.querySelectorAll('#' + BAR_ID + ',[id^="' + BAR_ID + '"],[data-ag-pulse-bar="true"]'); for (let i = 0; i < s.length; i++) add(s[i]); } catch {}
       if (isFn(doc.getElementById)) add(doc.getElementById(BAR_ID));
       return out;
     };
-
     const purgeOrphans = (doc) => {
       if (!doc || typeof doc.querySelectorAll !== 'function') return;
       const live = new Set();
       for (const it of insts.values()) live.add(it.host);
       const list = doc.querySelectorAll('[' + FALLBACK_ATTR + '="1"], #' + PRISM_BAR_ID + ', [' + PRISM_BAR_ATTR + ']');
-      for (let i = 0; i < list.length; i++) {
-        if (!live.has(list[i])) try { list[i].remove(); } catch {}
-      }
+      for (let i = 0; i < list.length; i++) if (!live.has(list[i])) try { list[i].remove(); } catch {}
     };
 
     const usableExt = (doc, b) => {
@@ -988,65 +927,37 @@
         if (mode === 'off') return;
         const d = gD(), wn = gW();
         if (!d || !wn) return;
-        if (!isConv(d, wn)) {
-          yielded = false;
-          if (insts.size > 0) unmountFb(true);
-          hideExt(false);
-          return;
-        }
-        if (mode === 'on') {
-          hideExt(true);
-        } else {
-          showExt();
-          if (hasExt(null, true)) { yielded = true; if (insts.size > 0) unmountFb(true); ensTierObs(); return; }
-        }
-        if (insts.size > 0) {
-          const res = reconcileBars(d);
-          if (res.added.length > 0) void refresh();
-          else if (insts.size > 0) ensTierObs();
-        } else if ((mode === 'on' || waitTm === null) && findAnchors(d, true).length > 0) {
-          mountFb();
-        }
+        if (!isConv(d, wn)) { yielded = false; if (insts.size > 0) unmountFb(true); hideExt(false); return; }
+        if (mode === 'on') hideExt(true);
+        else { showExt(); if (hasExt(null, true)) { yielded = true; if (insts.size > 0) unmountFb(true); ensTierObs(); return; } }
+        if (insts.size > 0) { const res = reconcileBars(d); if (res.added.length > 0) void refresh(); else if (insts.size > 0) ensTierObs(); }
+        else if ((mode === 'on' || waitTm === null) && findAnchors(d, true).length > 0) mountFb();
       };
       const schedHeal = (fast = false) => {
         if (mode === 'off' || healTm !== null) return;
-        const wait = fast || Date.now() - lastHealAt >= 180 ? 45 : 180;
-        healTm = setTimeout(runHeal, wait);
+        healTm = setTimeout(runHeal, fast || Date.now() - lastHealAt >= 180 ? 45 : 180);
         healTm?.unref?.();
       };
-      if (!seatObs && isFn(w.MutationObserver) && (doc.body || doc.documentElement)) {
-        seatObs = new w.MutationObserver((recs) => {
+      if (!seatObs && (doc.body || doc.documentElement)) {
+        seatObs = subMo('pulse-seat', doc.body || doc.documentElement, { childList: true, subtree: true }, (recs) => {
           if (mode === 'off' || healTm !== null) return;
           if (Array.isArray(recs) && recs.length > 0) {
             const ignAll = (l) => { if (l) for (let j = 0; j < l.length; j++) if (!isIgnoredStreamNode(l[j])) return false; return true; };
             let rel = false;
-            for (let i = 0; i < recs.length; i++) {
-              const r = recs[i], a = r?.addedNodes, rm = r?.removedNodes;
-              if (isIgnoredStreamNode(r?.target) || (((a?.length || 0) + (rm?.length || 0)) && ignAll(a) && ignAll(rm))) continue;
-              rel = true; break;
-            }
+            for (let i = 0; i < recs.length; i++) { const r = recs[i], a = r?.addedNodes, rm = r?.removedNodes; if (isIgnoredStreamNode(r?.target) || (((a?.length || 0) + (rm?.length || 0)) && ignAll(a) && ignAll(rm))) continue; rel = true; break; }
             if (!rel) return;
           }
           const inC = isConv(doc, w);
           let bars = null;
           const gB = () => bars || (bars = findExtBars(doc)), visB = (b) => b && b.getAttribute?.(HID_ATTR) !== '1';
-          if (!inC) {
-            if (insts.size > 0 || gB().some(visB)) schedHeal(true);
-            return;
-          }
-          if (insts.size > 0) {
-            if (anchorsChanged(doc)) { schedHeal(false); return; }
-          } else if (waitTm === null && !hasExt(gB(), true) && hasAnyAnchor(doc, true)) {
-            schedHeal(true); return;
-          }
+          if (!inC) { if (insts.size > 0 || gB().some(visB)) schedHeal(true); return; }
+          if (insts.size > 0) { if (anchorsChanged(doc)) { schedHeal(false); return; } }
+          else if (waitTm === null && !hasExt(gB(), true) && hasAnyAnchor(doc, true)) { schedHeal(true); return; }
           const extMissingTier = gB().some((b) => visB(b) && b.shadowRoot && !b.shadowRoot.querySelector?.(`style[${TIER_STYLE_ATTR}="1"]`));
           let deadExtTier = false;
-          for (const anc of extTiers.keys()) { if (!isConn(doc, anc)) { deadExtTier = true; break; } }
-          if (deadExtTier || extMissingTier || (mode === 'on' && gB().some((b) => visB(b) && b.getAttribute?.(FALLBACK_ATTR) !== '1'))) {
-            schedHeal(false);
-          }
-        });
-        try { seatObs.observe(doc.body || doc.documentElement, { childList: true, subtree: true }); } catch {}
+          for (const anc of extTiers.keys()) if (!isConn(doc, anc)) { deadExtTier = true; break; }
+          if (deadExtTier || extMissingTier || (mode === 'on' && gB().some((b) => visB(b) && b.getAttribute?.(FALLBACK_ATTR) !== '1'))) schedHeal(false);
+        }, 'low');
       }
       if (!popOff && isFn(w.addEventListener)) {
         const onPop = () => schedHeal(true);

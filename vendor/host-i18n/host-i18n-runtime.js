@@ -199,13 +199,26 @@
     return getAttr(el, name) !== null;
   }
 
+  var EMPTY_CLASS_TOKENS = [];
+  var classTokenCache = typeof WeakMap === 'function' ? new WeakMap() : null;
   function getClassTokens(el) {
-    if (!el) return [];
+    if (!el) return EMPTY_CLASS_TOKENS;
     var raw = typeof el.className === 'string' ? el.className : '';
-    if (!raw) return [];
-    var trimmed = raw.trim();
-    if (!trimmed) return [];
-    return trimmed.indexOf(' ') === -1 && !/\s/.test(trimmed) ? [trimmed] : trimmed.split(/\s+/);
+    if (!raw) return EMPTY_CLASS_TOKENS;
+    if (classTokenCache) {
+      var cached = classTokenCache.get(el);
+      if (cached && cached.raw === raw) return cached.tokens;
+    }
+    var tokens = [], len = raw.length, start = -1;
+    for (var i = 0; i < len; i++) {
+      var c = raw.charCodeAt(i);
+      if (c === 32 || c === 9 || c === 10 || c === 13 || c === 12 || c === 11 || c === 160) {
+        if (start >= 0) { tokens.push(raw.slice(start, i)); start = -1; }
+      } else if (start < 0) start = i;
+    }
+    if (start >= 0) tokens.push(start === 0 ? raw : raw.slice(start));
+    if (classTokenCache) classTokenCache.set(el, { raw: raw, tokens: tokens });
+    return tokens;
   }
 
   function hasElementChild(el) {
@@ -1903,8 +1916,9 @@
         : function (id) {
             clearTimeout(id);
           };
+    var hasCustomRaf = typeof opts.rafFn === 'function';
     var hasRafSupport =
-      typeof opts.rafFn === 'function' || Boolean(win && typeof win.requestAnimationFrame === 'function');
+      hasCustomRaf || Boolean(win && typeof win.requestAnimationFrame === 'function');
     var rafFn =
       typeof opts.rafFn === 'function'
         ? opts.rafFn
@@ -2278,10 +2292,14 @@
       return textCount + attrCount;
     }
 
-    function disconnectObserver() {
-      if (observer && observing) {
+    var busDomUnsub = null;
+    function getHostDomBus() {
+      return (!customMutationObserver && win && (win.__agDomBus || win.__agPrismDomBus)) || null;
+    }
+    function disconnectObserver(hard) {
+      if (observer && (observing || hard)) {
         try {
-          observer.disconnect();
+          observer.disconnect(hard);
         } catch (e) {}
         observing = false;
       }
@@ -2358,7 +2376,10 @@
       dirtyObserver = null;
       pendingFullFloatScan = false;
       clearOffRetryTimers();
-      if (rafId !== null) {
+      if (rafId === 'bus') {
+        try { var _b = getHostDomBus(); if (_b && typeof _b.cancelTask === 'function') _b.cancelTask('conv:host-i18n-flush'); } catch (e) {}
+        rafId = null;
+      } else if (rafId !== null) {
         try {
           cancelRafFn(rafId);
         } catch (e) {}
@@ -2415,7 +2436,7 @@
     }
 
     function rollbackAllSnapshots() {
-      disconnectObserver();
+      disconnectObserver(true);
       var rollbackTextNode = function (node) {
         var snap = textSnapshots.get(node);
         if (snap) {
@@ -3077,6 +3098,8 @@
       if (!el || el.nodeType !== 1) return;
       if (el.isConnected === false) return;
       if (exemptElements.has(el)) return;
+      var _bus = getHostDomBus();
+      if (_bus && typeof _bus.isSkipped === 'function' && _bus.isSkipped(el)) return;
 
       var ctx = boundaryCtx || measureSafeBoundaryDepth(el);
       if (!ctx || ctx.state === -1 || ctx.remDepth < 0) return;
@@ -3310,7 +3333,15 @@ if (!hibernating) enterHibernation(true);
 else missedWhilePaused = true;
 return;
 }
-if (rafId === null) rafId = rafFn(flushPendingNodes);
+if (rafId === null) {
+var _b = !hasCustomRaf ? getHostDomBus() : null;
+if (_b && typeof _b.scheduleTask === 'function') {
+rafId = 'bus';
+_b.scheduleTask('conv:host-i18n-flush', flushPendingNodes, { priority: 'background' });
+} else {
+rafId = rafFn(flushPendingNodes);
+}
+}
 }
 function inspectExternalDelayedMutation(node) {
 if (state.mode !== 'auto') return false;
@@ -3445,7 +3476,7 @@ addCandidate(popups[pIdx]);
 }
 if (candidates.length === 0) return;
 var visitedSet = new WeakSet();
-var domBus = (win && win.__agPrismDomBus) || (typeof window !== 'undefined' && window.__agPrismDomBus);
+var domBus = (win && (win.__agDomBus || win.__agPrismDomBus)) || (typeof window !== 'undefined' && (window.__agDomBus || window.__agPrismDomBus));
 if (candidates.length > 24 && domBus && typeof domBus.runChunked === 'function') {
 domBus.runChunked(candidates, function (el) {
 if (!state.active || state.destroyed || isPaused()) return;
@@ -3536,7 +3567,10 @@ if (!state.active || state.destroyed) return;
 var wasCovered = observing || dirtyProbeActive;
 hibernating = true;
 pendingFullFloatScan = false;
-if (rafId !== null) {
+if (rafId === 'bus') {
+try { var _hb = getHostDomBus(); if (_hb && typeof _hb.cancelTask === 'function') _hb.cancelTask('conv:host-i18n-flush'); } catch (e) {}
+rafId = null;
+} else if (rafId !== null) {
 cancelRafFn(rafId);
 rafId = null;
 }
@@ -3571,7 +3605,7 @@ if (recs && recs.length > 0) missedWhilePaused = true;
 }
 } catch (e) {}
 }
-disconnectObserver();
+disconnectObserver(true);
 if (!hiddenNow && !missedWhilePaused) {
 armDirtyObserver();
 } else {
@@ -3632,9 +3666,9 @@ enqueueNode(hc);
 scheduleFlush();
 }, 120);
 };
-if (MutationObserverClass) {
-observer = new MutationObserverClass(function (mutations) {
-if (!state.active || state.destroyed) return;
+var domBusInst = getHostDomBus();
+var onDomMutations = function (mutations) {
+if (!observing || !state.active || state.destroyed) return;
 var inLayer2b = state.mode === 'auto' && nowFn() - bootAt <= LAYER2B_WINDOW_MS;
 var pausedNow = isPaused();
 if (pausedNow) {
@@ -3725,7 +3759,18 @@ enqueueNode(target);
 }
 }
 if (!pausedNow && pendingNodes.length > 0) scheduleFlush();
-});
+};
+if (domBusInst && typeof domBusInst.subscribe === 'function') {
+observer = {
+observe: function () {
+if (!busDomUnsub) busDomUnsub = domBusInst.subscribe('host-i18n-dom', onDomMutations, { doc: doc, win: win, priority: 'low', observeOptions: { childList: true, subtree: true, characterData: true } });
+},
+disconnect: function (hard) {
+if (hard && busDomUnsub) { try { busDomUnsub(); } catch (e) {} busDomUnsub = null; }
+},
+};
+} else if (MutationObserverClass) {
+observer = new MutationObserverClass(onDomMutations);
 }
 if (!isPaused()) {
 safeBudgetedScan();
@@ -3742,34 +3787,25 @@ if (!state.active || state.destroyed) return;
 if (observer && (!isPaused() || (state.mode === 'auto' && nowFn() - bootAt <= LAYER2B_WINDOW_MS))) {
 reconnectObserver();
 }
-if (MutationObserverClass && doc.documentElement) {
-try {
-winBlurObserver = new MutationObserverClass(function (muts) {
+var onWinBlurMuts = function (muts) {
 if (!state.active || state.destroyed) return;
 var sawPauseAttr = false;
 for (var wi = 0; wi < muts.length; wi++) {
 var attrName = muts[wi].attributeName;
-if (
-muts[wi].type === 'attributes' &&
-(!attrName || attrName === 'data-ag-cs-win-blur' || attrName === 'data-ag-pp-open')
-) {
-sawPauseAttr = true;
-break;
-}
+if (muts[wi].type === 'attributes' && (!attrName || attrName === 'data-ag-cs-win-blur' || attrName === 'data-ag-pp-open')) { sawPauseAttr = true; break; }
 }
 if (!sawPauseAttr) return;
-if (isPaused()) {
-enterHibernation();
-} else if (hibernating) {
-wakeFromHibernation();
-}
-});
-winBlurObserver.observe(doc.documentElement, {
-attributes: true,
-attributeFilter: ['data-ag-cs-win-blur', 'data-ag-pp-open'],
-});
-} catch (e) {
-winBlurObserver = null;
+if (isPaused()) enterHibernation();
+else if (hibernating) wakeFromHibernation();
+};
+if (doc.documentElement) {
+if (domBusInst && typeof domBusInst.subscribe === 'function') {
+winBlurObserver = { disconnect: domBusInst.subscribe('host-i18n-blur', onWinBlurMuts, { doc: doc, win: win, priority: 'high', observeOptions: { childList: false, subtree: false, attributes: true, attributeFilter: ['data-ag-cs-win-blur', 'data-ag-pp-open'] } }) };
+} else if (MutationObserverClass) {
+try {
+winBlurObserver = new MutationObserverClass(onWinBlurMuts);
+winBlurObserver.observe(doc.documentElement, { attributes: true, attributeFilter: ['data-ag-cs-win-blur', 'data-ag-pp-open'] });
+} catch (e) { winBlurObserver = null; }
 }
 }
 // Layer 2b delayed-plugin check within 1200ms window (auto mode only)

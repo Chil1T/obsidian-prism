@@ -635,13 +635,13 @@
   }
 
   function countScripts(str) {
-    return {
-      lw: (str.match(/[A-Za-z]{3,}/g) || []).length,
-      lc: (str.match(/[A-Za-z]/g) || []).length,
-      cjk: (str.match(/[\u4e00-\u9fa5]/g) || []).length,
-      kana: (str.match(/[\u3040-\u30ff]/g) || []).length,
-      han: (str.match(/[\uac00-\ud7af]/g) || []).length,
-    };
+    let lw = 0, lc = 0, cjk = 0, kana = 0, han = 0, run = 0;
+    for (let i = 0, n = str.length; i < n; i++) {
+      const c = str.charCodeAt(i);
+      if ((c >= 65 && c <= 90) || (c >= 97 && c <= 122)) { lc++; if (++run === 3) lw++; }
+      else { run = 0; if (c >= 0x4e00 && c <= 0x9fa5) cjk++; else if (c >= 0x3040 && c <= 0x30ff) kana++; else if (c >= 0xac00 && c <= 0xd7af) han++; }
+    }
+    return { lw, lc, cjk, kana, han };
   }
 
   function hasForeignProseParagraph(prose, tl) {
@@ -722,25 +722,27 @@
     return { text: head, truncated: true, totalChars: text.length, sentChars: head.length };
   }
 
-  const TOOL_PROTECT_RES = [
-    /\x60[^\x60\n]+\x60/g,
-    /\bExited\s+with\s+(?:exit\s+)?code\s+-?\d+\b/gi,
-    /\bexit\s+code\s+-?\d+\b/gi,
-    /\bHTTP\s+\d{3}\b/g,
-    /(?:https?|file|socks5h?):\/\/[^\s\x22\x27<>()]+/gi,
-    /[A-Za-z]:[\\/][^\s\x22\x27<>|]+/g,
-    /(?<![A-Za-z0-9_])(?:\.{1,2}\/|\/)(?:[A-Za-z0-9_.@-]+\/)*[A-Za-z0-9_.@-]+(?:#L\d+(?:-L?\d+)?|:\d+(?:-\d+)?(?::\d+)?)?/g,
-    /(?<![A-Za-z0-9_./\\-])(?:[A-Za-z0-9_.@-]+\/)+[A-Za-z0-9_.@-]+(?:#L\d+(?:-L?\d+)?|:\d+(?:-\d+)?(?::\d+)?)?/g,
-    /#L\d+(?:-L?\d+)?\b/gi,
-    /\bL\d+-L?\d+\b/g,
-    /(?<!\w):\d+(?:-\d+)(?::\d+)?\b/g,
-    /(?<![A-Za-z0-9_./\\-])[A-Za-z0-9_][A-Za-z0-9_.-]*\.[A-Za-z][A-Za-z0-9]{0,7}(?:#L\d+(?:-L?\d+)?|:\d+(?:-\d+)?)?(?![A-Za-z0-9_])/g,
-    /(?<=^|[\s([{\x22\x27])--?[A-Za-z][A-Za-z0-9_-]*(?:=[^\s)\]}\x22\x27]+)?/g,
-    /\b[A-Za-z0-9]+(?:_[A-Za-z0-9]+)+\b/g,
-    /\b(?:[a-z]+[A-Z][A-Za-z0-9]*|[A-Z][a-z0-9]+[A-Z][A-Za-z0-9]*)\b/g,
-    /\b[A-Za-z_][A-Za-z0-9_]*\(\)/g,
-    /\b(?:xlsx|xls|docx|pptx|csv|tsv|json|jsonl|yaml|yml|toml|xml|html|htm|css|scss|less|mjs|cjs|jsx|tsx|pyc|cpp|hpp|ps1|bat|cmd|sql|mdx|txt|pdf|png|jpg|jpeg|webp|svg|gif|ico|zip|tar|tgz|rar|env|ini|cfg|conf|diff|patch|exe|dll|dylib|wasm|ipynb|parquet|sqlite)\b/gi,
-  ];
+  const ciPat = (s) => s.replace(/(?<!\\)[a-z]/g, (c) => `[${c.toUpperCase()}${c}]`);
+  const R = String.raw;
+  const TOOL_PROTECT_RE = new RegExp([
+    R`\x60[^\x60\n]+\x60`,
+    ciPat(R`\bexited\s+with\s+(?:exit\s+)?code\s+-?\d+\b`),
+    ciPat(R`\bexit\s+code\s+-?\d+\b`),
+    R`\bHTTP\s+\d{3}\b`,
+    ciPat('(?:https?|file|socks5h?)') + R`://[^\s\x22\x27<>()]+`,
+    R`[A-Za-z]:[\\/][^\s\x22\x27<>|]+`,
+    R`(?<![A-Za-z0-9_])(?:\.{1,2}/|/)(?:[A-Za-z0-9_.@-]+/)*[A-Za-z0-9_.@-]+(?:#L\d+(?:-L?\d+)?|:\d+(?:-\d+)?(?::\d+)?)?`,
+    R`(?<![A-Za-z0-9_./\\-])(?:[A-Za-z0-9_.@-]+/)+[A-Za-z0-9_.@-]+(?:#L\d+(?:-L?\d+)?|:\d+(?:-\d+)?(?::\d+)?)?`,
+    R`#[Ll]\d+(?:-[Ll]?\d+)?\b`,
+    R`\bL\d+-L?\d+\b`,
+    R`(?<!\w):\d+(?:-\d+)(?::\d+)?\b`,
+    R`(?<![A-Za-z0-9_./\\-])[A-Za-z0-9_][A-Za-z0-9_.-]*\.[A-Za-z][A-Za-z0-9]{0,7}(?:#L\d+(?:-L?\d+)?|:\d+(?:-\d+)?)?(?![A-Za-z0-9_])`,
+    R`(?<=^|[\s([{\x22\x27])--?[A-Za-z][A-Za-z0-9_-]*(?:=[^\s)\]}\x22\x27]+)?`,
+    R`\b[A-Za-z0-9]+(?:_[A-Za-z0-9]+)+\b`,
+    R`\b(?:[a-z]+[A-Z][A-Za-z0-9]*|[A-Z][a-z0-9]+[A-Z][A-Za-z0-9]*)\b`,
+    R`\b[A-Za-z_][A-Za-z0-9_]*\(\)`,
+    R`\b(?:` + ciPat('xlsx|xls|docx|pptx|csv|tsv|json|jsonl|yaml|yml|toml|xml|html|htm|css|scss|less|mjs|cjs|jsx|tsx|pyc|cpp|hpp|ps1|bat|cmd|sql|mdx|txt|pdf|png|jpg|jpeg|webp|svg|gif|ico|zip|tar|tgz|rar|env|ini|cfg|conf|diff|patch|exe|dll|dylib|wasm|ipynb|parquet|sqlite') + R`)\b`,
+  ].join('|'), 'g');
   const TOOL_VERB_RE =
     /\b(?:read|reading|write|writing|wrote|edit|editing|edited|inspect|inspecting|inspected|check|checking|checked|list|listing|listed|search|searching|searched|find|finding|found|run|running|ran|open|opening|opened|view|viewing|viewed|create|creating|created|delete|deleting|deleted|update|updating|updated|analyze|analyzing|analyzed|explore|exploring|explored|finished|failed|completed|scanning|scanned|loading|loaded|fix|fixing|fixed|refactor|refactoring|refactored|optimize|optimizing|optimized|debug|debugging|debugged|add|adding|added|remove|removing|removed|build|building|built|deploy|deploying|deployed|test|testing|tested|implement|implementing|implemented|migrate|migrating|migrated|upgrade|upgrading|upgraded|setup|configure|configuring|configured|design|designing|plan|planning|review|reviewing|investigate|investigating|resolve|resolving|improve|improving|clean|cleaning|support|enable|disable|translate|translating|handle|handling|parse|parsing|render|rendering|sync|syncing|patch|patching|harden|hardening)\b/i;
 
@@ -775,16 +777,11 @@
     const src = String(text || '');
     if (!src) return { masked: '', tokens: [] };
     const tokens = [];
-    let masked = src;
-    for (let i = 0; i < TOOL_PROTECT_RES.length; i++) {
-      const re = TOOL_PROTECT_RES[i];
-      re.lastIndex = 0;
-      masked = masked.replace(re, (m) => {
-        if (!m || m.includes('__OPID_')) return m;
-        const idx = tokens.push(m) - 1;
-        return `__OPID_${idx}__`;
-      });
-    }
+    TOOL_PROTECT_RE.lastIndex = 0;
+    const masked = src.replace(TOOL_PROTECT_RE, (m) => {
+      if (!m || m.includes('__OPID_')) return m;
+      return `__OPID_${tokens.push(m) - 1}__`;
+    });
     return { masked, tokens };
   }
 
@@ -2971,7 +2968,12 @@
     return Boolean((btn && typeof btn[K_CV] === 'function' && !btn[K_CV]()) || (panel && typeof panel[K_CV] === 'function' && !panel[K_CV]()));
   }
 
+  const getDomBus = () => W.__agDomBus || W.__agPrismDomBus || null;
+  let offVis = new WeakSet();
+  const offUnsubs = [], clrVis = () => { while (offUnsubs.length) try { offUnsubs.pop()(); } catch {} offVis = new WeakSet(); };
+  const watchOff = (el) => { const b = getDomBus(); if (el && b?.observeVisibility && !offVis.has(el)) { offVis.add(el); offUnsubs.push(b.observeVisibility(el, (st) => { if (st.visible && currentMode !== 'off') scheduleScan(20); })); } };
   function probeViewportBand(el) {
+    if (getDomBus()?.isSkipped?.(el)) return 0;
     if (!el || typeof el.getBoundingClientRect !== 'function') return 2;
     try {
       const rect = el.getBoundingClientRect();
@@ -3870,22 +3872,15 @@
         segs.push(c);
         continue;
       }
-      if (probeViewportBand(c) === 0) {
-        sawOffscreen = true;
-        continue;
-      }
+      if (probeViewportBand(c) === 0) { sawOffscreen = true; watchOff(c); continue; }
       const explicitTitleEl = findExplicitPrimaryTitleEl(c, c, sidebarOn);
       collectTitleTextNodes(explicitTitleEl || c, c, candidates, visitedNodes, sidebarOn, activeLang, true);
     }
-
     for (const segs of bcGroups.values()) {
       if (candidates.length >= 40) break;
       if (!segs || segs.length < 2) continue;
       const lastSeg = segs[segs.length - 1];
-      if (probeViewportBand(lastSeg) === 0) {
-        sawOffscreen = true;
-        continue;
-      }
+      if (probeViewportBand(lastSeg) === 0) { sawOffscreen = true; watchOff(lastSeg); continue; }
       collectTitleTextNodes(lastSeg, lastSeg, candidates, visitedNodes, sidebarOn, activeLang, true);
     }
     hasOffscreenTitles = sawOffscreen;
@@ -3995,94 +3990,58 @@
     scanTimer = null;
     if (currentMode === 'off') return;
     const triggers = queryTriggers();
-    if (!triggers.length) {
-      if (translateToolSummaries) scanToolSummaryContainers();
-      if (translateTitles) scanConversationTitles();
-      return;
-    }
-
-    const lastIdx = triggers.length - 1;
-    const candidates = [];
-    const activePanelSet = new Set();
+    if (!triggers.length) { if (translateToolSummaries) scanToolSummaryContainers(); if (translateTitles) scanConversationTitles(); return; }
+    const lastIdx = triggers.length - 1, candidates = [], activePanelSet = new Set();
     let sawOffscreenLazy = false;
-
     for (let i = 0; i <= lastIdx; i++) {
-      const btn = triggers[i];
-      if (!btn) continue;
-      const isLatest = i === lastIdx;
-      const allowPreload = triggerTiming === 'preload' && isLatest;
-      const expanded = ga(btn, A_EXP) === 'true';
+      const btn = triggers[i]; if (!btn) continue;
+      const isLatest = i === lastIdx, allowPreload = triggerTiming === 'preload' && isLatest, expanded = ga(btn, A_EXP) === 'true';
       if (!allowPreload && !expanded) continue;
-
       const panel = nextSib(btn);
       if (panel) {
-        const em = panelMeta.get(panel);
-        const streamingNow = isTriggerStreaming(btn);
-        if (streamingNow && expanded && isLatest && em && em.s && ga(panel, A_PND) === '1') {
-          trackStreamingTrigger(btn, panel);
-          activePanelSet.add(panel);
-          continue;
-        }
+        const em = panelMeta.get(panel), streamingNow = isTriggerStreaming(btn);
+        if (streamingNow && expanded && isLatest && em && em.s && ga(panel, A_PND) === '1') { trackStreamingTrigger(btn, panel); activePanelSet.add(panel); continue; }
         if (em && !streamingNow && em.rs === quickPanelStamp(panel)) {
-          if (expanded && ga(panel, A_RDY) === '1' && em.ds && em.ds === ga(panel, A_SIG)) {
-            continue;
-          }
-          if (!expanded) {
-            const inf = rawCacheMap.get(panel);
-            if (inf && inf.s === em.rs && em.ps && em.ps === sigFromBody(inf.k, currentMode)) {
-              continue;
-            }
-          }
+          if (expanded && ga(panel, A_RDY) === '1' && em.ds && em.ds === ga(panel, A_SIG)) continue;
+          if (!expanded) { const inf = rawCacheMap.get(panel); if (inf && inf.s === em.rs && em.ps && em.ps === sigFromBody(inf.k, currentMode)) continue; }
         }
         if (!isLatest && isHiddenByAncestor(btn, panel)) continue;
         if (em && !streamingNow && em.rs === quickPanelStamp(panel) && isHiddenByAncestor(btn, panel)) {
           const inf = rawCacheMap.get(panel);
-          if (inf && inf.s === em.rs && em.ps && em.ps === sigFromBody(inf.k, currentMode)) {
-            activePanelSet.add(panel);
-            continue;
-          }
+          if (inf && inf.s === em.rs && em.ps && em.ps === sigFromBody(inf.k, currentMode)) { activePanelSet.add(panel); continue; }
         }
       }
-
       const band = expanded && !isLatest ? probeViewportBand(panel || btn) : 0;
-      if (!isLatest && band === 0) {
-        sawOffscreenLazy = true;
-        continue;
-      }
+      if (!isLatest && band === 0) { sawOffscreenLazy = true; watchOff(panel || btn); continue; }
       if (panel) activePanelSet.add(panel);
-
       const tier = isLatest && expanded ? 25 : band === 2 ? 20 : isLatest ? 12 : 10;
       candidates.push({ b: btn, a: allowPreload, p: tier * 1000 + i });
     }
     hasOffscreenLazyPanels = sawOffscreenLazy;
-
     if (inflightBySig.size > 0) pruneUnneededPendingRequests(activePanelSet);
     if (candidates.length) {
       candidates.sort((x, y) => y.p - x.p);
       syncHydrateBudget = 1;
-      try {
-        for (let i = 0; i < candidates.length; i++) {
-          processSingleTrigger(candidates[i].b, candidates[i].a, candidates[i].p);
-        }
-      } finally {
-        syncHydrateBudget = 99;
-      }
+      try { for (let i = 0; i < candidates.length; i++) processSingleTrigger(candidates[i].b, candidates[i].a, candidates[i].p); }
+      finally { syncHydrateBudget = 99; }
     }
     if (translateToolSummaries) scanToolSummaryContainers();
     if (translateTitles) scanConversationTitles();
   }
 
   function scheduleScan(delayMs = 55) {
-    if (currentMode === 'off' || scanTimer) return;
-    scanTimer = setTimeout(scanNow, delayMs);
-  }
-
-  const clrScan = () => {
-    if (scanTimer) {
-      clearTimeout(scanTimer);
-      scanTimer = null;
+    if (currentMode === 'off') return;
+    const bus = getDomBus();
+    if (bus?.scheduleTask) {
+      if (scanTimer === 'bus') { if (delayMs <= 25) bus.reprioritizeTask?.('conv:thought-scan', 'user-visible'); return; }
+      if (scanTimer) return;
+      scanTimer = 'bus';
+      bus.scheduleTask('conv:thought-scan', scanNow, { priority: delayMs <= 25 ? 'user-visible' : 'background', delay: delayMs });
+      return;
     }
-  };
+    if (!scanTimer) scanTimer = setTimeout(scanNow, delayMs);
+  }
+  const clrScan = () => { if (scanTimer === 'bus') getDomBus()?.cancelTask?.('conv:thought-scan'); else if (scanTimer) clearTimeout(scanTimer); scanTimer = null; };
   const brCall = (action, inp) => {
     const br = getBridge();
     return br ? br.call({ action, ...inp }) : offRes();
@@ -4096,75 +4055,31 @@
       const nextMode = cfg.thoughtTranslate === 'machine' || cfg.thoughtTranslate === 'ai' ? cfg.thoughtTranslate : 'off';
       const prevTrigger = triggerTiming;
       triggerTiming = cfg.thoughtTrigger === 'expand' ? 'expand' : 'preload';
-      const triggerChanged = prevTrigger !== triggerTiming;
-
-      const prevLang = currentLang;
+      const triggerChanged = prevTrigger !== triggerTiming, prevLang = currentLang;
       currentLang = resolveActiveLang(cfg.language);
       const langChanged = prevLang !== currentLang;
       if (langChanged) refreshAllOverlayLocaleStrings();
-
-      let toolSummaryChanged = false;
-      if (typeof cfg.translateToolSummaries === 'boolean') {
-        hasExplicitToolSummaries = true;
-        toolSummaryChanged = setTranslateToolSummariesFlag(cfg.translateToolSummaries, false);
-      }
-
-      let titleChanged = false;
-      if (typeof cfg.translateTitles === 'boolean') {
-        hasExplicitTitles = true;
-        titleChanged = setTranslateTitlesFlag(cfg.translateTitles, false);
-      }
-
+      let toolSummaryChanged = false, titleChanged = false, viewChanged = false;
+      if (typeof cfg.translateToolSummaries === 'boolean') { hasExplicitToolSummaries = true; toolSummaryChanged = setTranslateToolSummariesFlag(cfg.translateToolSummaries, false); }
+      if (typeof cfg.translateTitles === 'boolean') { hasExplicitTitles = true; titleChanged = setTranslateTitlesFlag(cfg.translateTitles, false); }
       const incomingView = cfg.thoughtView || cfg.thoughtViewMode;
-      let viewChanged = false;
       if (incomingView === 'bilingual' || incomingView === 'immersive') {
-        hasExplicitHostView = true;
-        viewModeLoaded = true;
-        viewChanged = currentViewMode !== incomingView;
-        currentViewMode = incomingView;
-        if (viewChanged || !syncedOnce) {
-          persistViewModePreference(currentViewMode);
-          syncDocViewAttribute();
-          refreshAllPanelViewModes(viewChanged);
-        }
+        hasExplicitHostView = viewModeLoaded = true; viewChanged = currentViewMode !== incomingView; currentViewMode = incomingView;
+        if (viewChanged || !syncedOnce) { persistViewModePreference(currentViewMode); syncDocViewAttribute(); refreshAllPanelViewModes(viewChanged); }
       }
-
-      if (nextMode === 'off') {
-        clrScan();
-        currentMode = 'off';
-        syncedOnce = false;
-        releasePrismOverlays();
-        return;
-      }
-
+      if (nextMode === 'off') { clrScan(); currentMode = 'off'; syncedOnce = false; releasePrismOverlays(); return; }
       if (triggerTiming === 'expand' && prevTrigger !== 'expand') cancelCollapsedInflightRequests();
       else if (triggerTiming === 'expand') clearAllWaitTimers(true);
-
-      const changed = currentMode !== nextMode;
-      const hadPrevEngine = currentMode !== 'off';
-      currentMode = nextMode;
-      ensureInitialized();
+      const changed = currentMode !== nextMode, hadPrevEngine = currentMode !== 'off';
+      currentMode = nextMode; ensureInitialized();
       if (changed || langChanged) {
-        clearHydrateQueue();
-        restoreAllToolSummaries();
-        restoreAllTitles();
-        if (hadPrevEngine) {
-          clearAllWaitTimers(false);
-          for (const entry of inflightBySig.values()) cancelTranslateRequest(entry);
-          inflightBySig.clear();
-        }
+        clearHydrateQueue(); restoreAllToolSummaries(); restoreAllTitles();
+        if (hadPrevEngine) { clearAllWaitTimers(false); for (const entry of inflightBySig.values()) cancelTranslateRequest(entry); inflightBySig.clear(); }
         const resetPanelSig = (p) => {
           if (!p) return;
-          clearTriggerStatusBadge(p);
-          raList(p, RESET_SIG_ATTRS);
+          clearTriggerStatusBadge(p); raList(p, RESET_SIG_ATTRS);
           const m = panelMeta.get(p);
-          if (m && (m.s || m.m)) {
-            m.ds = '';
-            m.ps = '';
-            delete m.skippedSig;
-          } else {
-            panelMeta.delete(p);
-          }
+          if (m && (m.s || m.m)) { m.ds = m.ps = ''; delete m.skippedSig; } else panelMeta.delete(p);
         };
         qsa(SEL_TRIGGER).forEach((b) => resetPanelSig(nextSib(b)));
         qsa(SEL_OVERLAY).forEach((ov) => resetPanelSig(parEl(ov)));
@@ -4173,136 +4088,72 @@
       syncedOnce = true;
       if (needScan) scheduleScan(25);
     },
-    scan() {
-      scheduleScan(45);
-    },
-    scanImmediate() {
-      clrScan();
-      scanNow();
-    },
-    getViewMode() {
-      loadViewModePreference();
-      return currentViewMode;
-    },
+    scan() { scheduleScan(45); },
+    scanImmediate() { clrScan(); scanNow(); },
+    getViewMode() { loadViewModePreference(); return currentViewMode; },
     setViewMode(nextViewMode, opts = {}) {
       const normalized = nextViewMode === 'bilingual' ? 'bilingual' : 'immersive';
-      hasExplicitHostView = true;
-      viewModeLoaded = true;
+      hasExplicitHostView = viewModeLoaded = true;
       const changed = currentViewMode !== normalized;
-      currentViewMode = normalized;
-      persistViewModePreference(normalized);
-      syncDocViewAttribute();
-      refreshAllPanelViewModes(true);
-      if (changed && opts.persistDaemon !== false) {
-        void callDaemonRpc({ action: 'save-config', viewMode: normalized }).catch(() => {});
-      }
+      currentViewMode = normalized; persistViewModePreference(normalized); syncDocViewAttribute(); refreshAllPanelViewModes(true);
+      if (changed && opts.persistDaemon !== false) void callDaemonRpc({ action: 'save-config', viewMode: normalized }).catch(() => {});
       return currentViewMode;
     },
-    getTranslateToolSummaries() {
-      return Boolean(translateToolSummaries);
-    },
+    getTranslateToolSummaries: () => Boolean(translateToolSummaries),
     setTranslateToolSummaries(enabled, opts = {}) {
-      const next = Boolean(enabled);
-      hasExplicitToolSummaries = true;
+      const next = Boolean(enabled); hasExplicitToolSummaries = true;
       const changed = setTranslateToolSummariesFlag(next, true);
-      if (changed && opts.persistDaemon === true) {
-        void callDaemonRpc({ action: 'save-config', translateToolSummaries: next }).catch(() => {});
-      }
+      if (changed && opts.persistDaemon === true) void callDaemonRpc({ action: 'save-config', translateToolSummaries: next }).catch(() => {});
       return translateToolSummaries;
     },
-    getTranslateTitles() {
-      return Boolean(translateTitles);
-    },
+    getTranslateTitles: () => Boolean(translateTitles),
     setTranslateTitles(enabled, opts = {}) {
-      const next = Boolean(enabled);
-      hasExplicitTitles = true;
+      const next = Boolean(enabled); hasExplicitTitles = true;
       const changed = setTranslateTitlesFlag(next, true);
-      if (changed && opts.persistDaemon === true) {
-        void callDaemonRpc({ action: 'save-config', translateTitles: next }).catch(() => {});
-      }
+      if (changed && opts.persistDaemon === true) void callDaemonRpc({ action: 'save-config', translateTitles: next }).catch(() => {});
       return translateTitles;
     },
     retryBlock: (panel) => retryPanelNow(panel),
     clearCooldown: (sig) => clearSigCooldown(sig),
-    getLocalCacheStats,
-    clearLocalCache,
+    getLocalCacheStats, clearLocalCache,
     getCacheStats() {
       const local = getLocalCacheStats();
-      const mk = (localOnly, dEntries, dBytes) => ({
-        ok: true,
-        localOnly,
-        localEntries: local.memEntries,
-        storageEntries: local.storageEntries,
-        daemonEntries: dEntries,
-        diskBytes: dBytes,
-        totalEntries: Math.max(local.memEntries, dEntries),
-      });
-      return callDaemonRpc({ action: 'cache-stats' })
-        .then((res) => (res && res.ok && typeof res.entries === 'number' ? mk(false, res.entries, res.diskBytes || 0) : mk(true, 0, 0)))
-        .catch(() => mk(true, 0, 0));
+      const mk = (localOnly, dEntries, dBytes) => ({ ok: true, localOnly, localEntries: local.memEntries, storageEntries: local.storageEntries, daemonEntries: dEntries, diskBytes: dBytes, totalEntries: Math.max(local.memEntries, dEntries) });
+      return callDaemonRpc({ action: 'cache-stats' }).then((res) => (res && res.ok && typeof res.entries === 'number' ? mk(false, res.entries, res.diskBytes || 0) : mk(true, 0, 0))).catch(() => mk(true, 0, 0));
     },
     clearCache() {
       const localRes = clearLocalCache();
       const mk = (localOnly, dc) => ({ ok: true, localOnly, localCleared: localRes.cleared, daemonCleared: dc });
-      return callDaemonRpc({ action: 'clear-cache' })
-        .then((res) => (res && res.ok ? mk(false, typeof res.cleared === 'number' ? res.cleared : 0) : mk(true, 0)))
-        .catch(() => mk(true, 0));
+      return callDaemonRpc({ action: 'clear-cache' }).then((res) => (res && res.ok ? mk(false, typeof res.cleared === 'number' ? res.cleared : 0) : mk(true, 0))).catch(() => mk(true, 0));
     },
     getConfig: () => brCall('get-config').then((res) => (syncRemoteCfgMeta(res), res)),
     saveConfig(input) {
-      if (input && typeof input.translateToolSummaries === 'boolean') {
-        hasExplicitToolSummaries = true;
-      }
-      if (input && typeof input.translateTitles === 'boolean') {
-        hasExplicitTitles = true;
-      }
+      if (typeof input?.translateToolSummaries === 'boolean') hasExplicitToolSummaries = true;
+      if (typeof input?.translateTitles === 'boolean') hasExplicitTitles = true;
       return brCall('save-config', input).then((res) => {
-        const nextTag = res?.styleTag || (res?.stylePreset ? `ai_${res.stylePreset}` : '');
-        const tagChanged = setActiveStyleTag(nextTag);
-        if (res && typeof res.translateToolSummaries === 'boolean') {
-          setTranslateToolSummariesFlag(res.translateToolSummaries, false);
-        } else if (input && typeof input.translateToolSummaries === 'boolean') {
-          setTranslateToolSummariesFlag(input.translateToolSummaries, false);
-        }
-        if (res && typeof res.translateTitles === 'boolean') {
-          setTranslateTitlesFlag(res.translateTitles, false);
-        } else if (input && typeof input.translateTitles === 'boolean') {
-          setTranslateTitlesFlag(input.translateTitles, false);
-        }
+        const tagChanged = setActiveStyleTag(res?.styleTag || (res?.stylePreset ? `ai_${res.stylePreset}` : ''));
+        if (typeof res?.translateToolSummaries === 'boolean') setTranslateToolSummariesFlag(res.translateToolSummaries, false);
+        else if (typeof input?.translateToolSummaries === 'boolean') setTranslateToolSummariesFlag(input.translateToolSummaries, false);
+        if (typeof res?.translateTitles === 'boolean') setTranslateTitlesFlag(res.translateTitles, false);
+        else if (typeof input?.translateTitles === 'boolean') setTranslateTitlesFlag(input.translateTitles, false);
         qsa(SEL_TRIGGER).forEach((b) => {
           const p = nextSib(b);
-          if (p && (tagChanged || ga(p, A_FBK) === '1' || ga(p, A_FLD) === '1' || findChildByClass(b, C_TRG))) {
-            clearTriggerStatusBadge(b);
-            raList(p, RESET_SIG_ATTRS);
-            panelMeta.delete(p);
-          }
+          if (p && (tagChanged || ga(p, A_FBK) === '1' || ga(p, A_FLD) === '1' || findChildByClass(b, C_TRG))) { clearTriggerStatusBadge(b); raList(p, RESET_SIG_ATTRS); panelMeta.delete(p); }
         });
-        failedSigs.clear();
-        toolSummaryFailedUntil.clear();
-        titleFailedUntil.clear();
-        scheduleScan(25);
+        failedSigs.clear(); toolSummaryFailedUntil.clear(); titleFailedUntil.clear(); scheduleScan(25);
         return res;
       });
     },
     fetchModels: (input) => brCall('fetch-models', input),
     testConnection: (input) => brCall('test-connection', input),
     diagnose: (input) => brCall('diagnose', input),
-    __memCache: memCache,
-    __toolSummaryRecords: toolSummaryRecords,
-    __toolSummaryFailedUntil: toolSummaryFailedUntil,
-    __titleRecords: titleRecords,
-    __titleFailedUntil: titleFailedUntil,
-    __observedTitleRoots: observedTitleRoots,
+    __memCache: memCache, __toolSummaryRecords: toolSummaryRecords, __toolSummaryFailedUntil: toolSummaryFailedUntil,
+    __titleRecords: titleRecords, __titleFailedUntil: titleFailedUntil, __observedTitleRoots: observedTitleRoots,
     destroy() {
-      currentMode = 'off';
-      syncedOnce = false;
-      hasOffscreenLazyPanels = false;
-      hasOffscreenTitles = false;
-      clrScan();
-      stopTitleObserver();
+      currentMode = 'off'; syncedOnce = hasOffscreenLazyPanels = hasOffscreenTitles = false;
+      clrScan(); getDomBus()?.cancelGroup?.('conv:thought'); clrVis(); stopTitleObserver();
       if (cacheDirty || persistTimer || persistIdle || memCache.size > storedCount) flushLocalStorageCacheNow();
-      releasePrismOverlays();
-      hlBks = null;
+      releasePrismOverlays(); hlBks = null;
     },
   };
 

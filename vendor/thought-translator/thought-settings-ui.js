@@ -1382,31 +1382,25 @@
 
     const syncStyleUi = () => {
       guard(() => {
-        const pack = getPack();
-        for (const [sid, btn] of styleBtns.entries()) {
-          const on = state.stylePreset === sid;
-          btn.setAttribute('aria-pressed', String(on));
-          setToggleAttr(btn, 'data-pressed', on);
-          btn.textContent = getStyleLabel(sid, pack);
-        }
+        const p = getPack();
+        for (const [sid, b] of styleBtns) { const on = state.stylePreset === sid; b.setAttribute('aria-pressed', String(on)); setToggleAttr(b, 'data-pressed', on); b.textContent = getStyleLabel(sid, p); }
         customField.hidden = state.stylePreset !== 'custom';
         if (customTa.value !== state.customPrompt) customTa.value = state.customPrompt;
       });
     };
-
+    let styleSaving = false;
     for (const sid of ['technical', 'concise', 'custom']) {
       const sb = doc.createElement('button');
-      sb.type = 'button';
-      sb.className = btnClass;
-      sb.textContent = getStyleLabel(sid, initialPack);
-      sb.setAttribute('data-thought-style', sid);
+      sb.type = 'button'; sb.className = btnClass; sb.textContent = getStyleLabel(sid, initialPack); sb.setAttribute('data-thought-style', sid);
       sb.addEventListener('click', (ev) => {
-        if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
-        state.stylePreset = sid;
-        syncStyleUi();
+        ev?.stopPropagation?.();
+        state.stylePreset = sid; syncStyleUi();
+        const api = resolveThoughtApi();
+        if (styleSaving || state.busy || typeof api?.saveConfig !== 'function') return;
+        styleSaving = true;
+        try { Promise.resolve(api.saveConfig({ stylePreset: sid })).catch(() => {}).finally(() => { styleSaving = false; }); } catch { styleSaving = false; }
       });
-      styleBtns.set(sid, sb);
-      styleGrp.appendChild(sb);
+      styleBtns.set(sid, sb); styleGrp.appendChild(sb);
     }
     styleBar.appendChild(styleLbl);
     styleBar.appendChild(styleGrp);
