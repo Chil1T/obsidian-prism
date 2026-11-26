@@ -2331,14 +2331,14 @@ test('Dual-pane .agy-scroll-bottom strict local viewport isolation (subagent/sid
 test('侧栏出现时 .agy-scroll-bottom 层级/过渡/分屏宽度防裁切与 side-question-tab-conversation 独立滚动隔离', () => {
   const css = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
 
-  // 1) style.css 静态契约：移除压低英文按钮的 z-index:9、提升 .agy-scroll-bottom z-index:26、保留宿主过渡与分屏内层宽约束
+  // 1) style.css 静态契约：移除压低英文按钮的 z-index:9、设定 .agy-scroll-bottom z-index:24（高于底部渐隐层 10 与桌宠 22，低于输入层 25 不穿透悬浮详卡）、保留宿主过渡与分屏内层宽约束
   assert.equal(
     css.includes('button[aria-label="Scroll to Bottom"]{z-index:9!important}'),
     false,
     '不得再把英文 Scroll to Bottom 按钮压低至 z-index:9'
   );
   const scrollRule = css.split('\n').find((l) => l.includes('& .agy-scroll-bottom{')) || '';
-  assert.ok(scrollRule.includes('z-index:26!important;'), '.agy-scroll-bottom 必须位于 z-index:26 高于输入层(25)与底部渐隐层(10)');
+  assert.ok(scrollRule.includes('z-index:24!important;'), '.agy-scroll-bottom 必须位于 z-index:24（高于底部渐隐层 10 与桌宠 22，低于输入层 25 不穿透悬浮详卡）');
   assert.equal(scrollRule.includes('position:relative'), false, '.agy-scroll-bottom 严禁覆盖宿主 position:absolute');
   assert.ok(
     scrollRule.includes('opacity .3s var(--ease-expo-out),transform .3s var(--ease-expo-out),margin-left .5s var(--ease-expo-out)'),
