@@ -349,14 +349,24 @@ function makeBlockedDiffParseResult() {
     deletions: 0,
     truncated: false,
     focusedByHint: false,
+    cumulativeDiff: false,
     totalLines: 0,
     lines: [],
   };
 }
 
+export function isCumulativeDiff(additions, deletions, hints) {
+  const hintAdd = Math.max(0, Number(hints?.additions) || 0);
+  const hintDel = Math.max(0, Number(hints?.deletions) || 0);
+  const hintTotal = hintAdd + hintDel;
+  if (hintTotal <= 0) return false;
+  const diffTotal = Math.max(0, Number(additions) || 0) + Math.max(0, Number(deletions) || 0);
+  return diffTotal > hintTotal * 2 && diffTotal - hintTotal >= 6;
+}
+
 export function parseInlineUnifiedDiff(
   rawDiff,
-  { maxLines = INLINE_DIFF_MAX_DIFF_LINES, maxLineChars = INLINE_DIFF_MAX_LINE_CHARS, hints = null } = {}
+  { maxLines = INLINE_DIFF_MAX_DIFF_LINES, maxLineChars = INLINE_DIFF_MAX_LINE_CHARS, hints = null, expand = false } = {}
 ) {
   const normalized = String(rawDiff || '').replace(/\r\n/g, '\n');
   const rawLines = normalized.split('\n');
@@ -477,7 +487,7 @@ export function parseInlineUnifiedDiff(
   }
 
   if (isBinary) {
-    return { blocked: false, isBinary: true, additions: 0, deletions: 0, truncated: false, focusedByHint: false, totalLines: 0, lines: [] };
+    return { blocked: false, isBinary: true, additions: 0, deletions: 0, truncated: false, focusedByHint: false, cumulativeDiff: false, totalLines: 0, lines: [] };
   }
 
   let totalRowCount = 0;
@@ -485,7 +495,11 @@ export function parseInlineUnifiedDiff(
 
   const hintAdd = Math.max(0, Number(hints?.additions) || 0);
   const hintDel = Math.max(0, Number(hints?.deletions) || 0);
-  const useHintFocus = totalRowCount > maxLines && hunks.length > 1 && (hintDel > 0 || hintAdd > 0);
+  const hasHints = hintDel > 0 || hintAdd > 0;
+  const cumulativeDiff = isCumulativeDiff(additions, deletions, hints);
+  const useTruncHintFocus = totalRowCount > maxLines && hunks.length > 1 && hasHints;
+  const useCumulativeFocus = !expand && cumulativeDiff && hunks.length > 1 && hasHints;
+  const useHintFocus = useTruncHintFocus || useCumulativeFocus;
 
   if (!useHintFocus) {
     const lines = [];
@@ -493,7 +507,7 @@ export function parseInlineUnifiedDiff(
       const rows = hunks[i].rows;
       for (let j = 0; j < rows.length && lines.length < maxLines; j += 1) lines.push(rows[j]);
     }
-    return { blocked: false, isBinary: false, additions, deletions, truncated: totalRowCount > maxLines, focusedByHint: false, totalLines: totalRowCount, lines };
+    return { blocked: false, isBinary: false, additions, deletions, truncated: totalRowCount > maxLines, focusedByHint: false, cumulativeDiff, totalLines: totalRowCount, lines };
   }
 
   const scored = hunks.map((h) => {
@@ -504,11 +518,33 @@ export function parseInlineUnifiedDiff(
     } else if (hintAdd > 0 && h.adds > 0 && h.dels === 0) {
       score += 4000;
     }
+    if (h.adds === hintAdd && h.dels === hintDel) score += 2000;
     score -= Math.abs(h.adds - hintAdd) * 4 + Math.abs(h.dels - hintDel) * 6;
     score -= h.idx * 0.5;
     return { h, score };
   });
   scored.sort((a, b) => b.score - a.score);
+
+  if (useCumulativeFocus && totalRowCount <= maxLines) {
+    const best = scored[0].h;
+    const ordered = [best, ...hunks.filter((h) => h.idx !== best.idx)];
+    const lines = [];
+    for (let i = 0; i < ordered.length && lines.length < maxLines; i += 1) {
+      const rows = ordered[i].rows;
+      for (let j = 0; j < rows.length && lines.length < maxLines; j += 1) lines.push(rows[j]);
+    }
+    return {
+      blocked: false,
+      isBinary: false,
+      additions,
+      deletions,
+      truncated: totalRowCount > lines.length,
+      focusedByHint: best.idx > 0 || (hintDel > 0 && lines.some((r) => r.kind === 'del')),
+      cumulativeDiff,
+      totalLines: totalRowCount,
+      lines,
+    };
+  }
 
   const firstDelHunkIdx = hintDel > 0 ? hunks.findIndex((x) => x.dels > 0) : -1;
   const picked = [];
@@ -523,7 +559,14 @@ export function parseInlineUnifiedDiff(
     picked.push({ idx: h.idx, slice: h.rows.slice(0, take) });
     used += take;
   }
-  picked.sort((a, b) => a.idx - b.idx);
+  if (useCumulativeFocus && picked.length > 1) {
+    const [top, ...rest] = picked;
+    rest.sort((a, b) => a.idx - b.idx);
+    picked.length = 0;
+    picked.push(top, ...rest);
+  } else {
+    picked.sort((a, b) => a.idx - b.idx);
+  }
 
   const lines = [];
   for (let i = 0; i < picked.length; i += 1) {
@@ -537,6 +580,7 @@ export function parseInlineUnifiedDiff(
     deletions,
     truncated: totalRowCount > lines.length,
     focusedByHint: skippedLeading || (hintDel > 0 && lines.some((r) => r.kind === 'del')),
+    cumulativeDiff,
     totalLines: totalRowCount,
     lines,
   };

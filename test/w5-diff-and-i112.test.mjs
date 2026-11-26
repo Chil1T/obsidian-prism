@@ -248,32 +248,12 @@ test('W5-1 (Issue #112): host-i18n skips all Monaco/Diff/Code viewer containers 
   }
 
   const protectedContainers = [
-    env.makeEl('div', { className: 'monaco-diff-editor' }),
-    env.makeEl('div', { className: 'monaco-editor' }),
-    env.makeEl('div', { className: 'diffOverview' }),
-    env.makeEl('div', { className: 'view-lines' }),
-    env.makeEl('div', { className: 'cdr' }),
-    env.makeEl('div', { className: 'line-insert' }),
-    env.makeEl('div', { className: 'line-delete' }),
-    env.makeEl('div', { attrs: { 'data-testid': 'diff-editor' } }),
-    env.makeEl('div', { attrs: { 'data-testid': 'diff-view' } }),
-    env.makeEl('div', { attrs: { 'data-testid': 'diff-viewer' } }),
-    env.makeEl('div', { attrs: { 'data-testid': 'diff-line' } }),
-    env.makeEl('div', { attrs: { 'data-testid': 'diff-content' } }),
-    env.makeEl('div', { attrs: { 'data-testid': 'diff-panel' } }),
-    env.makeEl('div', { attrs: { 'data-testid': 'review-diff-pane' } }),
-    env.makeEl('div', { attrs: { 'data-testid': 'code-viewer-panel' } }),
-    env.makeEl('div', { attrs: { 'data-testid': 'file-viewer-root' } }),
-    env.makeEl('div', { className: 'ag-cs-inline-diff-box' }),
-    env.makeEl('div', { className: 'ag-cs-inline-diff-card' }),
+    ...['monaco-diff-editor', 'monaco-editor', 'diffOverview', 'view-lines', 'cdr', 'line-insert', 'line-delete',
+      'ag-cs-inline-diff-box', 'ag-cs-inline-diff-card', 'sidebar-diff-editor_a1b2', 'custom-diff-view-wrapper',
+      'code-diff-line-item', 'diff-hunk-section', 'cm-editor', 'shiki-themes', 'hljs-keyword'].map((className) => env.makeEl('div', { className })),
+    ...['diff-editor', 'diff-view', 'diff-viewer', 'diff-line', 'diff-content', 'diff-panel',
+      'review-diff-pane', 'code-viewer-panel', 'file-viewer-root'].map((tid) => env.makeEl('div', { attrs: { 'data-testid': tid } })),
     env.makeEl('div', { attrs: { 'data-ag-cs-inline-diff': '1' } }),
-    env.makeEl('div', { className: 'sidebar-diff-editor_a1b2' }),
-    env.makeEl('div', { className: 'custom-diff-view-wrapper' }),
-    env.makeEl('div', { className: 'code-diff-line-item' }),
-    env.makeEl('div', { className: 'diff-hunk-section' }),
-    env.makeEl('div', { className: 'cm-editor' }),
-    env.makeEl('div', { className: 'shiki-themes' }),
-    env.makeEl('div', { className: 'hljs-keyword' }),
   ];
 
   const protectedSpans = [];
@@ -486,8 +466,12 @@ test('W5-2: v2.35.2 React Fiber patch extraction (CortexStepGeneric edit_file/wr
     inlineDiff.INLINE_DIFF_CSS.includes('radial-gradient(85% 52px at 50% 0%') &&
       inlineDiff.INLINE_DIFF_CSS.includes('inset 7px 0 12px -4px') &&
       inlineDiff.INLINE_DIFF_CSS.includes('text-shadow:0 0 9px rgba(74,222,128,.62)') &&
-      inlineDiff.INLINE_DIFF_CSS.includes('.ag-cs-inline-diff-float-acts'),
-    'INLINE_DIFF_CSS must restore radial top highlight, red/green inner glow & text-shadow, and minimal .ag-cs-inline-diff-float-acts'
+      inlineDiff.INLINE_DIFF_CSS.includes('.ag-cs-inline-diff-float-acts') &&
+      /\.ag-cs-inline-diff-box\{[^}]*min-width:0;max-width:100%;overflow:hidden;/.test(inlineDiff.INLINE_DIFF_CSS) &&
+      /\.ag-cs-inline-diff-card\{[^}]*box-sizing:border-box;width:100%;min-width:0;max-width:100%;[^}]*overflow:hidden;/.test(inlineDiff.INLINE_DIFF_CSS) &&
+      /\.ag-cs-inline-diff-body\{[^}]*width:100%;max-width:100%;min-width:0;box-sizing:border-box;[^}]*overflow:auto;scrollbar-width:thin;scrollbar-color:rgba\(255,255,255,\.16\) transparent;/.test(inlineDiff.INLINE_DIFF_CSS) &&
+      inlineDiff.INLINE_DIFF_CSS.includes('scrollbar-color:rgba(15,23,42,.18) transparent;'),
+    'INLINE_DIFF_CSS must preserve glow aesthetic and enforce flex min-width:0/overflow:hidden & thin scrollbar containment'
   );
 
   let nativeClicks = 0;
@@ -571,6 +555,35 @@ test('W5-2: v2.35.2 React Fiber patch extraction (CortexStepGeneric edit_file/wr
     assert.equal(rpcCalls[1]?.expand, true, 'Clicking expand-all on server-truncated card must request expand:true');
     assert.equal(rpcBox.getAttribute('data-ag-diff-expanded'), '1');
     assert.equal(rpcBox.querySelectorAll('.ag-cs-inline-diff-line.is-add').length, 150, 'expand:true must render all 150 green lines inline');
+
+    // Cumulative git-diff notice vs normal git-diff (headerless, zero .ag-cs-inline-diff-bar)
+    const cumRow = makeNode('div', { class: 'group flex w-full', 'data-testid': 'tool-call-row', 'data-ag-diff-uri': 'file:///C:/repo/cum.js' });
+    const cumBadge = makeNode('span', { 'data-testid': 'diff-line-count' });
+    cumBadge.textContent = '+1 -1';
+    cumRow.appendChild(cumBadge);
+    col.appendChild(cumRow);
+    const normRow = makeNode('div', { class: 'group flex w-full', 'data-testid': 'tool-call-row', 'data-ag-diff-uri': 'file:///C:/repo/norm.js' });
+    const normBadge = makeNode('span', { 'data-testid': 'diff-line-count' });
+    normBadge.textContent = '+1 -1';
+    normRow.appendChild(normBadge);
+    col.appendChild(normRow);
+    win.__agPrismInlineDiffCall = (raw) => {
+      const req = JSON.parse(raw);
+      const isCum = req.uri.includes('cum.js');
+      queueMicrotask(() => win.__agPrismInlineDiffResolve?.(req.id, {
+        ok: true, mode: 'git-diff', fileName: isCum ? 'cum.js' : 'norm.js',
+        additions: isCum ? 85 : 1, deletions: isCum ? 85 : 1, truncated: false, totalLines: 2,
+        ...(isCum ? { cumulativeDiff: true } : {}),
+        lines: [{ kind: 'del', ln: '10', sign: '-', text: 'a' }, { kind: 'add', ln: '10', sign: '+', text: 'b' }],
+      }));
+    };
+    assert.equal(client.toggleInlineDiffPreview(cumBadge, { noAnim: true }), true);
+    assert.equal(client.toggleInlineDiffPreview(normBadge, { noAnim: true }), true);
+    await new Promise((r) => setTimeout(r, 20));
+    const cumNote = cumRow.nextElementSibling?.querySelector('.ag-cs-inline-diff-note');
+    assert.ok(cumNote && cumNote.textContent.includes('(+85 -85)'), 'cumulativeDiff git-diff must show honest single-line notice with (+a -d)');
+    assert.equal(cumRow.nextElementSibling?.querySelector('.ag-cs-inline-diff-bar'), null, 'Must never restore .ag-cs-inline-diff-bar');
+    assert.equal(normRow.nextElementSibling?.querySelector('.ag-cs-inline-diff-note'), null, 'Normal git-diff must not show cumulative notice');
   } finally {
     client.destroy();
   }
@@ -697,6 +710,32 @@ test('W5-3: non-Git normal source/SKILL.md returns safe bounded snapshot while s
     assert.equal(commitFbRes.deletions, 0);
     assert.ok(commitFbRes.lines.some((l) => l.kind === 'add' && l.text === 'const added_a = 101;'));
     assert.equal(commitFbRes.lines.some((l) => l.kind === 'add' && l.text === 'const line_1 = 1;'), false, 'Old unchanged lines must NOT be painted green');
+
+    // Cumulative working-tree diff (<= maxLines) focuses best-matching hunk first on default view, preserves natural order on expand/no-hints
+    const cumFile = path.join(gitRepo, 'cum-focus.js');
+    const cumBase = Array.from({ length: 60 }, (_, i) => `const row_${i + 1} = ${i + 1};`);
+    fs.writeFileSync(cumFile, cumBase.join('\n') + '\n', 'utf8');
+    runGit(['add', 'cum-focus.js']);
+    runGit(['commit', '-m', 'add cum-focus']);
+    const cumMod = cumBase.map((l, i) => (i < 20 ? `const bulk_${i + 1} = ${i + 100};` : i === 50 ? 'const step_hit = 999;' : l));
+    fs.writeFileSync(cumFile, cumMod.join('\n') + '\n', 'utf8');
+    const cumFocused = await readSafeInlineDiff(cumFile, { hints: { additions: 1, deletions: 1 } });
+    assert.equal(cumFocused.ok, true);
+    assert.equal(cumFocused.mode, 'git-diff');
+    assert.equal(cumFocused.cumulativeDiff, true);
+    assert.equal(cumFocused.focused, true);
+    assert.equal(cumFocused.truncated, false);
+    assert.equal(cumFocused.additions, 21);
+    assert.equal(cumFocused.deletions, 21);
+    const hitIdx = cumFocused.lines.findIndex((l) => l.text === 'const step_hit = 999;');
+    const bulkIdx = cumFocused.lines.findIndex((l) => l.text === 'const bulk_1 = 100;');
+    assert.ok(hitIdx > 0 && bulkIdx > hitIdx, `Best-matching +1/-1 hunk must be prioritized first (hit=${hitIdx}, bulk=${bulkIdx})`);
+    const cumExpanded = await readSafeInlineDiff(cumFile, { hints: { additions: 1, deletions: 1 }, expand: true });
+    assert.equal(cumExpanded.cumulativeDiff, true);
+    assert.ok(cumExpanded.lines.findIndex((l) => l.text === 'const bulk_1 = 100;') < cumExpanded.lines.findIndex((l) => l.text === 'const step_hit = 999;'));
+    const cumNoHint = await readSafeInlineDiff(cumFile);
+    assert.equal(Boolean(cumNoHint.cumulativeDiff), false);
+    assert.ok(cumNoHint.lines.findIndex((l) => l.text === 'const bulk_1 = 100;') < cumNoHint.lines.findIndex((l) => l.text === 'const step_hit = 999;'));
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
@@ -734,7 +773,7 @@ test('W5-4: 0 innerHTML, 0 :has(), pure ASCII CSS, 8-locale 0-CJK leak, 0 BOM/CR
     'inlineDiffOpenSidebar', 'inlineDiffCollapse', 'inlineDiffLoading', 'inlineDiffBinary',
     'inlineDiffNoPreview', 'inlineDiffSensitive', 'inlineDiffSnapshotNotice', 'inlineDiffLongLinesTag',
     'inlineDiffMenuExpand', 'inlineDiffMenuCollapse', 'inlineDiffMenuCopyPath', 'inlineDiffLargeExpandBtn',
-    'inlineDiffExpandAll', 'inlineDiffExpandAllPlain',
+    'inlineDiffExpandAll', 'inlineDiffExpandAllPlain', 'inlineDiffCumulativeNotice',
   ]) {
     const km = new RegExp(`${key}\\s*:\\s*\\{([^\\n]+)\\}`).exec(clientSrc);
     assert.ok(km, `DIFF_FALLBACK missing key ${key}`);
