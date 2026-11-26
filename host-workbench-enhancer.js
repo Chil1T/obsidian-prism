@@ -1,9 +1,4 @@
-// Obsidian Prism — Host Workbench Deep-Surface Enhancer (host-workbench-enhancer.js)
-// 1. Cross-origin zero-intrusion Sidecar UI (`plugin://*` Swarm / Pulse) 4-theme postMessage bridge (0fps idle).
-// 2. Code block glass sticky header companion + manual [Fold (N lines)] / [Expand] toggle (>= 48 lines, scrollTop anchored, zero auto-fold).
-// 3. Long-conversation rail (`[data-testid="conversation-navigator"]`) hover outline popover + Alt+Up/Down instant turn jump.
-// 4. Native Antigravity chrome polish (Settings dialog rail, Subagent ambient, Sidebar overflow fold, Fast scroll-to-bottom,
-//    Permissions menu state, Queued row feedback, OverviewSection GPU fold) + Channel 6 Inline Diff light delegation.
+// Host Workbench Enhancer (host-workbench-enhancer.js)
 
 (function (root) {
   'use strict';
@@ -1609,10 +1604,17 @@
       }
     }
 
+    const isReducedMotionNow = () => {
+      if ((getConfig() || {}).motionLevel === 'off' || ga(doc?.documentElement, 'data-ag-cs-motion') === 'off') return true;
+      if (typeof win?.__agPrismReducedMotion === 'function') return Boolean(win.__agPrismReducedMotion(doc, win));
+      if (ga(doc?.documentElement, 'data-ag-cs-ignore-rm') === '1') return false;
+      return Boolean(win?.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches);
+    };
+
     function runFastScrollToBottom(btnEl) {
       if (isDead() || !doc || !win) return false;
       const cfg = getConfig() || {};
-      if (cfg.scrollBottomMotion === 'instant' || cfg.motionLevel === 'off' || win.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) {
+      if (cfg.scrollBottomMotion === 'instant' || isReducedMotionNow()) {
         return false;
       }
       const vp = qs(cl(btnEl, S_CV) || doc, S_VP) || qs(doc, S_VP);
@@ -1728,8 +1730,7 @@
     function shouldAnimateNonDiff() {
       if (!win?.requestAnimationFrame || !doc?.getElementById) return false;
       if (!doc.getElementById('ag-prism-css') && !doc.getElementById('prism-style')) return false;
-      if ((getConfig() || {}).motionLevel === 'off' || ga(doc.documentElement, 'data-ag-cs-motion') === 'off') return false;
-      return !win.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+      return !isReducedMotionNow();
     }
 
     function findQueuedMessageRow(btn, card) {
@@ -1752,11 +1753,7 @@
       if (!/send|delete|remove|trash|发送|發送|删除|刪除|送信|削除|전송|삭제/i.test(meta) && /\bedit\b|编辑|編輯|編集|수정/i.test(meta)) {
         return false;
       }
-      if (
-        (getConfig() || {}).motionLevel === 'off' ||
-        ga(doc?.documentElement, 'data-ag-cs-motion') === 'off' ||
-        win?.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches
-      ) {
+      if (isReducedMotionNow()) {
         return false;
       }
       const row = findQueuedMessageRow(btn, card);

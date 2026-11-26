@@ -1,7 +1,4 @@
-// Obsidian Prism — Channel 6 Inline Tool-Chain Diff Client (vendor/inline-diff/inline-diff-client.js)
-// Decoupled from Channel 1 static bundle: mounts its own <style id="ag-prism-inline-diff-css">,
-// handles diff chip decoration, right-click menu cooperation, hover prefetch, RPC (__agPrismInlineDiffCall / Resolve),
-// and GPU unfold/fold inline diff preview with full 5+1 anti-translation & lossless destroy().
+// Channel 6 Inline Diff Client (vendor/inline-diff/inline-diff-client.js)
 
 (function (root) {
   'use strict';
@@ -59,7 +56,7 @@
     '& .ag-cs-inline-diff-line.is-hunk{background-color:rgba(15,23,42,.025);border-color:rgba(15,23,42,.06);& .ag-cs-inline-diff-ln{background-color:#EEF1F6;color:rgba(71,85,105,.55);}}',
     '& .ag-cs-inline-diff-gap-rule{background:linear-gradient(90deg,rgba(15,23,42,.12),rgba(15,23,42,.03));}',
     '}',
-    '@media (prefers-reduced-motion:reduce){.ag-cs-inline-diff-loading::before,.ag-cs-diff-ctx-menu{animation:none !important;}.ag-cs-diff-ctx-menu{backdrop-filter:none !important;}html[data-ag-cs-style]:not([data-ag-cs-motion="ultra"]):not([data-ag-cs-motion="standard"]) .ag-cs-inline-diff-box{animation:none !important;filter:none !important;}}',
+    '@media (prefers-reduced-motion:reduce){:root:not([data-ag-cs-ignore-rm="1"]) :is(.ag-cs-inline-diff-loading::before,.ag-cs-diff-ctx-menu){animation:none !important;}:root:not([data-ag-cs-ignore-rm="1"]) .ag-cs-diff-ctx-menu{backdrop-filter:none !important;}html[data-ag-cs-style]:not([data-ag-cs-ignore-rm="1"]):not([data-ag-cs-motion="ultra"]):not([data-ag-cs-motion="standard"]) .ag-cs-inline-diff-box{animation:none !important;filter:none !important;}}',
     'html[data-ag-cs-style][data-ag-cs-win-blur="1"] .ag-cs-inline-diff-loading::before{animation-play-state:paused !important;}',
     'html[data-ag-cs-style][data-ag-cs-motion="off"] .ag-cs-inline-diff-box,html[data-ag-cs-style][data-ag-cs-motion="off"] .ag-cs-inline-diff-loading::before,html[data-ag-cs-style][data-ag-cs-motion="off"] .ag-cs-diff-ctx-menu{animation:none !important;transition:none !important;}',
     'html[data-ag-cs-style]:is([data-ag-cs-win-blur="1"],[data-ag-cs-motion="off"]) .ag-cs-diff-ctx-menu{backdrop-filter:none !important;}',
@@ -960,6 +957,8 @@
         return false;
       }
       if ((getConfig() || {}).motionLevel === 'off' || ga(doc.documentElement, 'data-ag-cs-motion') === 'off') return false;
+      if (typeof win.__agPrismReducedMotion === 'function') return !win.__agPrismReducedMotion(doc, win);
+      if (ga(doc.documentElement, 'data-ag-cs-ignore-rm') === '1') return true;
       return !win.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
     }
 

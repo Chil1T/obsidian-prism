@@ -208,10 +208,14 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
     const brandPath = path.join(rootDir, 'assets', 'brand-mark-svg.js');
     const atlasPath = path.join(rootDir, 'vendor', 'clawd-mascot', 'tavern-atlas-data.js');
     const stageGlPath = path.join(rootDir, 'vendor', 'clawd-mascot', 'octopath-stage-webgl.js');
+    const i18nExtPath = path.join(rootDir, 'src', 'runtime', 'i18n-ext-beta4.js');
+    const setExtPath = path.join(rootDir, 'src', 'runtime', 'settings-ext-beta4.js');
     const hasBrand = fs.existsSync(brandPath);
     const hasAtlas = fs.existsSync(atlasPath);
     const hasStageGl = fs.existsSync(stageGlPath);
-    const sig = `${getFileSig(locPath)}|${hasBrand ? getFileSig(brandPath) : '0'}|${hasAtlas ? getFileSig(atlasPath) : '0'}|${hasStageGl ? getFileSig(stageGlPath) : '0'}|${getFileSig(setPath)}`;
+    const hasI18nExt = fs.existsSync(i18nExtPath);
+    const hasSetExt = fs.existsSync(setExtPath);
+    const sig = `${getFileSig(locPath)}|${hasBrand ? getFileSig(brandPath) : '0'}|${hasAtlas ? getFileSig(atlasPath) : '0'}|${hasStageGl ? getFileSig(stageGlPath) : '0'}|${getFileSig(setPath)}|${hasI18nExt ? getFileSig(i18nExtPath) : '0'}|${hasSetExt ? getFileSig(setExtPath) : '0'}`;
     const cachePath = resolveBundleCachePathOption(opts);
     const curMem = bundleCache.getChannelMemCache('settings');
     if (!cachePath && curMem && curMem.sig === sig && curMem.codeHash) {
@@ -222,11 +226,15 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
     const atlasBuf = hasAtlas ? fs.readFileSync(atlasPath) : null;
     const stageGlBuf = hasStageGl ? fs.readFileSync(stageGlPath) : null;
     const setBuf = fs.readFileSync(setPath);
+    const i18nExtBuf = hasI18nExt ? fs.readFileSync(i18nExtPath) : null;
+    const setExtBuf = hasSetExt ? fs.readFileSync(setExtPath) : null;
     const fileEntries = [{ rel: 'i18n-locales.js', content: locBuf }];
     if (brandBuf) fileEntries.push({ rel: 'assets/brand-mark-svg.js', content: brandBuf });
     if (atlasBuf) fileEntries.push({ rel: 'vendor/clawd-mascot/tavern-atlas-data.js', content: atlasBuf });
     if (stageGlBuf) fileEntries.push({ rel: 'vendor/clawd-mascot/octopath-stage-webgl.js', content: stageGlBuf });
+    if (i18nExtBuf) fileEntries.push({ rel: 'src/runtime/i18n-ext-beta4.js', content: i18nExtBuf });
     fileEntries.push({ rel: 'settings-panel.js', content: setBuf });
+    if (setExtBuf) fileEntries.push({ rel: 'src/runtime/settings-ext-beta4.js', content: setExtBuf });
     return bundleCache.resolveChannelAssetsWithDiskCache({
       channelName: 'settings',
       sig,
@@ -237,7 +245,9 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
         if (brandBuf) parts.push(minifySingleSource(brandBuf.toString('utf8')));
         if (atlasBuf) parts.push(atlasBuf.toString('utf8').trim());
         if (stageGlBuf) parts.push(minifySingleSource(minifyEmbeddedGlslTemplates(stageGlBuf.toString('utf8'))));
+        if (i18nExtBuf) parts.push(minifySingleSource(i18nExtBuf.toString('utf8')));
         parts.push(minifySingleSource(setBuf.toString('utf8')));
+        if (setExtBuf) parts.push(minifySingleSource(setExtBuf.toString('utf8')));
         const minRuntime = parts.join(';\n');
         const codeHash = computeHash(minRuntime);
         return { minRuntime, codeHash };

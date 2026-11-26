@@ -1,4 +1,4 @@
-// Obsidian Prism — Collapsible Settings Control Center, Scene Presets, Config Backup & Credits Module
+// Settings Control Center
 (function (root) {
   'use strict';
   const G = root || (typeof globalThis !== 'undefined' ? globalThis : window);
@@ -464,9 +464,7 @@
       else if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(id);
       else clearTimeout(id);
     };
-    const isReducedMotion = () => {
-      try { return Boolean(win?.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches); } catch { return false; }
-    };
+    const isReducedMotion=()=>{try{if(isFn(win?.__agPrismReducedMotion))return Boolean(win.__agPrismReducedMotion(doc,win));const de=doc?.documentElement;if(de?.getAttribute?.('data-ag-cs-motion')==='off')return true;if(de?.getAttribute?.('data-ag-cs-ignore-rm')==='1')return false;return Boolean(win?.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches);}catch{return false;}};
 
     const view = mk('div', 'ag-cs-mascot-stage-view');
     sa(view, 'data-ag-mascot-stage-view', '1');
@@ -481,7 +479,7 @@
       });
     }
 
-    // 1. 顶栏：「← 返回设置」+ 舞台标题 + 实时计数/迷你蟹状态
+    // 1. 顶栏
     const hdr = mk('div');
     sa(hdr, 'data-ag-stage-header', '1');
     if (hdr.style) O.assign(hdr.style, { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' });
@@ -579,7 +577,7 @@
     let canvas = createStageCanvas();
     ap(stageFrame, canvas);
 
-    // 3. 与 5 站位严格垂直对齐的 5 张精致像素阵营名牌开关按钮
+    // 3. 5 站位名牌开关
     const dockGrid = mk('div');
     sa(dockGrid, 'data-ag-stage-dock', '1');
     if (dockGrid.style) {
@@ -590,7 +588,7 @@
       });
     }
 
-    // 4. 底部 4 枚快捷预设胶囊（双宠经典 / 四宠同台 / 全员上场 / 全员休息）
+    // 4. 快捷预设胶囊
     const presetRow = mk('div');
     sa(presetRow, 'data-ag-stage-presets', '1');
     if (presetRow.style) {
@@ -606,7 +604,7 @@
 
     ap(view, hdr, hintEl, stageFrame, dockGrid, presetRow);
 
-    // ── 舞台实时物理、3D 视差与光影状态（5 个固定单只纯开关站位）──
+    // 舞台状态
     let isOpen = false;
     let disposed = false;
     let rafId = 0;
@@ -694,7 +692,7 @@
       applyRosterChange(next, ev);
     };
 
-    // 构建 5 张精致像素阵营名牌开关按钮（零步进器、零 ×2 徽章，一键点亮/熄灯）
+    // 5 站位开关按钮
     STAGE_SLOTS.forEach((sl, idx) => {
       const btn = mk('button', BTN);
       btn.type = 'button';
@@ -1954,9 +1952,8 @@
       const ns = formatSettingsSummary(l, u);
       if (sumEl && sumEl[K_TC] !== ns) sumEl[K_TC] = ns;
       if (ga(rootEl, 'data-body-built') !== '1') return;
-      if (typeof rootEl.__prismMountThoughtUi === 'function') {
-        try { rootEl.__prismMountThoughtUi(); } catch {}
-      }
+      try { rootEl.__prismMountThoughtUi?.(); } catch {}
+      try { G.__agPrismSettingsExtBeta4?.sync?.(rootEl, { doc, lang: l, ui: u, effVal, saveSetting, saveSettingsBatch, runGuardedMut }); } catch {}
 
       const de = doc.documentElement;
       const themeAttr = de?.getAttribute?.('data-ag-cs-theme') || '';

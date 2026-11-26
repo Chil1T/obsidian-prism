@@ -46,7 +46,7 @@
     var ANIM_STALE_GUARD_MS = 650;
     var MAX_WALLPAPER_CACHE = 24;
 
-    /* 满幅海报构图视觉锚点：左移玻璃雕塑视口 (-46px / 浅色10Ne -64px) + 雕塑右翼纯净分离大水印 (~x:500..664) + 右侧社论排版区 (x:682..1548) */
+    /* 满幅海报构图锚点 */
     var SCULPT_SHIFT_X = -46;
     var SCULPT_SHIFT_LIGHT_NEON = -64;
     var SCULPT_AURA_CX = 236;
@@ -61,7 +61,7 @@
     var RIGHT_ZONE_END = 1548;
     var RIGHT_ZONE_W = RIGHT_ZONE_END - RIGHT_ZONE_X; /* 866 */
 
-    /* 思考档位毛玻璃胶囊严格锁定在 [682, 1504] x [296, 388]，100% 保持 getEffortUvRects() 零死区热区几何契约 */
+    /* 思考档位胶囊热区 */
     var WELL_X = 682;
     var WELL_RIGHT = 1504;
     var WELL_W = WELL_RIGHT - WELL_X; /* 822 */
@@ -280,7 +280,7 @@
       },
     };
 
-    /* V14.1 114 颗未解锁盲键与预留槽专属「未雕琢哑光原石晶坯」中性石板光谱（零盗用 6C 蓝晶！） */
+    /* V14.1 盲键中性光谱 */
     var STANDBY_OPTIC_THEME = {
       sculptKey: 'standby',
       watermark: 'Au',
@@ -387,23 +387,18 @@
     var _oledRmMqlCache = typeof WeakMap === 'function' ? new WeakMap() : null;
     function checkOledPrefersReducedMotion(rt) {
       try {
-        var host = (rt && typeof rt.matchMedia === 'function')
-          ? rt
-          : (typeof window !== 'undefined' && window && typeof window.matchMedia === 'function' ? window : null);
-        if (!host) return false;
-        var mm = host.matchMedia;
-        if (_oledRmMqlCache) {
-          var cached = _oledRmMqlCache.get(host);
-          if (cached && cached.fn === mm && cached.mq) {
-            return Boolean(cached.mq.matches);
-          }
-          var mq = mm.call(host, '(prefers-reduced-motion: reduce)');
-          _oledRmMqlCache.set(host, { fn: mm, mq: mq });
-          return Boolean(mq && mq.matches);
-        }
-        var mq2 = mm.call(host, '(prefers-reduced-motion: reduce)');
-        if (mq2 && mq2.matches) return true;
-      } catch (_mmErr) {}
+        var host = (rt && typeof rt === 'object') ? rt : (typeof window !== 'undefined' && window ? window : null);
+        if (host && typeof host.__agPrismReducedMotion === 'function') return Boolean(host.__agPrismReducedMotion(host.document, host));
+        var d = (host && host.document) || (typeof document !== 'undefined' ? document : null), de = d && d.documentElement;
+        if (de && de.getAttribute && de.getAttribute('data-ag-cs-motion') === 'off') return true;
+        if (de && de.getAttribute && de.getAttribute('data-ag-cs-ignore-rm') === '1') return false;
+        if (!host || typeof host.matchMedia !== 'function') return false;
+        var mm = host.matchMedia, c = _oledRmMqlCache && _oledRmMqlCache.get(host);
+        if (c && c.fn === mm && c.mq) return Boolean(c.mq.matches);
+        var mq = mm.call(host, '(prefers-reduced-motion: reduce)');
+        if (_oledRmMqlCache) _oledRmMqlCache.set(host, { fn: mm, mq: mq });
+        return Boolean(mq && mq.matches);
+      } catch (_e) {}
       return false;
     }
 

@@ -28,6 +28,8 @@ const DEFERRED_ROOT_MODULES = [
 ];
 
 const RUNTIME_PARTS = [
+  'src/runtime/reduced-motion-guard.js',
+  'src/runtime/font-customizer.js',
   'i18n-core.js',
   'usage-core.js',
   'crystal-prism-core.js',

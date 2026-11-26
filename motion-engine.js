@@ -47,7 +47,13 @@ return res;
 
 function prefersReducedMotion(ov){
 if(typeof ov==='boolean')return ov;
-try{return Boolean(globalThis.matchMedia&&globalThis.matchMedia('(prefers-reduced-motion: reduce)').matches);}catch(_){return false;}
+try{
+if(typeof globalThis.__agPrismReducedMotion==='function')return Boolean(globalThis.__agPrismReducedMotion());
+const de=typeof document!=='undefined'&&document.documentElement;
+if(de&&de.getAttribute&&de.getAttribute('data-ag-cs-motion')==='off')return true;
+if(de&&de.getAttribute&&de.getAttribute('data-ag-cs-ignore-rm')==='1')return false;
+return Boolean(globalThis.matchMedia&&globalThis.matchMedia('(prefers-reduced-motion: reduce)').matches);
+}catch(_){return false;}
 }
 
 function getMotionTier(ov){

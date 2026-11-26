@@ -820,9 +820,7 @@
       'html[data-ag-cs-motion="medium"] #ag-prism-periodic-picker-root,html[data-ag-cs-motion="low"] #ag-prism-periodic-picker-root,html[data-ag-cs-motion="subtle"] #ag-prism-periodic-picker-root,html[data-ag-cs-motion="off"] #ag-prism-periodic-picker-root{backdrop-filter:none !important;-webkit-backdrop-filter:none !important;}',
       'html[data-ag-cs-motion="medium"] #ag-prism-periodic-picker-root .ag-pp-floor-shadow::before,html[data-ag-cs-motion="medium"] #ag-prism-periodic-picker-root .ag-pp-floor-shadow::after,html[data-ag-cs-motion="low"] #ag-prism-periodic-picker-root .ag-pp-floor-shadow::before,html[data-ag-cs-motion="low"] #ag-prism-periodic-picker-root .ag-pp-floor-shadow::after,html[data-ag-cs-motion="subtle"] #ag-prism-periodic-picker-root .ag-pp-floor-shadow::before,html[data-ag-cs-motion="subtle"] #ag-prism-periodic-picker-root .ag-pp-floor-shadow::after,html[data-ag-cs-motion="off"] #ag-prism-periodic-picker-root .ag-pp-floor-shadow::before,html[data-ag-cs-motion="off"] #ag-prism-periodic-picker-root .ag-pp-floor-shadow::after{filter:none !important;opacity:0.42;}',
       'html[data-ag-cs-motion="off"] #ag-prism-periodic-picker-root,html[data-ag-cs-motion="off"] #ag-prism-periodic-picker-root *{transition:none !important;transition-delay:0ms !important;animation:none !important;}',
-      '@media (prefers-reduced-motion:reduce){',
-      '#ag-prism-periodic-picker-root,.ag-pp-spatial-dock,.ag-pp-bento-grid,.ag-pp-stage,.ag-pp-right-wing,.ag-pp-hud-pill,.ag-pp-hud-reset-btn,.ag-pp-floor-shadow,.ag-pp-radar-poly,.ag-pp-radar-poly-runner,.ag-pp-radar-poly-cmp,.ag-pp-radar-fill,.ag-pp-crystal-fill,.ag-pp-bench-tooltip,.ag-pp-bento-card.is-session-switching .ag-pp-spec-body,.ag-pp-bento-card.is-session-switching .ag-pp-tele-screen,.ag-pp-bento-card.is-session-switching .ag-pp-tele-subscreen{transition:none !important;transition-delay:0ms !important;animation:none !important;}',
-      '}',
+      '@media (prefers-reduced-motion:reduce){:root:not([data-ag-cs-ignore-rm="1"]) :is(#ag-prism-periodic-picker-root,.ag-pp-spatial-dock,.ag-pp-bento-grid,.ag-pp-stage,.ag-pp-right-wing,.ag-pp-hud-pill,.ag-pp-hud-reset-btn,.ag-pp-floor-shadow,.ag-pp-radar-poly,.ag-pp-radar-poly-runner,.ag-pp-radar-poly-cmp,.ag-pp-radar-fill,.ag-pp-crystal-fill,.ag-pp-bench-tooltip,.ag-pp-bento-card.is-session-switching .ag-pp-spec-body,.ag-pp-bento-card.is-session-switching .ag-pp-tele-screen,.ag-pp-bento-card.is-session-switching .ag-pp-tele-subscreen){transition:none !important;transition-delay:0ms !important;animation:none !important;}}',
     ].join('\n');
 
     function buildPickerCss() {
@@ -878,9 +876,7 @@
       return el;
     }
 
-    /**
-     * Stamp full 5+1 anti-translation / ownership markers so host-i18n never rewrites Periodic Picker DOM.
-     */
+    /* Stamp 5+1 anti-translation markers */
     function markPeriodicOwnedRoot(el) {
       if (!el || typeof el !== 'object') return el;
       if (typeof el.setAttribute === 'function') {
@@ -911,21 +907,16 @@
     var _bentoRmMqlCache = typeof WeakMap === 'function' ? new WeakMap() : null;
     function isReducedMotion(doc, rt) {
       try {
-        if (doc && doc.documentElement && doc.documentElement.getAttribute('data-ag-cs-motion') === 'off') {
-          return true;
-        }
+        var de = doc && doc.documentElement;
+        if (de && de.getAttribute('data-ag-cs-motion') === 'off') return true;
+        if (rt && typeof rt.__agPrismReducedMotion === 'function') return Boolean(rt.__agPrismReducedMotion(doc, rt));
+        if (de && de.getAttribute('data-ag-cs-ignore-rm') === '1') return false;
         if (rt && typeof rt.matchMedia === 'function') {
-          var mm = rt.matchMedia;
-          if (_bentoRmMqlCache) {
-            var cached = _bentoRmMqlCache.get(rt);
-            if (cached && cached.fn === mm && cached.mq) {
-              return Boolean(cached.mq.matches);
-            }
-            var mq = mm.call(rt, '(prefers-reduced-motion: reduce)');
-            _bentoRmMqlCache.set(rt, { fn: mm, mq: mq });
-            return Boolean(mq && mq.matches);
-          }
-          return Boolean(mm.call(rt, '(prefers-reduced-motion: reduce)').matches);
+          var mm = rt.matchMedia, c = _bentoRmMqlCache && _bentoRmMqlCache.get(rt);
+          if (c && c.fn === mm && c.mq) return Boolean(c.mq.matches);
+          var mq = mm.call(rt, '(prefers-reduced-motion: reduce)');
+          if (_bentoRmMqlCache) _bentoRmMqlCache.set(rt, { fn: mm, mq: mq });
+          return Boolean(mq && mq.matches);
         }
       } catch (e) {}
       return false;

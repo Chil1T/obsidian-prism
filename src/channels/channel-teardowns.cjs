@@ -272,8 +272,15 @@ const SETTINGS_REMOVE_EXPRESSION = `(() => {
     sec?.__agMascotStageApi?.dispose?.();
     sec?.remove?.();
   } catch {}
+  try { (window.__agPrismSettingsExtBeta4 || globalThis.__agPrismSettingsExtBeta4)?.dispose?.(document); } catch {}
+  try { document.getElementById?.('ag-prism-settings-ext-beta4-css')?.remove?.(); } catch {}
+  try { document.getElementById?.('ag-prism-local-fonts-list')?.remove?.(); } catch {}
   try { delete window.__agPrismSettingsPanel; } catch {}
   try { delete globalThis.__agPrismSettingsPanel; } catch {}
+  try { delete window.__agPrismSettingsExtBeta4; } catch {}
+  try { delete globalThis.__agPrismSettingsExtBeta4; } catch {}
+  try { delete window.__agPrismI18nExtBeta4; } catch {}
+  try { delete globalThis.__agPrismI18nExtBeta4; } catch {}
   try { delete window.__agPrismBrandLogoSvg; } catch {}
   try { delete globalThis.__agPrismBrandLogoSvg; } catch {}
   try { delete window.__agOctopathStageWebGL; } catch {}
