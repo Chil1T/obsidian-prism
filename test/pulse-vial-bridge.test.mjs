@@ -1621,3 +1621,235 @@ test('WO-MAIN-001B: pulse-vial-bridge writes data-pv-warn="1" at >=80% and clear
     if (prevDoc !== undefined) globalThis.document = prevDoc;
   }
 });
+
+test('Issue #94 regression: narrow sidebar (Tier 4 <450px & ultra-narrow <396px) converges without MutationObserver microtask loop and clamps card safely', async () => {
+  // 场景 A：Tier 4 窄侧边栏（footer < 450px，right: -84px，空行内 left/right）
+  // 同时验证真实 attributeFilter（不含 style）与强制 style 同步+微任务触发下的双重收敛性
+  async function runNarrowScenario({ viewportW, composerRight, cardWidth, baseLx, forceSyncOnStyle }) {
+    const env = createPulseMockEnv();
+    env.win.innerWidth = viewportW;
+
+    const composer = env.doc.createElement('div');
+    composer.className = 'surface-composer-card';
+    composer.getBoundingClientRect = () => ({ left: 12, top: 480, width: composerRight - 12, height: 120, right: composerRight });
+    const host = env.getPulseHost();
+    host.remove();
+    composer.appendChild(host);
+    env.cascadeWrap.appendChild(composer);
+
+    const sr = host.shadowRoot;
+    const card = sr.getElementById('context-card');
+    // 初始关闭且空行内 left/right（真实 inline-fallback / 窄侧边栏中位置由 <style> 决定）
+    card.hidden = true;
+    card.style.left = '';
+    card.style.right = '';
+    card.style.removeProperty('--pv-cx');
+
+    // 真实模拟 Chromium MutationObserver（支持按 attributeFilter 过滤与可选同步/微任务自激压力模式）
+    const observers = [];
+    env.win.MutationObserver = class {
+      constructor(cb) {
+        this.cb = cb;
+        this.targets = [];
+        observers.push(this);
+      }
+      observe(target, opts) {
+        this.targets.push({ target, opts: opts || {} });
+      }
+      disconnect() {
+        this.targets = [];
+      }
+    };
+
+    const notifyAttr = (target, attrName, { ignoreFilter = false, asyncMicrotask = false } = {}) => {
+      for (const obs of [...observers]) {
+        const hit = obs.targets.some((rec) => {
+          if (rec.target !== target || !rec.opts.attributes) return false;
+          if (ignoreFilter) return true;
+          return !Array.isArray(rec.opts.attributeFilter) || rec.opts.attributeFilter.includes(attrName);
+        });
+        if (hit) {
+          if (asyncMicrotask) {
+            queueMicrotask(() => {
+              if (rectCalls < 20) obs.cb([{ type: 'attributes', target, attributeName: attrName }]);
+            });
+          } else {
+            obs.cb([{ type: 'attributes', target, attributeName: attrName }]);
+          }
+        }
+      }
+    };
+
+    let rectCalls = 0;
+    let pvCxWrites = 0;
+    let microtaskFeedbackOnStyle = false;
+    let curBaseLx = baseLx;
+    let curCardWidth = cardWidth;
+    let curComposerRight = composerRight;
+    composer.getBoundingClientRect = () => ({ left: 12, top: 480, width: curComposerRight - 12, height: 120, right: curComposerRight });
+
+    // getBoundingClientRect() 动态叠加当前 --pv-cx 平移值（还原真实渲染坐标）
+    card.getBoundingClientRect = () => {
+      rectCalls++;
+      const cur = parseFloat(card.style.getPropertyValue('--pv-cx')) || 0;
+      const left = curBaseLx + cur;
+      return { left, top: 220, width: curCardWidth, height: 284, right: left + curCardWidth };
+    };
+
+    // 拦截 style.setProperty / removeProperty（注意 createStyleObj 是 Proxy，需在外层包 Proxy 才能真正拦截方法调用）
+    const origStyle = card.style;
+    card.style = new Proxy(origStyle, {
+      get(target, prop) {
+        if (prop === 'setProperty') {
+          return (k, v) => {
+            const prev = origStyle.getPropertyValue(k);
+            origStyle.setProperty(k, v);
+            if (k === '--pv-cx' && prev !== String(v)) {
+              pvCxWrites++;
+              if (rectCalls < 20) {
+                notifyAttr(card, 'style', {
+                  ignoreFilter: forceSyncOnStyle || microtaskFeedbackOnStyle,
+                  asyncMicrotask: microtaskFeedbackOnStyle,
+                });
+              }
+            }
+          };
+        }
+        if (prop === 'removeProperty') {
+          return (k) => {
+            const prev = origStyle.getPropertyValue(k);
+            origStyle.removeProperty(k);
+            if (k === '--pv-cx' && prev) {
+              pvCxWrites++;
+              if (rectCalls < 20) {
+                notifyAttr(card, 'style', {
+                  ignoreFilter: forceSyncOnStyle || microtaskFeedbackOnStyle,
+                  asyncMicrotask: microtaskFeedbackOnStyle,
+                });
+              }
+            }
+          };
+        }
+        const val = target[prop];
+        return typeof val === 'function' ? val.bind(target) : val;
+      },
+      set(target, prop, value) {
+        target[prop] = value;
+        return true;
+      },
+    });
+
+    const prevDoc = globalThis.document;
+    delete globalThis.document;
+    const bridge = bridgeMod.mountPulseVialBridge({
+      win: env.win,
+      doc: env.doc,
+      storage: env.storage,
+      vialCore,
+      autoPoll: false,
+      allowMultiple: true,
+    });
+
+    try {
+      await bridge.sync();
+
+      // 校验 ob 注册在 #context-card 上只监听 hidden，彻底移除 style
+      const cardObsRec = observers
+        .flatMap((o) => o.targets)
+        .find((rec) => rec.target === card && rec.opts.attributes);
+      assert.ok(cardObsRec, 'MutationObserver must observe #context-card attributes');
+      assert.ok(cardObsRec.opts.attributeFilter?.includes('hidden'), '#context-card filter must include hidden');
+      assert.equal(cardObsRec.opts.attributeFilter?.includes('style'), false, '#context-card filter must exclude style to prevent self-triggering');
+
+      // 清零计数器，模拟用户点击展开 #context-card
+      rectCalls = 0;
+      pvCxWrites = 0;
+      card.hidden = false;
+      notifyAttr(card, 'hidden');
+      // 排空多轮微任务队列，验证绝无微任务乒乓死循环
+      for (let i = 0; i < 6; i++) await Promise.resolve();
+
+      const callsAfterOpen = rectCalls;
+      const writesAfterOpen = pvCxWrites;
+      const pvCxVal = card.style.getPropertyValue('--pv-cx');
+      const curOffset = parseFloat(pvCxVal) || 0;
+      const finalLeft = curBaseLx + curOffset;
+      const finalRight = finalLeft + curCardWidth;
+
+      // 再次触发一次外部通知，验证幂等且无额外 style 写入
+      notifyAttr(card, 'hidden');
+      for (let i = 0; i < 3; i++) await Promise.resolve();
+      const writesAfterReentry = pvCxWrites;
+
+      // 额外验证：即使模拟旧版 Chromium 异步微任务自激（忽略 attributeFilter，setProperty 后微任务唤醒 ob），
+      // cX() 依靠 baseLx = rc.left - cur 与 |dx - cur| > 1 也在 <=2 次内彻底收敛、0 乒乓！
+      origStyle.removeProperty('--pv-cx');
+      rectCalls = 0;
+      pvCxWrites = 0;
+      microtaskFeedbackOnStyle = true;
+      notifyAttr(card, 'hidden');
+      for (let i = 0; i < 8; i++) await Promise.resolve();
+      const callsUnderForcedMicrotaskLoop = rectCalls;
+      const writesUnderForcedMicrotaskLoop = pvCxWrites;
+      microtaskFeedbackOnStyle = false;
+
+      // 测试拉宽回宽屏且未越界时，targetCx === 0 自动清除 --pv-cx
+      env.win.innerWidth = 1280;
+      curComposerRight = 1268;
+      curBaseLx = 400;
+      curCardWidth = 396;
+      notifyAttr(card, 'hidden');
+      for (let i = 0; i < 3; i++) await Promise.resolve();
+      const pvCxAfterWiden = card.style.getPropertyValue('--pv-cx');
+
+      return {
+        callsAfterOpen,
+        writesAfterOpen,
+        writesAfterReentry,
+        callsUnderForcedMicrotaskLoop,
+        writesUnderForcedMicrotaskLoop,
+        pvCxVal,
+        finalLeft,
+        finalRight,
+        pvCxAfterWiden,
+      };
+    } finally {
+      bridge.destroy();
+      if (prevDoc !== undefined) globalThis.document = prevDoc;
+    }
+  }
+
+  // 1) Tier 4 窄侧边栏（footer = 420px < 450px，right: -84px -> baseLx = 108，width = 396，右缘 504 溢出 mxR = 418 共 86px）
+  const tier4 = await runNarrowScenario({
+    viewportW: 430,
+    composerRight: 420,
+    cardWidth: 396,
+    baseLx: 108,
+    forceSyncOnStyle: false,
+  });
+  assert.ok(tier4.callsAfterOpen >= 1 && tier4.callsAfterOpen <= 2, `Tier 4 cX() calls must converge in <=2, got ${tier4.callsAfterOpen}`);
+  assert.equal(tier4.writesAfterOpen, 1, 'Tier 4 must write --pv-cx exactly once');
+  assert.equal(tier4.writesAfterReentry, 1, 'Re-running cX() on Tier 4 must be idempotent with 0 extra writes');
+  assert.ok(tier4.callsUnderForcedMicrotaskLoop <= 2 && tier4.writesUnderForcedMicrotaskLoop === 1, `Tier 4 forced microtask feedback must converge in <=2 calls / 1 write, got ${tier4.callsUnderForcedMicrotaskLoop}/${tier4.writesUnderForcedMicrotaskLoop}`);
+  assert.equal(tier4.pvCxVal, '-86px');
+  assert.ok(tier4.finalLeft >= 12 && tier4.finalRight <= 418, `Tier 4 card [${tier4.finalLeft}, ${tier4.finalRight}] must sit inside [12, 418]`);
+  assert.equal(tier4.pvCxAfterWiden, '', 'Widening back into safe bounds must clear --pv-cx via cx0()');
+
+  // 2) 极窄侧边栏（< 396px，vw = 360，composerRight = 340，cardWidth = 336 => mxR - tw = 4 < 12）
+  //    并开启 style.setProperty 同步强制回调 MutationObserver：验证防重入锁 + baseLx 还原在 <= 2 次内收敛且优先保左缘 >= 12
+  const ultraNarrow = await runNarrowScenario({
+    viewportW: 360,
+    composerRight: 340,
+    cardWidth: 336,
+    baseLx: 96,
+    forceSyncOnStyle: true,
+  });
+  assert.ok(ultraNarrow.callsAfterOpen >= 1 && ultraNarrow.callsAfterOpen <= 2, `Ultra-narrow cX() calls must converge in <=2 even under forced sync style MO feedback, got ${ultraNarrow.callsAfterOpen}`);
+  assert.equal(ultraNarrow.writesAfterOpen, 1, 'Ultra-narrow must write --pv-cx once without ping-pong');
+  assert.equal(ultraNarrow.writesAfterReentry, 1, 'Ultra-narrow re-entry must perform 0 extra writes');
+  assert.ok(ultraNarrow.callsUnderForcedMicrotaskLoop <= 2 && ultraNarrow.writesUnderForcedMicrotaskLoop === 1, `Ultra-narrow forced microtask feedback must converge in <=2 calls / 1 write, got ${ultraNarrow.callsUnderForcedMicrotaskLoop}/${ultraNarrow.writesUnderForcedMicrotaskLoop}`);
+  assert.equal(ultraNarrow.pvCxVal, '-84px');
+  assert.equal(ultraNarrow.finalLeft, 12, 'Ultra-narrow container must prioritize left-edge safety at 12px');
+  assert.ok(ultraNarrow.finalRight <= 348, `Ultra-narrow right edge ${ultraNarrow.finalRight} must stay within viewport margin 348`);
+  assert.equal(ultraNarrow.pvCxAfterWiden, '', 'Widening from ultra-narrow back to wide must clear --pv-cx');
+});
