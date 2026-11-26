@@ -78,40 +78,17 @@
   const SAFE_TRUNCATE_BUDGET = 46000;
   const INFLIGHT_TTL_MS = 185000;
 
-  // Indices:
-  // 0:raw, 1:hideRaw, 2:fallback, 3:fallbackTitle, 4:retranslate, 5:errGeneric, 6:retryBtn,
-  // 7:pendingMachine, 8:pendingAi, 9:streaming, 10:settling,
-  // 11:errProxy, 12:errRateLimit, 13:errAuth, 14:errTimeout, 15:errOffline,
-  // 16:badgeProxy, 17:badgeRateLimit, 18:badgeAuth, 19:badgeTimeout, 20:badgeOffline, 21:badgeGeneric,
-  // 22:truncFmt ({0}k/{1}k)
-  const ZH_TW_PACK =
-    '原文|收起原文|機翻降級|AI 未就緒，已降級機翻|重新轉譯|轉譯未完成|↻ 重試|機翻中…|AI 轉譯中…|思考輸出中…|收束中…|代理或網路不可達|請求限流冷卻中|金鑰或權限異常|轉譯逾時|後台服務未連線|代理失敗 · 重試|限流冷卻 · 重試|驗證失敗 · 重試|逾時 · 重試|服務離線 · 重試|轉譯失敗 · 重試|已安全分段譯前 {0}k 字（共 {1}k）'.split(
-      '|'
-    );
+  const ZH_TW_PACK = '原文|收起原文|機翻降級|AI 未就緒，已降級機翻|重新轉譯|轉譯未完成|↻ 重試|機翻中…|AI 轉譯中…|思考輸出中…|收束中…|代理或網路不可達|請求限流冷卻中|金鑰或權限異常|轉譯逾時|後台服務未連線|代理失敗 · 重試|限流冷卻 · 重試|驗證失敗 · 重試|逾時 · 重試|服務離線 · 重試|轉譯失敗 · 重試|已安全分段譯前 {0}k 字（共 {1}k）'.split('|');
   const CLIENT_I18N = {
-    'zh-CN':
-      '原文|收起原文|机翻降级|AI 未就绪，已降级机翻|重新转译|转译未完成|↻ 重试|机翻中…|AI 转译中…|思考输出中…|收束中…|代理或网络不可达|请求限流冷却中|密钥或权限异常|转译超时|后台服务未连接|代理失败 · 重试|限流冷却 · 重试|鉴权失败 · 重试|超时 · 重试|服务离线 · 重试|转译失败 · 重试|已安全分段译前 {0}k 字（共 {1}k）'.split(
-        '|'
-      ),
+    'zh-CN': '原文|收起原文|机翻降级|AI 未就绪，已降级机翻|重新转译|转译未完成|↻ 重试|机翻中…|AI 转译中…|思考输出中…|收束中…|代理或网络不可达|请求限流冷却中|密钥或权限异常|转译超时|后台服务未连接|代理失败 · 重试|限流冷却 · 重试|鉴权失败 · 重试|超时 · 重试|服务离线 · 重试|转译失败 · 重试|已安全分段译前 {0}k 字（共 {1}k）'.split('|'),
     'zh-TW': ZH_TW_PACK,
-    en: 'Raw|Hide Raw|Fallback|AI unavailable; machine fallback|Retranslate|Translation incomplete|↻ Retry|Translating…|AI polishing…|Streaming…|Settling…|Proxy or network unreachable|Rate-limited (cooling down)|API key or auth error|Translation timed out|Daemon service offline|Proxy error · Retry|Rate limit · Retry|Auth error · Retry|Timed out · Retry|Offline · Retry|Failed · Retry|Translated first {0}k / {1}k chars'.split(
-      '|'
-    ),
-    ja: '原文|原文を隠す|機械翻訳代替|AI未設定・機械翻訳代替|再翻訳|翻訳未完了|↻ 再試行|翻訳中…|AI翻訳中…|出力中…|整理中…|プロキシまたは接続不可|レート制限クールダウン中|APIキーまたは認証エラー|翻訳タイムアウト|バックグラウンド未接続|プロキシ失敗 · 再試行|制限中 · 再試行|認証エラー · 再試行|タイムアウト · 再試行|オフライン · 再試行|失敗 · 再試行|先頭 {0}k 字を翻訳済（全 {1}k 字）'.split(
-      '|'
-    ),
-    ko: '원문|원문 숨기기|기계 번역 대체|AI 미준비로 기계 번역 사용|재번역|번역 미완료|↻ 재시도|번역 중…|AI 다듬는 중…|출력 중…|정리 중…|프록시 또는 네트워크 연결 불가|요청 제한 대기 중|API 키 또는 인증 오류|번역 시간 초과|백그라운드 서비스 오프라인|프록시 오류 · 재시도|요청 제한 · 재시도|인증 실패 · 재시도|시간 초과 · 재시도|오프라인 · 재시도|번역 실패 · 재시도|앞부분 {0}k / 전체 {1}k자 번역 완료'.split(
-      '|'
-    ),
-    es: 'Original|Ocultar original|Respaldo MT|IA no disponible; traducción automática|Retraducir|Traducción incompleta|↻ Reintentar|Traduciendo…|Puliendo con IA…|Transmitiendo…|Finalizando…|Proxy o red inaccesible|Límite de tasa (en espera)|Error de clave API o autenticación|Tiempo de espera agotado|Servicio en segundo plano desconectado|Error de proxy · Reintentar|Límite · Reintentar|Error auth · Reintentar|Tiempo agotado · Reintentar|Sin conexión · Reintentar|Error · Reintentar|Primeros {0}k / {1}k caracteres traducidos'.split(
-      '|'
-    ),
-    fr: 'Original|Masquer l’original|Secours MT|IA indisponible ; traduction auto|Retraduire|Traduction incomplète|↻ Réessayer|Traduction…|Affinage IA…|Diffusion…|Finalisation…|Proxy ou réseau inaccessible|Limite atteinte (refroidissement)|Erreur de clé API ou d’authentification|Délai dépassé|Service d’arrière-plan hors ligne|Erreur proxy · Réessayer|Limite · Réessayer|Erreur auth · Réessayer|Délai · Réessayer|Hors ligne · Réessayer|Échec · Réessayer|Premiers {0}k / {1}k caractères traduits'.split(
-      '|'
-    ),
-    de: 'Original|Original ausblenden|MT-Fallback|KI nicht verfügbar; maschineller Fallback|Neu übersetzen|Übersetzung unvollständig|↻ Erneut|Übersetze…|KI-Feinschliff…|Streaming…|Abschluss…|Proxy oder Netzwerk nicht erreichbar|Rate-Limit (Abkühlung)|API-Schlüssel- oder Auth-Fehler|Zeitüberschreitung|Hintergrunddienst offline|Proxy-Fehler · Erneut|Rate-Limit · Erneut|Auth-Fehler · Erneut|Zeitlimit · Erneut|Offline · Erneut|Fehlgeschlagen · Erneut|Erste {0}k / {1}k Zeichen übersetzt'.split(
-      '|'
-    ),
+    en: 'Raw|Hide Raw|Fallback|AI unavailable; machine fallback|Retranslate|Translation incomplete|↻ Retry|Translating…|AI polishing…|Streaming…|Settling…|Proxy or network unreachable|Rate-limited (cooling down)|API key or auth error|Translation timed out|Daemon service offline|Proxy error · Retry|Rate limit · Retry|Auth error · Retry|Timed out · Retry|Offline · Retry|Failed · Retry|Translated first {0}k / {1}k chars'.split('|'),
+    ja: '原文|原文を隠す|機械翻訳代替|AI未設定・機械翻訳代替|再翻訳|翻訳未完了|↻ 再試行|翻訳中…|AI翻訳中…|出力中…|整理中…|プロキシまたは接続不可|レート制限クールダウン中|APIキーまたは認証エラー|翻訳タイムアウト|バックグラウンド未接続|プロキシ失敗 · 再試行|制限中 · 再試行|認証エラー · 再試行|タイムアウト · 再試行|オフライン · 再試行|失敗 · 再試行|先頭 {0}k 字を翻訳済（全 {1}k 字）'.split('|'),
+    ko: '원문|원문 숨기기|기계 번역 대체|AI 미준비로 기계 번역 사용|재번역|번역 미완료|↻ 재시도|번역 중…|AI 다듬는 중…|출력 중…|정리 중…|프록시 또는 네트워크 연결 불가|요청 제한 대기 중|API 키 또는 인증 오류|번역 시간 초과|백그라운드 서비스 오프라인|프록시 오류 · 재시도|요청 제한 · 재시도|인증 실패 · 재시도|시간 초과 · 재시도|오프라인 · 재시도|번역 실패 · 재시도|앞부분 {0}k / 전체 {1}k자 번역 완료'.split('|'),
+    es: 'Original|Ocultar original|Respaldo MT|IA no disponible; traducción automática|Retraducir|Traducción incompleta|↻ Reintentar|Traduciendo…|Puliendo con IA…|Transmitiendo…|Finalizando…|Proxy o red inaccesible|Límite de tasa (en espera)|Error de clave API o autenticación|Tiempo de espera agotado|Servicio en segundo plano desconectado|Error de proxy · Reintentar|Límite · Reintentar|Error auth · Reintentar|Tiempo agotado · Reintentar|Sin conexión · Reintentar|Error · Reintentar|Primeros {0}k / {1}k caracteres traducidos'.split('|'),
+    fr: 'Original|Masquer l’original|Secours MT|IA indisponible ; traduction auto|Retraduire|Traduction incomplète|↻ Réessayer|Traduction…|Affinage IA…|Diffusion…|Finalisation…|Proxy ou réseau inaccessible|Limite atteinte (refroidissement)|Erreur de clé API ou d’authentification|Délai dépassé|Service d’arrière-plan hors ligne|Erreur proxy · Réessayer|Limite · Réessayer|Erreur auth · Réessayer|Délai · Réessayer|Hors ligne · Réessayer|Échec · Réessayer|Premiers {0}k / {1}k caractères traduits'.split('|'),
+    de: 'Original|Original ausblenden|MT-Fallback|KI nicht verfügbar; maschineller Fallback|Neu übersetzen|Übersetzung unvollständig|↻ Erneut|Übersetze…|KI-Feinschliff…|Streaming…|Abschluss…|Proxy oder Netzwerk nicht erreichbar|Rate-Limit (Abkühlung)|API-Schlüssel- oder Auth-Fehler|Zeitüberschreitung|Hintergrunddienst offline|Proxy-Fehler · Erneut|Rate-Limit · Erneut|Auth-Fehler · Erneut|Zeitlimit · Erneut|Offline · Erneut|Fehlgeschlagen · Erneut|Erste {0}k / {1}k Zeichen übersetzt'.split('|'),
+    tr: 'Ham|Ham Gizle|Yedek|YZ kullanılamıyor; makine yedeği|Yeniden çevir|Çeviri tamamlanmadı|↻ Tekrar|Çevriliyor…|YZ iyileştiriyor…|Akışta…|Sonlanıyor…|Proxy veya ağ erişilemiyor|Hız sınırı (beklemede)|API anahtarı veya kimlik hatası|Çeviri zaman aşımına uğradı|Arka plan servisi çevrimdışı|Proxy hatası · Tekrar|Hız sınırı · Tekrar|Kimlik hatası · Tekrar|Zaman aşımı · Tekrar|Çevrimdışı · Tekrar|Başarısız · Tekrar|İlk {0}k / {1}k karakter çevrildi'.split('|'),
   };
 
   const memCache = new Map();
@@ -352,6 +329,7 @@
     if (/^es(?:\b|-)/.test(s) || s === 'spanish') return 'es';
     if (/^fr(?:\b|-)/.test(s) || s === 'french') return 'fr';
     if (/^de(?:\b|-)/.test(s) || s === 'german') return 'de';
+    if (/^tr(?:\b|-)/.test(s) || s === 'turkish' || s === 'türkçe') return 'tr';
     if (/^en(?:\b|-)/.test(s) || s === 'english') return 'en';
     return '';
   }
@@ -3657,7 +3635,6 @@
     titleScanTimer = setTimeout(() => {
       titleScanTimer = null;
       if (!translateTitles || currentMode === 'off' || isDocHiddenOrSleep()) return;
-      /* 周期表 3D 面板打开期间让出主线程与布局带宽，避免侧边栏标题全量 getBoundingClientRect/checkVisibility 引发掉帧；关闭后自动补扫 */
       const rEl = docRoot();
       if (rEl && ga(rEl, 'data-ag-pp-open') === '1') {
         scheduleTitleScan(600);

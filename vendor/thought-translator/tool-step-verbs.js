@@ -29,6 +29,7 @@
     es: 'Analizado|Buscado|Ejecutado|Ejecutando|Editado|Visto|Explorado|Creado|Actualizado|Eliminado|Listado|Verificado',
     fr: 'Analysé|Recherché|Exécuté|Exécution|Modifié|Consulté|Exploré|Créé|Mis à jour|Supprimé|Listé|Vérifié',
     de: 'Analysiert|Gesucht|Ausgeführt|Läuft|Bearbeitet|Angesehen|Erkundet|Erstellt|Aktualisiert|Gelöscht|Aufgelistet|Geprüft',
+    tr: 'İncelendi|Arandı|Çalıştırıldı|Çalışıyor|Düzenlendi|Görüntülendi|Keşfedildi|Oluşturuldu|Güncellendi|Silindi|Listelendi|Kontrol edildi',
   });
 
   const TOOL_STEP_VERB_MAP = Object.create(null);
@@ -51,6 +52,7 @@
     if (s === 'es' || s.startsWith('es-')) return 'es';
     if (s === 'fr' || s.startsWith('fr-')) return 'fr';
     if (s === 'de' || s.startsWith('de-')) return 'de';
+    if (s === 'tr' || s.startsWith('tr-') || s === 'turkish' || s === 'türkçe' || s === 'turkce') return 'tr';
     if (s === 'en' || s.startsWith('en-')) return 'en';
     return '';
   }

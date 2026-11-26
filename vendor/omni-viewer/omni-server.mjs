@@ -1,5 +1,4 @@
-// Obsidian Prism — Omni Local Streaming Gateway, Scoped Sandbox Server & Native File RPC Engine
-// 仅监听 127.0.0.1 随机空闲端口，每次启动生成 64 位 hex 主鉴权令牌 + 独立 HMAC 单目录沙盒子令牌，提供 HTTP 206 Range 流、HTML 沙盒与安全文件 RPC。
+// Obsidian Prism — Omni Local Streaming Gateway & Sandbox RPC (127.0.0.1 loopback)
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -39,13 +38,14 @@ const VIEWER_CSP = [
 ].join('; ');
 
 export const SANDBOX_HTML_CSP = "sandbox allow-scripts; connect-src 'none'; form-action 'none'; navigate-to 'none'";
-const SUPPORTED_VIEWER_LANGS = Object.freeze(['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de']);
+const SUPPORTED_VIEWER_LANGS = Object.freeze(['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de', 'tr']);
 function normalizeViewerLang(raw) {
   const s = String(raw || '').trim();
   if (!s) return 'zh-CN';
   const lo = s.toLowerCase();
   if (lo === 'yue' || lo.startsWith('yue-') || lo === 'zh-yue' || lo.includes('cantonese')) return 'zh-CN';
   if (lo === 'zh-hk' || lo === 'zh-mo' || lo === 'zh-tw' || lo.startsWith('zh-hant')) return 'zh-TW';
+  if (lo === 'tr' || lo.startsWith('tr-') || lo === 'turkish' || lo === 'türkçe') return 'tr';
   return SUPPORTED_VIEWER_LANGS.includes(s) ? s : 'zh-CN';
 }
 

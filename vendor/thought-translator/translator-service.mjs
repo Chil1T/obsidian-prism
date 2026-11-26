@@ -84,6 +84,12 @@ export const SYSTEM_PROMPTS_BY_LANG = Object.freeze({
     concise:
       'Du bist ein effizienter Assistent für prägnante Übersetzungen technischer Überlegungen. Fasse die eingegebene Gedankenkette klar und knapp in der Ich-Form auf Deutsch zusammen. Bewahre alle exakten Dateipfade, Zeilennummern, wichtigen Code-Bezeichner und Kernbegründungen ohne zusätzliche Überschriften oder Fülltext.',
   }),
+  tr: Object.freeze({
+    technical:
+      'Kıdemli bir yazılım mühendisliği akıl yürütme çeviri asistanısın. Girilen düşünce zincirini (Chain-of-Thought) doğal ve net birinci tekil şahıs Türkçe mühendislik notlarına doğru biçimde çevir. İngilizce veya diğer dillerdeki tüm paragraf ve cümleleri eksiksiz olarak Türkçeye çevir. Tüm kod tanımlayıcılarını, fonksiyon/sınıf adlarını, dosya yollarını, satır numaralarını (örn. path/file.js#L12), terminal komutlarını ve ters tırnak biçimlendirmesini aynen koru. Selamlama veya başlık ekleme; yalnızca çevrilmiş akıl yürütme metnini döndür.',
+    concise:
+      'Teknik akıl yürütme özetleme ve çeviri asistanısın. Girilen düşünce zincirini özlü birinci tekil şahıs Türkçe mühendislik notlarına çevirip özetle. Kesin dosya yollarını, satır numaralarını, temel kod tanımlayıcılarını ve sonuçları aynen koru; yalnızca çevrilmiş notları döndür.',
+  }),
 });
 
 const GTX_TARGET_LANG_MAP = Object.freeze({
@@ -95,6 +101,7 @@ const GTX_TARGET_LANG_MAP = Object.freeze({
   es: 'es',
   fr: 'fr',
   de: 'de',
+  tr: 'tr',
 });
 
 export function normalizeTargetLang(lang) {
@@ -108,6 +115,7 @@ export function normalizeTargetLang(lang) {
   if (/^es(?:\b|-)/.test(s) || s === 'spanish') return 'es';
   if (/^fr(?:\b|-)/.test(s) || s === 'french') return 'fr';
   if (/^de(?:\b|-)/.test(s) || s === 'german') return 'de';
+  if (/^tr(?:\b|-)/.test(s) || s === 'turkish' || s === 'türkçe') return 'tr';
   if (/^en(?:\b|-)/.test(s) || s === 'english') return 'en';
   return 'zh-CN';
 }
@@ -2555,6 +2563,7 @@ export class ThoughtTranslatorService {
         es: 'Spanish (Español)',
         fr: 'French (Français)',
         de: 'German (Deutsch)',
+        tr: 'Turkish (Türkçe)',
       };
       return `${cp}\n\n[Output Language Requirement] Target output language MUST be ${langNames[tl] || tl}. When the source mixes languages, preserve already-natural target-language parts and translate all foreign paragraphs completely.`;
     }
@@ -3540,8 +3549,8 @@ export class ThoughtTranslatorService {
     const prose = stripNonProseForLangCheck(p).trim();
     if (!prose) return true;
     const tl = normalizeTargetLang(targetLang);
-    if (tl === 'zh-TW' || tl === 'es' || tl === 'fr' || tl === 'de') {
-      // 繁中及西/法/德语机翻需经过 GTX 完整转换，仅纯符号/无正文跳过
+    if (tl === 'zh-TW' || tl === 'es' || tl === 'fr' || tl === 'de' || tl === 'tr') {
+      // 繁中及西/法/德/土语机翻需经过 GTX 完整转换，仅纯符号/无正文跳过
       return false;
     }
     const latinWords = (prose.match(/[A-Za-z]{3,}/g) || []).length;

@@ -1,11 +1,5 @@
-/**
- * Obsidian Prism v1.0.2 双极工作台共享纯状态机（vendor/sidebar-studio/state-machine.mjs）
- *
- * 架构约束：
- * - 零 DOM、零 Node I/O、零时钟、零随机数依赖：Node 与浏览器原生 ESM 直接消费，100% 确定性纯函数。
- * - 唯一逻辑源：渲染层客户端、sidebar-service.mjs 与 Workbench `/studio` 预览台共用同一份导出与契约。
- * - 项目级权限隔离适配器严格限定 `projectSettingsProvider` 4 个项目级 setter，零接触全局 Code 权限。
- */
+// Obsidian Prism 双极工作台共享纯状态机（零 DOM/IO 纯函数）
+import { TR_GREETING_POOL, TR_HERO_GREETING_POOL } from './greetings-tr.mjs';
 
 export const SCHEMA_VERSION = 2;
 
@@ -202,6 +196,7 @@ export const GREETING_POOLS = Object.freeze({
       'Bereit, wann immer du willst.',
     ]),
   }),
+  tr: TR_GREETING_POOL,
 });
 
 export function normalizeGreetingLang(rawLang) {
@@ -213,6 +208,7 @@ export function normalizeGreetingLang(rawLang) {
   if (s.startsWith('es')) return 'es';
   if (s.startsWith('fr')) return 'fr';
   if (s.startsWith('de')) return 'de';
+  if (s.startsWith('tr') || s === 'turkish' || s === 'türkçe') return 'tr';
   if (s.startsWith('en')) return 'en';
   return 'zh-CN';
 }
@@ -367,6 +363,7 @@ export const HERO_GREETING_POOLS = Object.freeze({
       'Was möchtest du erkunden?',
     ]),
   }),
+  tr: TR_HERO_GREETING_POOL,
 });
 
 export function formatHeroGreeting(lang = 'zh-CN', userName = '', seedIndex = 0) {

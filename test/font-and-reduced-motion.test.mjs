@@ -22,8 +22,8 @@ const i18nCore = require(path.join(ROOT, 'i18n-core.js'));
 const motionEngine = require(path.join(ROOT, 'motion-engine.js'));
 const pulseVialBridge = require(path.join(ROOT, 'pulse-vial-bridge.js'));
 
-const CANONICAL_8_LOCALES = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de'];
-const NON_CJK_LOCALES = ['en', 'ko', 'es', 'fr', 'de'];
+const CANONICAL_9_LOCALES = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de', 'tr'];
+const NON_CJK_LOCALES = ['en', 'ko', 'es', 'fr', 'de', 'tr'];
 const CJK_RE = /[\u3400-\u9FFF\uF900-\uFAFF]/;
 const FORBIDDEN_TERM_RE = /八方旅人|octopath/i;
 
@@ -382,16 +382,16 @@ test('Issue #101 in-page ignoreReducedMotion honors motionLevel="off" top priori
   }
 });
 
-test('8-locale i18n-ext-beta4 completeness: 0 CJK leakage in non-CJK locales, 0 yue, 0 forbidden terms', () => {
-  assert.deepEqual([...i18nExt.LOCALES], CANONICAL_8_LOCALES);
+test('9-locale i18n-ext-beta4 completeness: 0 CJK leakage in non-CJK locales, 0 yue, 0 forbidden terms', () => {
+  assert.deepEqual([...i18nExt.LOCALES], CANONICAL_9_LOCALES);
   const keys = Object.keys(i18nExt.TABLE);
   assert.ok(keys.length >= 16);
 
   for (const k of keys) {
-    assert.equal(i18nExt.TABLE[k].length, 8, `Key ${k} must have exactly 8 locale entries`);
+    assert.equal(i18nExt.TABLE[k].length, 9, `Key ${k} must have exactly 9 locale entries`);
   }
 
-  for (const loc of CANONICAL_8_LOCALES) {
+  for (const loc of CANONICAL_9_LOCALES) {
     const dict = i18nExt.getStrings(loc);
     for (const k of keys) {
       assert.ok(typeof dict[k] === 'string' && dict[k].trim().length > 0, `i18n-ext-beta4[${loc}].${k} must be non-empty`);
@@ -402,6 +402,7 @@ test('8-locale i18n-ext-beta4 completeness: 0 CJK leakage in non-CJK locales, 0 
     }
   }
   assert.equal(i18nExt.normalizeLocale('yue'), 'zh-CN');
+  assert.equal(i18nExt.normalizeLocale('tr-TR'), 'tr');
 });
 
 test('Settings panel beta.4 extension mounts ignoreReducedMotion, chatFont & codeFont custom controls with opt-in local font probe and live persistence', async () => {

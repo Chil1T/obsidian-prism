@@ -216,6 +216,7 @@ export async function resolveStorageGuardLanguage(upd, targetEntry, cfg = null, 
     if (s === 'es' || s.startsWith('es-')) return 'es';
     if (s === 'fr' || s.startsWith('fr-')) return 'fr';
     if (s === 'de' || s.startsWith('de-')) return 'de';
+    if (s === 'tr' || s.startsWith('tr-') || s === 'turkish' || s === 'türkçe' || s === 'turkce') return 'tr';
     if (s === 'yue' || s.startsWith('yue-') || s === 'zh-yue') return 'zh-CN';
     if (/^zh-(?:tw|hk|mo|hant)(?:-|$)/.test(s)) return 'zh-TW';
     if (s === 'zh' || s.startsWith('zh-')) return 'zh-CN';
@@ -341,6 +342,7 @@ export async function checkStorageGuardAndNotify(upd, _testOverrides = null) {
     es: 'Cerrar',
     fr: 'Fermer',
     de: 'Schließen',
+    tr: 'Kapat',
   };
   const expr = buildStorageGuardBannerExpression({
     autoArchiveOnExit: Boolean(health.autoArchiveOnExit),

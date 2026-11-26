@@ -78,6 +78,7 @@
     es: { accept: 'Usar sugerencia de prompt' },
     fr: { accept: 'Utiliser la suggestion de prompt' },
     de: { accept: 'Vorgeschlagenen Prompt verwenden' },
+    tr: { accept: 'Önerilen istemi kullan' },
   };
 
   // 运行时高频幽灵建议样式：严格纯 ASCII、0 :has()、行高对齐主输入框 22px，仅在 enabled === true 时注入
@@ -113,6 +114,7 @@
     if (/^es(?:\b|-)/.test(s) || s === 'spanish') return 'es';
     if (/^fr(?:\b|-)/.test(s) || s === 'french') return 'fr';
     if (/^de(?:\b|-)/.test(s) || s === 'german') return 'de';
+    if (/^tr(?:\b|-)/.test(s) || s === 'turkish' || s === 'türkçe' || s === 'turkce') return 'tr';
     if (/^en(?:\b|-)/.test(s) || s === 'english') return 'en';
     return '';
   }

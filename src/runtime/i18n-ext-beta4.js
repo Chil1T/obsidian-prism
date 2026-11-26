@@ -1,5 +1,5 @@
-// Beta.4 独立 8 语种扩展词典（Issue #98 自定义字体 + Issue #101 忽略系统减弱动效）
-// 严格遵循 8 语种规范：zh-CN / zh-TW / en / ja / ko / es / fr / de；非 CJK 语种 0 汉字、0 yue、0 禁用词
+// Beta.4 独立 9 语种扩展词典（Issue #98 自定义字体 + Issue #101 忽略系统减弱动效 + 性能模式）
+// 严格遵循 9 语种规范：zh-CN / zh-TW / en / ja / ko / es / fr / de / tr；非 CJK 语种 0 汉字、0 yue、0 禁用词
 (function (root, factory) {
   const api = factory();
   if (root) root.__agPrismI18nExtBeta4 = api;
@@ -12,10 +12,10 @@
 })(typeof globalThis !== 'undefined' ? globalThis : window, function () {
   'use strict';
 
-  const LOCALES = Object.freeze(['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de']);
+  const LOCALES = Object.freeze(['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de', 'tr']);
   const LOCALE_INDEX = Object.freeze(Object.fromEntries(LOCALES.map((l, i) => [l, i])));
 
-  // 列序严格对齐 LOCALES：[zh-CN, zh-TW, en, ja, ko, es, fr, de]
+  // 列序严格对齐 LOCALES：[zh-CN, zh-TW, en, ja, ko, es, fr, de, tr]
   const TABLE = Object.freeze({
     setPerformanceModeTitle: [
       '性能模式',
@@ -26,6 +26,7 @@
       'Modo de rendimiento',
       'Mode de performance',
       'Leistungsmodus',
+      'Performans Modu',
     ],
     setPerformanceModeDesc: [
       '无损调节运行期帧率上限、渲染分辨率与瞬态模糊，不改写您的动效、波纹或宠物设置，随时切回原样恢复。',
@@ -36,6 +37,7 @@
       'Ajusta sin pérdidas el límite de FPS, DPR y desenfoque intenso en ejecución sin modificar tus ajustes de movimiento, ondas ni mascota.',
       'Ajuste sans perte la limite de FPS, le DPR et le flou intense sans modifier vos réglages d’animation, d’onde ou de mascotte.',
       'Begrenzt FPS, DPR und starken Weichzeichner verlustfrei zur Laufzeit, ohne Animations-, Wellen- oder Maskottchen-Einstellungen zu überschreiben.',
+      'Hareket, dalga veya maskot ayarlarınızı değiştirmeden çalışma zamanı FPS sınırını, DPR ve yoğun bulanıklığı kayıpsız ayarlar; istediğiniz zaman geri dönebilirsiniz.',
     ],
     optPerfPerformance: [
       '极速省电',
@@ -46,6 +48,7 @@
       'Rendimiento',
       'Performance',
       'Leistung',
+      'Performans',
     ],
     optPerfBalanced: [
       '均衡',
@@ -56,6 +59,7 @@
       'Equilibrado',
       'Équilibré',
       'Ausgewogen',
+      'Dengeli',
     ],
     optPerfQuality: [
       '全效',
@@ -66,6 +70,7 @@
       'Calidad',
       'Qualité',
       'Qualität',
+      'Kalite',
     ],
     setIgnoreReducedMotionTitle: [
       '忽略系统减弱动效',
@@ -76,6 +81,7 @@
       'Ignorar reducción de movimiento del sistema',
       'Ignorer la réduction des animations système',
       'Systemeinstellung für reduzierte Bewegung ignorieren',
+      'Sistem Azaltılmış Hareketini Yoksay',
     ],
     setIgnoreReducedMotionDesc: [
       '关闭 Windows/macOS 系统动画时，仍允许 Prism 按所选动效档位播放；「动效关闭」仍完全禁用全部动效。',
@@ -86,6 +92,7 @@
       'Permite reproducir animaciones de Prism según el nivel elegido aunque el sistema operativo las desactive. El nivel "Desactivado" siempre las deshabilita por completo.',
       'Autorise les animations Prism selon le niveau choisi même lorsque les animations système sont désactivées. Le niveau « Désactivé » coupe toujours toute animation.',
       'Erlaubt Prism-Animationen gemäß gewählter Animationsstufe, auch wenn OS-Animationen deaktiviert sind. Die Stufe „Aus“ deaktiviert Animationen weiterhin vollständig.',
+      'İşletim sistemi animasyonları kapalı olsa bile Prism animasyonlarının seçilen hareket düzeyinde oynatılmasına izin verir. "Kapalı" düzeyi her zaman tüm animasyonları devre dışı bırakır.',
     ],
     setChatFontTitle: [
       '会话正文字体',
@@ -96,6 +103,7 @@
       'Fuente del texto del chat',
       'Police du texte du chat',
       'Chat-Textschriftart',
+      'Sohbet Metni Yazı Tipi',
     ],
     setChatFontDesc: [
       '自定义会话消息正文与输入框字体，不干扰代码等宽字体与界面图标，缺失字形自动回退系统字体。',
@@ -106,6 +114,7 @@
       'Personaliza la fuente del texto y del cuadro de entrada sin afectar bloques de código ni iconos. Los glifos faltantes usan respaldo automático.',
       'Personnalise la police des messages et de la saisie sans altérer le code ni les icônes. Les glyphes manquants basculent automatiquement.',
       'Passt die Schriftart für Chat-Nachrichten und Eingabefeld an, ohne Codeblöcke oder Symbole zu verändern. Fehlende Glyphen nutzen automatischen Fallback.',
+      'Eş aralıklı kod bloklarını veya arayüz simgelerini etkilemeden sohbet metni ve giriş kutusu yazı tipini özelleştirir. Eksik glifler otomatik olarak sistem yazı tipine döner.',
     ],
     optChatFontDefault: [
       '宿主默认',
@@ -116,6 +125,7 @@
       'Predeterminada',
       'Par défaut',
       'Standard',
+      'Ana Varsayılan',
     ],
     optChatFontSystemSans: [
       '系统无衬线',
@@ -126,6 +136,7 @@
       'Sans del sistema',
       'Sans système',
       'System-Sans',
+      'Sistem Sans',
     ],
     optChatFontNotoSans: [
       '思源黑体 (Noto Sans)',
@@ -136,8 +147,10 @@
       'Noto Sans',
       'Noto Sans',
       'Noto Sans',
+      'Noto Sans',
     ],
     optChatFontInter: [
+      'Inter',
       'Inter',
       'Inter',
       'Inter',
@@ -156,6 +169,7 @@
       'HarmonyOS Sans',
       'HarmonyOS Sans',
       'HarmonyOS Sans',
+      'HarmonyOS Sans',
     ],
     optFontCustom: [
       '自定义',
@@ -166,6 +180,7 @@
       'Personalizada',
       'Personnalisée',
       'Benutzerdefiniert',
+      'Özel',
     ],
     chatFontCustomPlaceholder: [
       '输入字体名称，多个以逗号分隔（如 LXGW WenKai, PingFang SC）',
@@ -176,6 +191,7 @@
       'Nombres de fuentes separados por comas (ej. Inter, Segoe UI)',
       'Noms de polices séparés par des virgules (ex. Inter, Segoe UI)',
       'Schriftartnamen, kommagetrennt (z. B. Inter, Segoe UI)',
+      'Virgülle ayrılmış yazı tipi adları (örn. Inter, Segoe UI)',
     ],
     codeFontCustomPlaceholder: [
       '输入等宽字体名，逗号分隔（如 Maple Mono, Fira Code）',
@@ -186,6 +202,7 @@
       'Fuentes monoespaciadas separadas por comas (ej. Maple Mono, Fira Code)',
       'Polices à chasse fixe séparées par des virgules (ex. Maple Mono, Fira Code)',
       'Monospace-Schriftarten, kommagetrennt (z. B. Maple Mono, Fira Code)',
+      'Virgülle ayrılmış eş aralıklı yazı tipleri (örn. Maple Mono, Fira Code)',
     ],
     btnLoadLocalFonts: [
       '读取本机字体',
@@ -196,6 +213,7 @@
       'Cargar fuentes locales',
       'Charger les polices locales',
       'Lokale Schriften laden',
+      'Yerel Yazı Tiplerini Yükle',
     ],
     btnResetFontDefault: [
       '恢复默认',
@@ -206,6 +224,7 @@
       'Restablecer',
       'Réinitialiser',
       'Zurücksetzen',
+      'Varsayılana Sıfırla',
     ],
     fontLocalLoading: [
       '正在读取本机字体…',
@@ -216,6 +235,7 @@
       'Cargando fuentes locales...',
       'Chargement des polices locales...',
       'Lokale Schriften werden geladen...',
+      'Yerel yazı tipleri yükleniyor...',
     ],
     fontLocalLoaded: [
       '已加载 {n} 个本机字体，可在输入框下拉选择',
@@ -226,6 +246,7 @@
       'Se cargaron {n} fuentes locales para autocompletar',
       '{n} polices locales chargées pour la saisie',
       '{n} lokale Schriftarten für die Auswahl geladen',
+      'Otomatik tamamlama için {n} yerel yazı tipi yüklendi',
     ],
     fontLocalUnsupported: [
       '当前宿主不支持读取本机字体，请直接手动输入字体名称',
@@ -236,6 +257,7 @@
       'La detección de fuentes locales no está disponible; escribe el nombre manualmente',
       'La détection des polices locales est indisponible ; saisissez le nom manuellement',
       'Lokale Schrifterkennung ist nicht verfügbar; bitte Namen manuell eingeben',
+      'Bu ortamda yerel yazı tipi listeleme kullanılamıyor; yazı tipi adlarını el ile girin',
     ],
     fontLocalDenied: [
       '未授权访问本机字体，已回退为手动输入',
@@ -246,6 +268,7 @@
       'Permiso de fuentes denegado; puedes seguir ingresando nombres manualmente',
       'Autorisation refusée ; vous pouvez toujours saisir les polices manuellement',
       'Schriftzugriff verweigert; manuelle Eingabe bleibt weiterhin möglich',
+      'Yazı tipi izni reddedildi; yazı tipi adlarını el ile girmeye devam edebilirsiniz',
     ],
     fontSanitizedNotice: [
       '已自动过滤不安全字符，仅保留有效字体名',
@@ -256,6 +279,7 @@
       'Se filtraron caracteres no seguros; solo se aplican nombres válidos',
       'Les caractères non sûrs ont été filtrés ; seuls les noms valides sont appliqués',
       'Unsichere Zeichen wurden entfernt; nur gültige Schriftartnamen werden angewendet',
+      'Güvenli olmayan karakterler temizlendi; yalnızca geçerli yazı tipi adları uygulandı',
     ],
   });
 
@@ -269,6 +293,7 @@
     if (raw === 'es' || raw.startsWith('es-')) return 'es';
     if (raw === 'fr' || raw.startsWith('fr-')) return 'fr';
     if (raw === 'de' || raw.startsWith('de-')) return 'de';
+    if (raw === 'tr' || raw.startsWith('tr-') || raw === 'turkish' || raw === 'türkçe' || raw === 'turkce') return 'tr';
     return 'en';
   }
 

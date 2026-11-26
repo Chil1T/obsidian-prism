@@ -17,8 +17,8 @@ const ROOT = path.resolve(import.meta.dirname, '..', '..');
 const i18nCore = require(path.join(ROOT, 'i18n-core.js'));
 const i18nLocales = require(path.join(ROOT, 'i18n-locales.js'));
 
-const CANONICAL_8_LOCALES = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de'];
-const NON_CJK_LOCALES = ['en', 'ko', 'es', 'fr', 'de'];
+const CANONICAL_9_LOCALES = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de', 'tr'];
+const NON_CJK_LOCALES = ['en', 'ko', 'es', 'fr', 'de', 'tr'];
 const CJK_RE = /[\u3400-\u9FFF\uF900-\uFAFF]/;
 const FORBIDDEN_TERM_RE = /八方旅人|octopath/i;
 
@@ -39,18 +39,19 @@ function listRepoFiles() {
   }
 }
 
-test('Law 9a: Full 8-locale completeness, 0 CJK in non-CJK locales, 0 standalone yue dictionaries, legacy yue->zh-CN migration', () => {
+test('Law 9a: Full 9-locale completeness, 0 CJK in non-CJK locales, 0 standalone yue dictionaries, legacy yue->zh-CN migration', () => {
   // 1) Core i18n-core.js + i18n-locales.js
   assert.deepEqual(
     i18nCore.LANG_OPTIONS.map((o) => o.id),
-    CANONICAL_8_LOCALES,
-    'i18n-core LANG_OPTIONS must match the canonical 8 locales'
+    CANONICAL_9_LOCALES,
+    'i18n-core LANG_OPTIONS must match the canonical 9 locales'
   );
   assert.equal(i18nCore.normalizeLanguage('yue'), 'zh-CN');
   assert.equal(i18nCore.normalizeLanguage('zh-yue'), 'zh-CN');
+  assert.equal(i18nCore.normalizeLanguage('tr-TR'), 'tr');
 
   const zhKeys = Object.keys(i18nLocales.getUiStrings('zh-CN'));
-  for (const loc of CANONICAL_8_LOCALES) {
+  for (const loc of CANONICAL_9_LOCALES) {
     const dict = i18nLocales.getUiStrings(loc);
     for (const k of zhKeys) {
       const rawVal = dict[k];
@@ -66,11 +67,11 @@ test('Law 9a: Full 8-locale completeness, 0 CJK in non-CJK locales, 0 standalone
     }
   }
 
-  // 2) Omni Workbench 8-column table (zero yue column)
+  // 2) Omni Workbench 9-column table (zero yue column)
   for (const [k, row] of Object.entries(WORKBENCH_I18N)) {
-    assert.equal(row.length, CANONICAL_8_LOCALES.length, `WORKBENCH_I18N.${k} must have exactly 8 locale columns`);
-    for (let i = 0; i < CANONICAL_8_LOCALES.length; i++) {
-      const loc = CANONICAL_8_LOCALES[i];
+    assert.equal(row.length, CANONICAL_9_LOCALES.length, `WORKBENCH_I18N.${k} must have exactly 9 locale columns`);
+    for (let i = 0; i < CANONICAL_9_LOCALES.length; i++) {
+      const loc = CANONICAL_9_LOCALES[i];
       assert.ok(typeof row[i] === 'string' && row[i].length > 0, `WORKBENCH_I18N.${k}[${loc}] must be non-empty`);
       if (NON_CJK_LOCALES.includes(loc)) {
         assert.equal(CJK_RE.test(row[i]), false, `WORKBENCH_I18N.${k}[${loc}] must contain 0 CJK chars: "${row[i]}"`);
@@ -78,12 +79,13 @@ test('Law 9a: Full 8-locale completeness, 0 CJK in non-CJK locales, 0 standalone
     }
   }
 
-  // 3) Sidebar Studio greeting pools (8 locales, zero standalone yue, legacy yue -> zh-CN)
+  // 3) Sidebar Studio greeting pools (9 locales, zero standalone yue, legacy yue -> zh-CN)
   assert.equal(GREETING_POOLS.yue, undefined, 'GREETING_POOLS must not contain standalone yue');
   assert.equal(HERO_GREETING_POOLS.yue, undefined, 'HERO_GREETING_POOLS must not contain standalone yue');
   assert.equal(normalizeGreetingLang('yue'), 'zh-CN');
   assert.equal(normalizeGreetingLang('zh-yue'), 'zh-CN');
-  for (const loc of CANONICAL_8_LOCALES) {
+  assert.equal(normalizeGreetingLang('tr-TR'), 'tr');
+  for (const loc of CANONICAL_9_LOCALES) {
     assert.ok(GREETING_POOLS[loc]?.withUser?.length > 0, `GREETING_POOLS[${loc}].withUser missing`);
     assert.ok(HERO_GREETING_POOLS[loc]?.headlines?.length > 0, `HERO_GREETING_POOLS[${loc}].headlines missing`);
     if (NON_CJK_LOCALES.includes(loc)) {

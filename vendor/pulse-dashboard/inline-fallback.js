@@ -32,6 +32,7 @@ ko:'캐시|처리 속도|첫 토큰 지연|최근 속도|컨텍스트 창|현재
 es:'Caché|Rendimiento|TTFT|Velocidad rec.|Ventana de ctx|Modelo activo|usado|libre| sub|5h|Sem',
 fr:'Cache|Débit|TTFT|Dernier débit|Fenêtre ctx|Modèle actif|utilisé|libre| sous|5h|Heb',
 de:'Cache|Durchsatz|TTFT|Akt. Rate|Kontextfenster|Aktives Modell|belegt|frei| Sub|5h|W',
+tr:'Önbellek|Verim|TTFT|Son Hız|Bağlam|Aktif Model|dolu|boş| alt|5h|Hf',
 };
 function normFbLang(raw,win){
 let v=String(raw||'').trim();
@@ -49,6 +50,7 @@ if(/^(ko|kr)/.test(s)||s==='korean')return 'ko';
 if(/^es/.test(s)||s==='spanish')return 'es';
 if(/^fr/.test(s)||s==='french')return 'fr';
 if(/^de/.test(s)||s==='german')return 'de';
+if(/^tr/.test(s)||s==='turkish'||s==='türkçe'||s==='turkce')return 'tr';
 return 'en';
 }
 const FB_I18N=Object.fromEntries(Object.entries(FB_ROWS).map(([lk,s])=>{

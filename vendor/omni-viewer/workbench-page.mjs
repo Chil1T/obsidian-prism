@@ -1,78 +1,23 @@
-// Obsidian Prism — Omni Full-Format Streaming Workbench Frontend (workbench-page.mjs)
-// Self-contained zero-CDN HTML workbench supporting Video/Audio, SVG/Image Pan-Zoom,
-// HTML Responsive Sandbox, PDF Stream, CSV/TSV/JSONL Data Grid, Font Waterfall & Mermaid Vector Lens.
+// Obsidian Prism — Omni Streaming Workbench Frontend (workbench-page.mjs)
+import { WORKBENCH_I18N_TR } from './workbench-i18n-tr.mjs';
 
 const EXT_KIND_MAP = Object.freeze({
-  mp4: 'video',
-  webm: 'video',
-  mov: 'video',
-  m4v: 'video',
-  mkv: 'video',
-  ogv: 'video',
-  avi: 'video',
-  mp3: 'audio',
-  wav: 'audio',
-  ogg: 'audio',
-  opus: 'audio',
-  m4a: 'audio',
-  aac: 'audio',
-  flac: 'audio',
-  weba: 'audio',
-  svg: 'svg',
-  svgz: 'svg',
-  png: 'image',
-  jpg: 'image',
-  jpeg: 'image',
-  webp: 'image',
-  gif: 'image',
-  ico: 'image',
-  avif: 'image',
-  bmp: 'image',
-  apng: 'image',
-  html: 'html',
-  htm: 'html',
-  xhtml: 'html',
-  pdf: 'pdf',
-  csv: 'table',
-  tsv: 'table',
-  tab: 'table',
-  jsonl: 'table',
-  ndjson: 'table',
-  ttf: 'font',
-  otf: 'font',
-  woff: 'font',
-  woff2: 'font',
-  mmd: 'mermaid',
-  mermaid: 'mermaid',
+  mp4: 'video', webm: 'video', mov: 'video', m4v: 'video', mkv: 'video', ogv: 'video', avi: 'video',
+  mp3: 'audio', wav: 'audio', ogg: 'audio', opus: 'audio', m4a: 'audio', aac: 'audio', flac: 'audio', weba: 'audio',
+  svg: 'svg', svgz: 'svg', png: 'image', jpg: 'image', jpeg: 'image', webp: 'image', gif: 'image', ico: 'image', avif: 'image', bmp: 'image', apng: 'image',
+  html: 'html', htm: 'html', xhtml: 'html', pdf: 'pdf',
+  csv: 'table', tsv: 'table', tab: 'table', jsonl: 'table', ndjson: 'table',
+  ttf: 'font', otf: 'font', woff: 'font', woff2: 'font', mmd: 'mermaid', mermaid: 'mermaid',
 });
 
-const SUPPORTED_KINDS = new Set([
-  'video',
-  'audio',
-  'svg',
-  'image',
-  'html',
-  'pdf',
-  'table',
-  'font',
-  'mermaid',
-  'text',
-]);
+const SUPPORTED_KINDS = new Set(['video', 'audio', 'svg', 'image', 'html', 'pdf', 'table', 'font', 'mermaid', 'text']);
 
 export function detectWorkbenchKind(filePath = '', mime = '') {
-  const cleanPath = String(filePath || '')
-    .split(/[?#]/)[0]
-    .trim();
-  const dotIdx = cleanPath.lastIndexOf('.');
-  const slashIdx = Math.max(cleanPath.lastIndexOf('/'), cleanPath.lastIndexOf('\\'));
+  const cleanPath = String(filePath || '').split(/[?#]/)[0].trim();
+  const dotIdx = cleanPath.lastIndexOf('.'), slashIdx = Math.max(cleanPath.lastIndexOf('/'), cleanPath.lastIndexOf('\\'));
   const ext = dotIdx > slashIdx ? cleanPath.slice(dotIdx + 1).toLowerCase() : '';
-  if (ext && Object.prototype.hasOwnProperty.call(EXT_KIND_MAP, ext)) {
-    return EXT_KIND_MAP[ext];
-  }
-  const m = String(mime || '')
-    .split(';')[0]
-    .trim()
-    .toLowerCase();
+  if (ext && Object.prototype.hasOwnProperty.call(EXT_KIND_MAP, ext)) return EXT_KIND_MAP[ext];
+  const m = String(mime || '').split(';')[0].trim().toLowerCase();
   if (!m) return 'text';
   if (m === 'image/svg+xml') return 'svg';
   if (m.startsWith('video/')) return 'video';
@@ -80,22 +25,8 @@ export function detectWorkbenchKind(filePath = '', mime = '') {
   if (m.startsWith('image/')) return 'image';
   if (m === 'text/html' || m === 'application/xhtml+xml') return 'html';
   if (m === 'application/pdf') return 'pdf';
-  if (
-    m === 'text/csv' ||
-    m === 'text/tab-separated-values' ||
-    m.includes('jsonl') ||
-    m.includes('ndjson')
-  ) {
-    return 'table';
-  }
-  if (
-    m.startsWith('font/') ||
-    m.includes('opentype') ||
-    m.includes('truetype') ||
-    m.includes('font-woff')
-  ) {
-    return 'font';
-  }
+  if (m === 'text/csv' || m === 'text/tab-separated-values' || m.includes('jsonl') || m.includes('ndjson')) return 'table';
+  if (m.startsWith('font/') || m.includes('opentype') || m.includes('truetype') || m.includes('font-woff')) return 'font';
   return 'text';
 }
 
@@ -141,17 +72,9 @@ export function parseDelimitedTable(text = '', delimiterHint = '') {
     } else if (ch === delim) {
       row.push(field);
       field = '';
-    } else if (ch === '\r') {
-      if (i + 1 < len && raw[i + 1] === '\n') i += 1;
-      row.push(field);
-      allRows.push(row);
-      row = [];
-      field = '';
-    } else if (ch === '\n') {
-      row.push(field);
-      allRows.push(row);
-      row = [];
-      field = '';
+    } else if (ch === '\r' || ch === '\n') {
+      if (ch === '\r' && i + 1 < len && raw[i + 1] === '\n') i += 1;
+      row.push(field); allRows.push(row); row = []; field = '';
     } else {
       field += ch;
     }
@@ -256,7 +179,7 @@ export function formatTimecodeMs(seconds) {
   return `${pad2(min)}:${pad2(sec)}.${pad3(ms)}`;
 }
 
-// 8-language table: [zh-CN, zh-TW, en, ja, ko, es, fr, de]
+// 9-language table: [zh-CN, zh-TW, en, ja, ko, es, fr, de, tr]
 export const WORKBENCH_I18N = {
   viewCanvas: ['画布', '畫布', 'Canvas', 'キャンバス', '캔버스', 'Lienzo', 'Canevas', 'Leinwand'],
   viewSource: ['源码', '原始碼', 'Source', 'ソース', '소스', 'Código', 'Source', 'Quelltext'],
@@ -305,6 +228,7 @@ export const WORKBENCH_I18N = {
   waitingMermaid: ['等待传入图表数据…', '等待傳入圖表資料…', 'Waiting for diagram payload…', '図表データを待機中…', '다이어그램 데이터 대기 중…', 'Esperando datos del diagrama…', 'En attente du diagramme…', 'Warte auf Diagrammdaten…'],
   sandboxIsolated: ['沙盒隔离', '沙盒隔離', 'Sandbox Isolated', 'サンドボックス隔離', '샌드박스 격리', 'Aislado en sandbox', 'Isolé en sandbox', 'Sandbox-isoliert'],
 };
+for (const [k, v] of Object.entries(WORKBENCH_I18N_TR)) { if (WORKBENCH_I18N[k]) WORKBENCH_I18N[k].push(v); }
 
 function escapeHtml(str) {
   return String(str ?? '')
@@ -589,12 +513,13 @@ html, body {
 `;
 
 function bootPrismWorkbench(INIT_STATE, I18N_TABLE) {
-  const LANG_IDX = { 'zh-CN': 0, 'zh-TW': 1, en: 2, ja: 3, ko: 4, es: 5, fr: 6, de: 7 };
+  const LANG_IDX = { 'zh-CN': 0, 'zh-TW': 1, en: 2, ja: 3, ko: 4, es: 5, fr: 6, de: 7, tr: 8 };
   const normalizeLang = (raw) => {
     const s = String(raw || '').trim();
     const lo = s.toLowerCase();
     if (lo === 'yue' || lo.startsWith('yue-') || lo === 'zh-yue' || lo.includes('cantonese')) return 'zh-CN';
     if (lo === 'zh-hk' || lo === 'zh-mo' || lo === 'zh-tw' || lo.startsWith('zh-hant')) return 'zh-TW';
+    if (lo === 'tr' || lo.startsWith('tr-') || lo === 'turkish' || lo === 'türkçe') return 'tr';
     return Object.prototype.hasOwnProperty.call(LANG_IDX, s) ? s : 'zh-CN';
   };
   const urlQs = new URLSearchParams(typeof location !== 'undefined' ? location.search : '');
@@ -2859,7 +2784,9 @@ export function renderWorkbenchHtml(ctx = {}) {
       ? 'zh-CN'
       : rawLangLow === 'zh-hk' || rawLangLow === 'zh-mo' || rawLangLow === 'zh-tw' || rawLangLow.startsWith('zh-hant')
       ? 'zh-TW'
-      : ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de'].includes(rawLang)
+      : rawLangLow === 'tr' || rawLangLow.startsWith('tr-') || rawLangLow === 'turkish' || rawLangLow === 'türkçe'
+      ? 'tr'
+      : ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de', 'tr'].includes(rawLang)
       ? rawLang
       : 'zh-CN';
   const fileName = String(ctx.name ?? ctx.fileName ?? (extractFileName(filePath) || (resolvedKind === 'mermaid' ? 'Mermaid Diagram' : 'Workbench')));
