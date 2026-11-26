@@ -663,9 +663,16 @@ enum CdpHelper {
 
     static func validateConfigEntry(manifest: PluginManifest, key: String, value: JsonValue) -> Bool {
         guard let rule = manifest.validators[key] else { return false }
-        if let ruleStr = rule.stringValue, ruleStr == "boolean" {
-            if case .bool = value { return true }
-            if let sv = value.stringValue, (sv == "on" || sv == "off") { return true }
+        if let ruleStr = rule.stringValue {
+            if ruleStr == "boolean" {
+                if case .bool = value { return true }
+                if let sv = value.stringValue, (sv == "on" || sv == "off") { return true }
+                return false
+            }
+            if ruleStr == "string" {
+                guard let sv = value.stringValue, sv.utf16.count <= 160 else { return false }
+                return !sv.unicodeScalars.contains { $0 == "\0" || $0 == "\r" || $0 == "\n" }
+            }
             return false
         } else if let allowed = rule.arrayValue {
             guard let strVal = value.stringValue else { return false }
@@ -1841,10 +1848,12 @@ enum CdpHelper {
         guard shouldEnableThought(cfg), let rawCfg = cfg else { return "" }
         guard let clientPath = resolveSafePluginFile(baseDir: baseDir, relPath: "vendor/thought-translator/thought-client.js"),
               let settingsUiPath = resolveSafePluginFile(baseDir: baseDir, relPath: "vendor/thought-translator/thought-settings-ui.js"),
-              let clientSource = try? String(contentsOfFile: clientPath, encoding: .utf8), !clientSource.isEmpty,
+              let rawClientSource = try? String(contentsOfFile: clientPath, encoding: .utf8), !rawClientSource.isEmpty,
               let settingsUiSource = try? String(contentsOfFile: settingsUiPath, encoding: .utf8), !settingsUiSource.isEmpty else {
             return ""
         }
+        let verbsSource = resolveSafePluginFile(baseDir: baseDir, relPath: "vendor/thought-translator/tool-step-verbs.js").flatMap { try? String(contentsOfFile: $0, encoding: .utf8) } ?? ""
+        let clientSource = verbsSource.isEmpty ? rawClientSource : (verbsSource + ";\n" + rawClientSource)
         var bootCfg = reconcileConfigAliases(rawCfg)
         let rawMode = (bootCfg["thoughtTranslate"]?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         bootCfg["thoughtTranslate"] = .string(rawMode == "machine" ? "machine" : "ai")

@@ -681,6 +681,101 @@ test('Performance Fitness 4: ripple-worker 1x1 probe cache, 120ms timeout & CSP 
     assert.equal(h.api.resolveRippleDpr(2, h.doc), 2.0);
     assert.equal(h.api.getPerfProfile(h.doc).msaa, true);
   }
+
+  // 4e) 首屏探针超时调优（PROBE_TIMEOUT_MS >= 500, INIT_TIMEOUT_MS >= 800）+ timeout 首次允许延迟重试 1 次（最多 1 次）
+  {
+    const h = makeWorkerHarness({ mode: 'timeout' });
+    assert.ok(h.api.PROBE_TIMEOUT_MS >= 500, `PROBE_TIMEOUT_MS must be >= 500 to avoid Ch1 startup false timeout (got ${h.api.PROBE_TIMEOUT_MS})`);
+    assert.ok(h.api.INIT_TIMEOUT_MS >= 800, `INIT_TIMEOUT_MS must be >= 800 (got ${h.api.INIT_TIMEOUT_MS})`);
+
+    const first = await h.api.probeWorkerWebGL2({ timeoutMs: 25, retryDelayMs: 20 });
+    assert.equal(first.ok, false);
+    assert.equal(first.reason, 'timeout');
+    assert.equal(first.retryable, true, 'First timeout failure must allow one delayed retry');
+    assert.equal(h.getCounts().createdWorkers, 1);
+
+    // 冷却期内直接命中缓存不风暴重试
+    const duringCooldown = await h.api.probeWorkerWebGL2({ timeoutMs: 25 });
+    assert.equal(duringCooldown.ok, false);
+    assert.equal(h.getCounts().createdWorkers, 1, 'Must not retry before retryDelayMs expires');
+
+    // 冷却期过后自动允许第 2 次探针（且仅此 1 次重试）
+    await new Promise((r) => setTimeout(r, 30));
+    const second = await h.api.probeWorkerWebGL2({ timeoutMs: 25, retryDelayMs: 20 });
+    assert.equal(second.ok, false);
+    assert.equal(second.reason, 'timeout');
+    assert.equal(second.retryable, false, 'Second consecutive timeout must permanently lock cache');
+    assert.equal(h.getCounts().createdWorkers, 2);
+
+    // 第 3 次调用绝不再建 Worker
+    await new Promise((r) => setTimeout(r, 30));
+    const third = await h.api.probeWorkerWebGL2({ timeoutMs: 25 });
+    assert.equal(third.ok, false);
+    assert.equal(h.getCounts().createdWorkers, 2, 'Must never exceed 1 retry after consecutive timeouts');
+    assert.equal(h.api.getActiveWorkerCount(), 0);
+  }
+
+  // 4f) mountManagedGlow 同步抛错防双挂载孤儿上下文泄漏：transferControlToOffscreen 同步抛错时 mountBrandHorizonGlow 仅调用 1 次
+  {
+    const h = makeWorkerHarness({ mode: 'ok' });
+    await h.api.probeWorkerWebGL2({ timeoutMs: 60 });
+
+    let mountCalls = 0;
+    let swapCalls = 0;
+    let workerFailed = false;
+    const createdInstances = [];
+    const mkCanvas = (id, throwOnTransfer) => ({
+      id,
+      ownerDocument: h.doc,
+      transferControlToOffscreen() {
+        if (throwOnTransfer) throw new Error('InvalidStateError: transferControlToOffscreen failed synchronously');
+        return { width: 1, height: 1 };
+      },
+    });
+    let currentCanvas = mkCanvas('cv-0', true);
+    const swapCanvas = () => {
+      swapCalls += 1;
+      currentCanvas = mkCanvas(`cv-${swapCalls}`, false);
+      return currentCanvas;
+    };
+    const mockCore = {
+      HORIZON_FRAGMENT_SHADER: rippleCore.HORIZON_FRAGMENT_SHADER,
+      GLOW_VERT_SHADER: rippleCore.GLOW_VERT_SHADER,
+      mountBrandHorizonGlow(cv, opts) {
+        mountCalls += 1;
+        const inst = { id: `glow-${mountCalls}`, canvas: cv, mode: opts?.prefer2D ? '2d' : 'webgl2', resize() {}, clear() {}, draw() {}, drawStaticSnapshot() {}, dispose() {} };
+        createdInstances.push(inst);
+        return inst;
+      },
+    };
+
+    const state = { glow: null };
+    function mountGlow(p2d, sw) {
+      if (sw) { swapCanvas(); }
+      const g = h.api.mountManagedGlow({
+        getCanvas: () => currentCanvas,
+        swapCanvas,
+        rippleCore: mockCore,
+        doc: h.doc,
+        prefer2D: !!p2d,
+        allowWorker: !workerFailed,
+        onFallbackDone: () => {
+          workerFailed = true;
+          mountGlow(0, 1);
+        },
+      });
+      state.glow = g;
+      return g;
+    }
+
+    const returned = mountGlow(0, 0);
+    assert.equal(workerFailed, true, 'Sync transfer failure must trigger onFallbackDone');
+    assert.equal(swapCalls, 1, 'Canvas must be swapped once on sync fallback');
+    assert.equal(mountCalls, 1, 'mountBrandHorizonGlow must be called strictly ONCE on sync throw (0 orphan glow context leak)');
+    assert.equal(returned, createdInstances[0], 'Outer mountManagedGlow must return the unique inner fallback instance');
+    assert.equal(state.glow, createdInstances[0], 'Host state.glow must retain the live fallback instance without clobbering');
+    assert.equal(h.api.getActiveWorkerCount(), 0);
+  }
 });
 
 // ── 5: ripple-core PR #103 + mediump/highp/ign | vial-core 双 Canvas 零 drawImage | crystal-prism-core DPR/MSAA ──
@@ -823,4 +918,99 @@ test('Performance Fitness 6: profile-live-perf CLI --help smoke, expression safe
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
+});
+
+// ── 7: ui-runtime homeStudio 缓存校对 usageCore 迟到自动销毁重建 ──
+test('Performance Fitness 7: ui-runtime resolveHomeStudioCtl disposes and recreates homeStudio instance when usageCore arrives late', () => {
+  const cdp = require(path.join(ROOT, 'cdp.js'));
+  const uiMainFactory = require(path.join(ROOT, 'ui-runtime.js'));
+  const i18nCore = require(path.join(ROOT, 'i18n-core.js'));
+  const i18nLocales = require(path.join(ROOT, 'i18n-locales.js'));
+
+  const docBus = makeBus();
+  const winBus = makeBus();
+  const doc = { hidden: false, readyState: 'complete', title: 'Antigravity', hasFocus: () => true };
+  const html = makeFakeElement('html', doc);
+  const head = makeFakeElement('head', doc);
+  const body = makeFakeElement('body', doc);
+  html.appendChild(head);
+  html.appendChild(body);
+  doc.documentElement = html;
+  doc.head = head;
+  doc.body = body;
+  doc.createElement = (tag) => makeFakeElement(tag, doc);
+  doc.createElementNS = (_ns, tag) => makeFakeElement(tag, doc);
+  doc.querySelector = () => null;
+  doc.querySelectorAll = () => [];
+  doc.getElementById = () => null;
+  doc.addEventListener = (t, fn) => docBus.add(t, fn);
+  doc.removeEventListener = (t, fn) => docBus.remove(t, fn);
+
+  const created = [];
+  const disposed = [];
+  const sb = {
+    document: doc,
+    location: { href: 'vscode-file://vscode-app/index.html', pathname: '/' },
+    navigator: { language: 'zh-CN' },
+    devicePixelRatio: 1,
+    performance: { now: () => 1000 },
+    requestAnimationFrame: () => 1,
+    cancelAnimationFrame() {},
+    setTimeout: () => 1,
+    clearTimeout() {},
+    setInterval: () => 1,
+    clearInterval() {},
+    matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
+    getComputedStyle: () => ({ getPropertyValue: () => '' }),
+    MutationObserver: class { observe() {} disconnect() {} },
+    ResizeObserver: class { observe() {} disconnect() {} },
+    addEventListener: (t, fn) => winBus.add(t, fn),
+    removeEventListener: (t, fn) => winBus.remove(t, fn),
+    __agPrismI18nCore: i18nCore,
+    __agPrismI18nLocales: i18nLocales,
+    __agPrismHomeStudioPanel: {
+      createHomeStudioPanelController(opts) {
+        const id = created.length + 1;
+        const rec = { id, usageCore: opts.usageCore };
+        created.push(rec);
+        return {
+          sync() {},
+          wasHero: () => false,
+          getScopeKey: () => 'local',
+          getUsageRecordsCount: () => (opts.usageCore ? 42 : 0),
+          hasConnectedPanel: () => Boolean(opts.usageCore),
+          dispose() { disposed.push(id); },
+        };
+      },
+    },
+    Map, Set, WeakMap, WeakSet, Array, Object, Math, Number, String, Boolean, Date, Promise, RegExp, JSON, Proxy, Error,
+  };
+  sb.window = sb;
+  sb.globalThis = sb;
+
+  vm.runInNewContext(
+    `(${uiMainFactory.toString()})(${JSON.stringify({ ...cdp.DEFAULT_CONFIG, homeLayout: 'studio', mascot: 'off', smoothCaret: false })}, { version: '1.0.8-beta.4', codeHash: 'hs-late-uc' });`,
+    sb
+  );
+  const api = sb.__agPrism;
+  assert.equal(created.length, 1, 'Initial homeStudio instance created before usageCore loads');
+  assert.equal(created[0].usageCore, null);
+  assert.deepEqual(disposed, []);
+
+  // Sync again while usageCore is still absent -> reuses instance #1 without thrashing
+  api.sync();
+  assert.equal(created.length, 1);
+
+  // Late-arriving Ch12 usage-core attaches to globalThis
+  const lateUsageCore = { id: 'usage-core-v1' };
+  sb.__agCsUsageCore = lateUsageCore;
+  api.sync();
+  assert.deepEqual(disposed, [1], 'Stale homeStudio instance created without usageCore must be disposed when usageCore arrives');
+  assert.equal(created.length, 2, 'New homeStudio instance must be recreated with live usageCore');
+  assert.equal(created[1].usageCore, lateUsageCore);
+
+  // Subsequent syncs with same usageCore reuse instance #2
+  api.sync();
+  assert.equal(created.length, 2);
+  api.destroy();
 });

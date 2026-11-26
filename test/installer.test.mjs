@@ -1221,6 +1221,8 @@ test('Windows C# installer & Watcher Channel 5 contracts and cdp.js REMOVE_EXPRE
   assert.ok(cdpCs.includes('ResolveSafePluginFile'));
   assert.ok(cdpCs.includes('vendor/thought-translator/thought-client.js'));
   assert.ok(cdpCs.includes('vendor/thought-translator/thought-settings-ui.js'));
+  assert.ok(cdpCs.includes('vendor/thought-translator/tool-step-verbs.js'), 'C# BuildThoughtExpression must prepend optional tool-step-verbs.js');
+  assert.ok(cdpCs.includes('ruleStr == "string"') && cdpCs.includes('sv.Length <= 160'), 'C# ValidateConfigEntry must support string rule with <=160 char and control-char check');
 
   assert.ok(watcherCs.includes('public string ThoughtScriptId;'));
   assert.ok(watcherCs.includes('CdpHelper.ShouldEnableThought('));
@@ -2340,6 +2342,29 @@ test('Phase 4A P0: C# CdpClient fixes bundleUnchanged/destroy() and static runti
           '    outObj["hasEff"] = loadedOn.ContainsKey("effortSlider");',
           '    outObj["hasWb"] = loadedOn.ContainsKey("workbenchEnhancer");',
           '    outObj["hasCtx"] = loadedOn.ContainsKey("contextMenu");',
+          '    var man = new PluginManifest();',
+          '    man.Validators = new Dictionary<string, object>(StringComparer.Ordinal);',
+          '    man.Validators["chatFontCustom"] = "string";',
+          '    man.Validators["codeFontCustom"] = "string";',
+          '    outObj["strOk"] = CdpHelper.ValidateConfigEntry(man, "chatFontCustom", "LXGW WenKai, Inter");',
+          '    outObj["strMax"] = CdpHelper.ValidateConfigEntry(man, "codeFontCustom", new string(\'A\', 160));',
+          '    outObj["strTooLong"] = CdpHelper.ValidateConfigEntry(man, "chatFontCustom", new string(\'A\', 161));',
+          '    outObj["strNl"] = CdpHelper.ValidateConfigEntry(man, "chatFontCustom", "Bad\\nFont");',
+          '    outObj["strCr"] = CdpHelper.ValidateConfigEntry(man, "chatFontCustom", "Bad\\rFont");',
+          '    outObj["strNul"] = CdpHelper.ValidateConfigEntry(man, "chatFontCustom", "Bad\\0Font");',
+          '    outObj["strNonStr"] = CdpHelper.ValidateConfigEntry(man, "chatFontCustom", 123);',
+          '    string thDir = System.IO.Path.Combine(dir, "vendor", "thought-translator");',
+          '    System.IO.Directory.CreateDirectory(thDir);',
+          '    System.IO.File.WriteAllText(System.IO.Path.Combine(thDir, "thought-client.js"), "window.__tClient=1;");',
+          '    System.IO.File.WriteAllText(System.IO.Path.Combine(thDir, "thought-settings-ui.js"), "window.__tUi=1;");',
+          '    var thCfg = new Dictionary<string, object>(StringComparer.Ordinal);',
+          '    thCfg["thoughtTranslate"] = "ai";',
+          '    string exprNoVerbs = CdpHelper.BuildThoughtExpression(dir, thCfg);',
+          '    System.IO.File.WriteAllText(System.IO.Path.Combine(thDir, "tool-step-verbs.js"), "window.__agPrismToolStepVerbs=1;");',
+          '    string exprWithVerbs = CdpHelper.BuildThoughtExpression(dir, thCfg);',
+          '    outObj["thNoVerbsOk"] = exprNoVerbs.Contains("window.__tClient=1;") && !exprNoVerbs.Contains("__agPrismToolStepVerbs");',
+          '    outObj["thWithVerbsOrder"] = exprWithVerbs.IndexOf("__agPrismToolStepVerbs") >= 0 && exprWithVerbs.IndexOf("__agPrismToolStepVerbs") < exprWithVerbs.IndexOf("window.__tClient=1;");',
+          '    outObj["thHashChanged"] = exprNoVerbs != exprWithVerbs;',
           '    Console.Write(MiniJson.Stringify(outObj, false));',
           '  }',
           '}',
@@ -2374,6 +2399,16 @@ test('Phase 4A P0: C# CdpClient fixes bundleUnchanged/destroy() and static runti
       assert.equal(parsed.hasEff, true);
       assert.equal(parsed.hasWb, true);
       assert.equal(parsed.hasCtx, true);
+      assert.equal(parsed.strOk, true);
+      assert.equal(parsed.strMax, true);
+      assert.equal(parsed.strTooLong, false);
+      assert.equal(parsed.strNl, false);
+      assert.equal(parsed.strCr, false);
+      assert.equal(parsed.strNul, false);
+      assert.equal(parsed.strNonStr, false);
+      assert.equal(parsed.thNoVerbsOk, true);
+      assert.equal(parsed.thWithVerbsOrder, true);
+      assert.equal(parsed.thHashChanged, true);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }

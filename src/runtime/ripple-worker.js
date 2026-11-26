@@ -6,7 +6,9 @@
 })(typeof globalThis !== 'undefined' ? globalThis : typeof window !== 'undefined' ? window : this, function (G) {
   'use strict';
   const M = Math;
-  const PROBE_TIMEOUT_MS = 120;
+  const PROBE_TIMEOUT_MS = 600;
+  const INIT_TIMEOUT_MS = 800;
+  const PROBE_RETRY_DELAY_MS = 1500;
   const IDLE_SLEEP_MS = 1200;
 
   const PERF_PROFILES = Object.freeze({
@@ -16,7 +18,10 @@
   });
 
   const activeSessions = new Set();
+  const probeRetryCbs = new Set();
   let activeProbeWorker = null, activeProbeUrl = '', probeCache = null, probePending = null, totalFallbacks = 0;
+  let probeTimeoutRetries = 0, probeRetryAfter = 0, probeRetryTimer = 0;
+  let managedGlowDepth = 0, lastNestedGlow = null;
 
   const cl = (v, lo, hi) => { const n = Number(v); return Number.isFinite(n) ? M.max(lo, M.min(hi, n)) : lo; };
   const getDoc = (doc) => doc || (typeof document !== 'undefined' ? document : null);
@@ -145,14 +150,38 @@
     return Boolean(Off && W && B && U && typeof U.createObjectURL === 'function');
   }
 
+  function clearProbeRetry() {
+    if (probeRetryTimer) { clearTimeout(probeRetryTimer); probeRetryTimer = 0; }
+    probeRetryCbs.clear();
+  }
+
+  function scheduleProbeRetry(opts = {}, onReady) {
+    if (typeof onReady === 'function') probeRetryCbs.add(onReady);
+    if (probeRetryTimer || !probeCache || probeCache.ok || !probeCache.retryable) return;
+    const waitMs = opts.retryDelayMs !== undefined ? M.max(0, Number(opts.retryDelayMs)) : M.max(0, probeRetryAfter - Date.now());
+    probeRetryTimer = setTimeout(() => {
+      probeRetryTimer = 0;
+      const cbs = [...probeRetryCbs];
+      probeRetryCbs.clear();
+      if (!probeCache || probeCache.ok || !probeCache.retryable) return;
+      probeWorkerWebGL2({ force: true, timeoutMs: opts.timeoutMs }).then((res) => {
+        if (res && res.ok) {
+          for (const cb of cbs) { try { cb(res); } catch {} }
+        }
+      }).catch(() => {});
+    }, waitMs);
+  }
+
   function probeWorkerWebGL2(opts = {}) {
-    if (!opts.force && probeCache) return Promise.resolve(probeCache);
+    const canRetryTimeout = Boolean(probeCache && !probeCache.ok && probeCache.retryable && Date.now() >= probeRetryAfter);
+    if (!opts.force && probeCache && !canRetryTimeout) return Promise.resolve(probeCache);
     if (!opts.force && probePending) return probePending;
     if (!hasOffscreenApi()) {
-      probeCache = Object.freeze({ ok: false, reason: 'unsupported', checkedAt: Date.now() });
+      probeCache = Object.freeze({ ok: false, reason: 'unsupported', retryable: false, checkedAt: Date.now() });
       return Promise.resolve(probeCache);
     }
     const timeoutMs = M.max(10, Number(opts.timeoutMs) || PROBE_TIMEOUT_MS);
+    const retryDelayMs = M.max(0, opts.retryDelayMs !== undefined ? Number(opts.retryDelayMs) : PROBE_RETRY_DELAY_MS);
     probePending = new Promise((resolve) => {
       let settled = false, timer = 0, worker = null, url = '';
       const finish = (ok, reason) => {
@@ -166,7 +195,16 @@
           worker = null;
         }
         if (url) { safeRevokeUrl(url); if (activeProbeUrl === url) activeProbeUrl = ''; url = ''; }
-        probeCache = Object.freeze({ ok: Boolean(ok), reason: String(reason || (ok ? 'ok' : 'failed')), checkedAt: Date.now() });
+        const finalReason = String(reason || (ok ? 'ok' : 'failed'));
+        const isFirstTimeout = !ok && finalReason === 'timeout' && probeTimeoutRetries < 1;
+        if (isFirstTimeout) {
+          probeTimeoutRetries += 1;
+          probeRetryAfter = Date.now() + retryDelayMs;
+        } else {
+          if (ok) probeTimeoutRetries = 0;
+          probeRetryAfter = 0;
+        }
+        probeCache = Object.freeze({ ok: Boolean(ok), reason: finalReason, retryable: isFirstTimeout, checkedAt: Date.now() });
         probePending = null;
         resolve(probeCache);
       };
@@ -194,10 +232,13 @@
   const getProbeStatus = () => (probeCache ? { probed: true, ok: probeCache.ok, reason: probeCache.reason } : { probed: false, ok: false, reason: probePending ? 'probing' : 'unprobed' });
 
   function resetProbeCache() {
+    clearProbeRetry();
     if (activeProbeWorker) { try { activeProbeWorker.terminate(); } catch {} activeProbeWorker = null; }
     if (activeProbeUrl) { safeRevokeUrl(activeProbeUrl); activeProbeUrl = ''; }
     probeCache = null;
     probePending = null;
+    probeTimeoutRetries = 0;
+    probeRetryAfter = 0;
   }
 
   function resolveGlowShaders(rippleCore) {
@@ -213,20 +254,29 @@
     const shaders = resolveGlowShaders(options.rippleCore);
     if (!shaders) return null;
 
-    if (!probeCache) {
-      warmProbe({ timeoutMs: options.probeTimeoutMs });
+    const needsProbe = !probeCache || (!probeCache.ok && probeCache.retryable && Date.now() >= probeRetryAfter);
+    if (needsProbe) {
+      warmProbe({ timeoutMs: options.probeTimeoutMs, retryDelayMs: options.probeRetryDelayMs });
       if (typeof options.onProbeReady === 'function' && probePending) {
-        probePending.then((res) => { if (res && res.ok) { try { options.onProbeReady(res); } catch {} } });
+        probePending.then((res) => {
+          if (res && res.ok) { try { options.onProbeReady(res); } catch {} }
+          else if (res && res.retryable) scheduleProbeRetry({ timeoutMs: options.probeTimeoutMs, retryDelayMs: options.probeRetryDelayMs }, options.onProbeReady);
+        });
       }
       return null;
     }
-    if (!probeCache.ok) return null;
+    if (!probeCache.ok) {
+      if (probeCache.retryable && typeof options.onProbeReady === 'function') {
+        scheduleProbeRetry({ timeoutMs: options.probeTimeoutMs, retryDelayMs: options.probeRetryDelayMs }, options.onProbeReady);
+      }
+      return null;
+    }
 
     const doc = (canvas && canvas.ownerDocument) || getDoc(options.doc);
     const core = shaders.core;
     const defAura = (core && core.DEFAULT_HORIZON_AURA) || { reach: 0.47, prism: 0, surge: 0, speed: 1 };
     const idleTimeoutMs = M.max(200, Number(options.idleTimeoutMs) || IDLE_SLEEP_MS);
-    const initTimeoutMs = M.max(20, Number(options.initTimeoutMs) || PROBE_TIMEOUT_MS);
+    const initTimeoutMs = M.max(20, Number(options.initTimeoutMs) || INIT_TIMEOUT_MS);
 
     let offscreen = null, worker = null, blobUrl = '', initTimer = 0, postMessageCount = 0;
     let ready = false, failed = false, disposed = false, contextLost = false;
@@ -480,27 +530,54 @@
     const { getCanvas, swapCanvas, rippleCore, doc, prefer2D, allowWorker = true, onContextLost, onFallbackDone, onUpgradeReady } = cfg;
     const hasG = Boolean(rippleCore && typeof rippleCore.mountBrandHorizonGlow === 'function');
     const cv0 = typeof getCanvas === 'function' ? getCanvas() : null;
-    if (!cv0 || !hasG) return { mode: 'none', resize() {}, clear() {}, draw() {}, drawStaticSnapshot() {}, dispose() {} };
-    if (!prefer2D && allowWorker) {
-      const w = mountGlowWorker(cv0, {
-        rippleCore, doc, width: 0, height: 0,
-        onContextLost,
-        onFallback: (reason) => { try { onFallbackDone?.(reason); } catch {} },
-        onProbeReady: (res) => { try { onUpgradeReady?.(res); } catch {} },
-      });
-      if (w) return w;
+    const noopGlow = { mode: 'none', resize() {}, clear() {}, draw() {}, drawStaticSnapshot() {}, dispose() {} };
+    if (!cv0 || !hasG) return noopGlow;
+    managedGlowDepth += 1;
+    try {
+      if (!prefer2D && allowWorker) {
+        let inSyncMount = true;
+        let syncFallbackHandled = false;
+        let syncFallbackRet = null;
+        const prevNested = lastNestedGlow;
+        lastNestedGlow = null;
+        const w = mountGlowWorker(cv0, {
+          rippleCore, doc, width: 0, height: 0,
+          probeTimeoutMs: cfg.probeTimeoutMs,
+          probeRetryDelayMs: cfg.probeRetryDelayMs,
+          initTimeoutMs: cfg.initTimeoutMs,
+          onContextLost,
+          onFallback: (reason) => {
+            if (inSyncMount && typeof onFallbackDone === 'function') syncFallbackHandled = true;
+            try { syncFallbackRet = onFallbackDone?.(reason); } catch {}
+          },
+          onProbeReady: (res) => { try { onUpgradeReady?.(res); } catch {} },
+        });
+        inSyncMount = false;
+        const innerGlow = lastNestedGlow;
+        lastNestedGlow = prevNested;
+        if (w) return w;
+        if (syncFallbackHandled) {
+          const resolved = innerGlow || (syncFallbackRet && typeof syncFallbackRet === 'object' ? syncFallbackRet : noopGlow);
+          if (managedGlowDepth > 1) lastNestedGlow = resolved;
+          return resolved;
+        }
+      }
+      const mk = (u) => rippleCore.mountBrandHorizonGlow(getCanvas(), { prefer2D: !!u, width: 0, height: 0, onContextLost });
+      let g = mk(prefer2D);
+      if (g && g.mode === 'none' && !prefer2D && typeof swapCanvas === 'function') {
+        try { g.dispose?.(true); } catch {}
+        swapCanvas();
+        g = mk(true);
+      }
+      if (managedGlowDepth > 1) lastNestedGlow = g;
+      return g;
+    } finally {
+      managedGlowDepth -= 1;
     }
-    const mk = (u) => rippleCore.mountBrandHorizonGlow(getCanvas(), { prefer2D: !!u, width: 0, height: 0, onContextLost });
-    let g = mk(prefer2D);
-    if (g && g.mode === 'none' && !prefer2D && typeof swapCanvas === 'function') {
-      try { g.dispose?.(true); } catch {}
-      swapCanvas();
-      g = mk(true);
-    }
-    return g;
   }
 
   function disposeAll() {
+    clearProbeRetry();
     for (const s of [...activeSessions]) { try { s.dispose(); } catch {} }
     activeSessions.clear();
     if (activeProbeWorker) { try { activeProbeWorker.terminate(); } catch {} activeProbeWorker = null; }
@@ -512,7 +589,7 @@
   const getStats = () => ({ perfMode: getPerfMode(), probe: getProbeStatus(), activeWorkers: getActiveWorkerCount(), totalFallbacks });
 
   return {
-    PROBE_TIMEOUT_MS, IDLE_SLEEP_MS, PERF_PROFILES, PROBE_WORKER_SRC, RENDER_WORKER_SRC,
+    PROBE_TIMEOUT_MS, INIT_TIMEOUT_MS, PROBE_RETRY_DELAY_MS, IDLE_SLEEP_MS, PERF_PROFILES, PROBE_WORKER_SRC, RENDER_WORKER_SRC,
     getPerfMode, getPerfProfile, getPerfMinGapMs, resolveRippleDpr, resolveGlowDpr, isHostPaused,
     probeWorkerWebGL2, warmProbe, getProbeStatus, resetProbeCache,
     mountGlowWorker, mountGlowWorkerWithProbe, mountManagedGlow, disposeAll, getActiveWorkerCount, getStats,

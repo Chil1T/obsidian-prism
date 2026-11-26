@@ -155,7 +155,6 @@
 
   function isMainPrimaryCard(card, cards = []) {
     if (!card || isSidePanelElement(card)) return false;
-    if (safeClosest(card, '[data-main-content-body]')) return true;
     const nonSide = filterLiveMainCards(cards).filter((c) => !isSidePanelElement(c));
     if (nonSide.length <= 1) return nonSide.length === 0 || nonSide[0] === card;
     const explicitMain = nonSide.find((c) => Boolean(safeClosest(c, '[data-main-content-body]')));
