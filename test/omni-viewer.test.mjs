@@ -1118,7 +1118,7 @@ test('Bitmap Image pan-zoom, JSONL grid mounting & 5-locale + host theme-change 
   assert.equal(imgEnv.badgeEl.textContent, 'IMAGE');
   assert.match(imgEnv.pillsEl.textContent, /1024×512/);
   const btns = imgEnv.toolsEl.querySelectorAll('button');
-  assert.ok(btns.some((b) => b.textContent === '棋盤格'), 'Cantonese (yue) locale label should render');
+  assert.ok(btns.some((b) => b.textContent === '棋盘格'), 'Legacy yue locale must migrate smoothly to zh-CN label');
   btns.find((b) => b.textContent === '1:1').click();
   assert.match(imgEnv.toolsEl.textContent, /100%/);
 
@@ -1572,11 +1572,11 @@ test('Battle 3: strict HTML sandbox="allow-scripts", srcdoc CSP meta, /sandbox-i
   await svgEnv.settle();
   assert.equal(svgMetaCalls, callsBeforeReload + 1, 'Visible document must reload on parent reload message');
 
-  // 5. Full 8+1 locales coverage & strict 0 CJK in non-CJK locales (en/ko/es/fr/de)
+  // 5. Full 8 locales coverage (zero yue column) & strict 0 CJK in non-CJK locales (en/ko/es/fr/de)
   const cjkRe = /[\u3400-\u9FFF\uF900-\uFAFF]/;
-  const localeCols = ['zh-CN', 'zh-TW', 'yue', 'en', 'ja', 'ko', 'es', 'fr', 'de'];
+  const localeCols = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de'];
   for (const [key, row] of Object.entries(WORKBENCH_I18N)) {
-    assert.equal(row.length, localeCols.length, `WORKBENCH_I18N.${key} must provide all 9 locale columns`);
+    assert.equal(row.length, localeCols.length, `WORKBENCH_I18N.${key} must provide all 8 locale columns`);
     for (let i = 0; i < localeCols.length; i++) {
       assert.ok(typeof row[i] === 'string' && row[i].length > 0, `WORKBENCH_I18N.${key}[${localeCols[i]}] must be non-empty`);
       if (['en', 'ko', 'es', 'fr', 'de'].includes(localeCols[i])) {

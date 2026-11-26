@@ -165,7 +165,7 @@
 
   const EFFORT_RANK = { Low: 0, Medium: 1, High: 2, XHigh: 3 };
 
-  // 5 语开源中性双层居中问候词库（绝不硬编码私密用户名，动态承接宿主登录名）
+  // 8 语开源中性双层居中问候词库（绝不硬编码私密用户名，动态承接宿主登录名）
   const HERO_GREETINGS = {
     'zh-CN': {
       eyeUser: ['你好，{user}', '嗨，{user}', '欢迎回来，{user}', '{user}，很高兴见到你'],
@@ -177,11 +177,6 @@
       eyeAnon: ['你好', '歡迎回來', '隨時開始'],
       heads: ['今天需要我為你做些什麼？', '想從哪裡開始探索？', '隨時聊聊你的新想法。'],
     },
-    yue: {
-      eyeUser: ['哈囉，{user}', '你好呀，{user}', '歡迎返嚟，{user}'],
-      eyeAnon: ['哈囉', '歡迎返嚟', '隨時開始'],
-      heads: ['今日想我幫你做啲乜？', '想由邊度開始傾起？', '有咩新想法隨時講。'],
-    },
     en: {
       eyeUser: ['Hi, {user}', 'Hello, {user}', 'Welcome back, {user}'],
       eyeAnon: ['Hello', 'Welcome back', 'Ready when you are'],
@@ -191,6 +186,26 @@
       eyeUser: ['こんにちは、{user}さん', 'おかえりなさい、{user}さん'],
       eyeAnon: ['こんにちは', 'おかえりなさい', 'いつでも始められます'],
       heads: ['今日は何をお手伝いしましょうか？', 'どこから始めましょうか？', 'どんなアイデアでも気軽にどうぞ。'],
+    },
+    ko: {
+      eyeUser: ['안녕하세요, {user}님', '다시 오셨군요, {user}님'],
+      eyeAnon: ['안녕하세요', '다시 오셨군요', '언제든 시작할 수 있어요'],
+      heads: ['오늘은 무엇을 도와드릴까요?', '어디서부터 시작해 볼까요?', '새로운 아이디어를 편하게 들려주세요.'],
+    },
+    es: {
+      eyeUser: ['Hola, {user}', 'Bienvenido de nuevo, {user}'],
+      eyeAnon: ['Hola', 'Bienvenido de nuevo', 'Listo cuando quieras'],
+      heads: ['¿Por dónde empezamos?', '¿En qué puedo ayudarte hoy?', '¿Qué te gustaría explorar?'],
+    },
+    fr: {
+      eyeUser: ['Bonjour, {user}', 'Bon retour, {user}'],
+      eyeAnon: ['Bonjour', 'Bon retour', 'Prêt quand vous l’êtes'],
+      heads: ['Par où commençons-nous ?', 'Comment puis-je vous aider aujourd’hui ?', 'Que souhaitez-vous explorer ?'],
+    },
+    de: {
+      eyeUser: ['Hallo, {user}', 'Willkommen zurück, {user}'],
+      eyeAnon: ['Hallo', 'Willkommen zurück', 'Bereit, wann immer du bist'],
+      heads: ['Womit sollen wir anfangen?', 'Wie kann ich dir heute helfen?', 'Was möchtest du erkunden?'],
     },
   };
 
@@ -549,9 +564,13 @@
 
   function normalizeLang(raw) {
     const s = String(raw || 'zh-CN').trim().toLowerCase();
-    if (s === 'zh-tw' || s === 'zh-hk' || s === 'zh-hant') return 'zh-TW';
-    if (s === 'yue' || s === 'zh-yue') return 'yue';
+    if (s === 'zh-tw' || s === 'zh-hk' || s === 'zh-mo' || s === 'zh-hant' || s.startsWith('zh-hant')) return 'zh-TW';
+    if (s === 'yue' || s.startsWith('yue-') || s === 'zh-yue' || s.includes('cantonese')) return 'zh-CN';
     if (s.startsWith('ja')) return 'ja';
+    if (s.startsWith('ko')) return 'ko';
+    if (s.startsWith('es')) return 'es';
+    if (s.startsWith('fr')) return 'fr';
+    if (s.startsWith('de')) return 'de';
     if (s.startsWith('en')) return 'en';
     return 'zh-CN';
   }
