@@ -885,3 +885,109 @@ test('7) Real Antigravity Split View DOM ([data-main-content-body] > [data-split
   vm.runInNewContext(cdp.REMOVE_EXPRESSION, sb);
   assert.equal(env.timers.size, 0);
 });
+
+test('8) ask_question 问答卡与 side-question-panel 点击焦点转移 + 多 conversation-view 下 peek 与全周棱镜光', () => {
+  const env = createMockEnv({ reducedMatches: false });
+  const mainBody = env.mkEl('div', { 'data-main-content-body': 'true' });
+  const splitPanes = env.mkEl('div', { 'data-split-panes': 'true' });
+  mainBody.appendChild(splitPanes);
+  env.body.appendChild(mainBody);
+
+  const pane1 = buildConversationPane(env.mkEl, splitPanes, {
+    cid: '33333333-aaaa-1111-1111-111111111111',
+    tilingPane: 1,
+    rect: { left: 40, top: 520, width: 540, height: 96, right: 580, bottom: 616 },
+  });
+  const pane2 = buildConversationPane(env.mkEl, splitPanes, {
+    cid: '44444444-bbbb-2222-2222-222222222222',
+    tilingPane: 2,
+    rect: { left: 620, top: 520, width: 540, height: 96, right: 1160, bottom: 616 },
+  });
+
+  // 在 pane2 中挂载 interaction-takeover-card 与 side-question-panel
+  const tkCard = env.mkEl('div', { class: 'agy-takeover-frame', 'data-testid': 'interaction-takeover-card' }, { left: 620, top: 360, width: 540, height: 140, right: 1160, bottom: 500 });
+  const tkOpt = env.mkEl('button', { 'data-testid': 'ask-question-option' }, { left: 632, top: 380, width: 500, height: 32, right: 1132, bottom: 412 });
+  tkCard.appendChild(tkOpt);
+  pane2.cv.insertBefore(tkCard, pane2.box);
+
+  const sideQ = env.mkEl('div', { 'data-testid': 'side-question-panel' }, { left: 620, top: 240, width: 540, height: 100, right: 1160, bottom: 340 });
+  const sideQBtn = env.mkEl('button', { type: 'button' }, { left: 632, top: 260, width: 120, height: 28, right: 752, bottom: 288 });
+  sideQ.appendChild(sideQBtn);
+  pane2.cv.insertBefore(sideQ, tkCard);
+
+  const cards = [pane1.card, pane2.card];
+
+  // 1) 同窗格问答卡与 side-question-panel 应纳入可转移焦点的 composer 关联区
+  assert.equal(hopMod.isComposerInputTarget(tkOpt, pane2.card), true, '同窗格 interaction-takeover-card 选项应视为 composer 关联区');
+  assert.equal(hopMod.isComposerInputTarget(sideQBtn, pane2.card), true, '同窗格 side-question-panel 按钮应视为 composer 关联区');
+  assert.equal(hopMod.isComposerInputTarget(tkOpt, pane1.card), false, '跨窗格问答卡不得误匹配其他窗格卡片');
+  assert.equal(hopMod.isComposerInputTarget(sideQBtn, pane1.card), false, '跨窗格 side-question-panel 不得误匹配其他窗格卡片');
+
+  const decTk = hopMod.shouldTransferMascotFocus({ target: tkOpt, targetCard: pane2.card, currentCard: pane1.card, cards, doc: env.doc });
+  assert.equal(decTk.allow, true, '点击次分屏问答选项卡必须允许转移桌宠焦点');
+  assert.equal(decTk.transfer, true);
+  assert.equal(decTk.reason, 'split-composer-input');
+
+  const decSq = hopMod.shouldTransferMascotFocus({ target: sideQBtn, targetCard: pane2.card, currentCard: pane1.card, cards, doc: env.doc });
+  assert.equal(decSq.allow, true, '点击次分屏 side-question-panel 必须允许转移桌宠焦点');
+  assert.equal(decSq.transfer, true);
+  assert.equal(decSq.reason, 'split-composer-input');
+
+  // 2) 端到端 ui-runtime 验证：多 conversation-view 场景点击 pane2 问答卡可切焦点并立刻 peek，且全局无归属 takeover 卡也不被多 CV 误跳过
+  const uiMainFactory = require(path.join(ROOT, 'ui-runtime.js'));
+  const i18nCore = require(path.join(ROOT, 'i18n-core.js'));
+  const i18nLocales = require(path.join(ROOT, 'i18n-locales.js'));
+  const hopSrc = fs.readFileSync(path.join(ROOT, 'src', 'runtime', 'mascot-hop-transition.js'), 'utf8');
+
+  const sb = env.win;
+  sb.__agPrismI18nCore = i18nCore;
+  sb.__agPrismI18nLocales = i18nLocales;
+  let lastYieldMode = 'none';
+  sb.__agDualMascotRig = {
+    mountDualMascotStage(rootEl, initOpts) {
+      lastYieldMode = initOpts?.yieldMode || 'none';
+      const a = env.mkEl('div', { class: 'ag-v2-mascot-actor' });
+      a.appendChild(env.mkEl('canvas', { class: 'ag-v2-mascot-canvas' }));
+      rootEl.appendChild(a);
+      return {
+        setState(st) { if (st && st.yieldMode !== undefined) lastYieldMode = st.yieldMode; },
+        syncPowerState() {},
+        notify() {},
+        dispose() {},
+      };
+    },
+  };
+  vm.runInNewContext(hopSrc, sb);
+  vm.runInNewContext(
+    `(${uiMainFactory.toString()})(${JSON.stringify({ ...cdp.DEFAULT_CONFIG, mascot: 'crab', motionLevel: 'off', smoothCaret: false })}, { version: '1.0.8-beta.4', codeHash: 'ask-peek-e2e' });`,
+    sb
+  );
+  const api = sb.__agPrism;
+
+  // 初始焦点在 pane1，不因 pane2 的 takeover 误 peek
+  assert.ok(pane1.card.querySelector('.ag-cs-crab'), '初始主宠挂载在 pane1');
+  assert.equal(lastYieldMode, 'none', '非活跃 pane2 的 takeover 不应干扰 pane1');
+
+  // 点击 pane2 问答选项 -> 切换焦点到 pane2 并立即进入 peek，且问答卡挂全周 prism-box 而无 bottom reflect
+  env.doc.dispatch('pointerdown', { target: tkOpt });
+  api.sync();
+  assert.ok(pane2.card.querySelector('.ag-cs-crab'), '点击 pane2 问答卡后主宠应转移到 pane2');
+  assert.equal(lastYieldMode, 'peek', 'pane2 问答卡可见时主宠必须进入 peek');
+  assert.equal(tkCard.getAttribute('data-ag-cs-prism-box'), '1', '问答卡必须启用全周 prism-box');
+  assert.equal(tkCard.hasAttribute('data-ag-cs-prism-reflect'), false, '问答卡不得残留 bottom-only reflect');
+
+  // 切回 pane1 且移除 pane2 局部 takeover，挂载全局无 CV 归属的可见 takeover 卡 -> 多 conversation-view 下仍应触发 peek
+  tkCard.remove();
+  sideQ.remove();
+  env.doc.dispatch('pointerdown', { target: pane1.editor });
+  api.sync();
+  assert.equal(lastYieldMode, 'none');
+
+  const globalTk = env.mkEl('div', { class: 'agy-takeover-frame', 'data-testid': 'interaction-takeover-card' }, { left: 100, top: 320, width: 520, height: 120, right: 620, bottom: 440 });
+  env.body.appendChild(globalTk);
+  api.sync();
+  assert.equal(lastYieldMode, 'peek', '多 conversation-view 场景下全局可见非 subagent takeover 卡仍必须触发 peek');
+
+  vm.runInNewContext(cdp.REMOVE_EXPRESSION, sb);
+  assert.equal(env.timers.size, 0);
+});

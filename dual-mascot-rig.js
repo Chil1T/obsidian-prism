@@ -1551,7 +1551,7 @@
       domTransformSkips: 0,
     };
 
-    const CANVAS_W = 96, CANVAS_H = 84, OX = 8, OY = 17, PEEK_Y = 3, MINI_PEEK_Y = 2;
+    const CANVAS_W = 96, CANVAS_H = 84, OX = 8, OY = 17, PEEK_Y = 7, MINI_PEEK_Y = 2;
     if (isFn(hostEl.replaceChildren)) hostEl.replaceChildren();
     else if (isFn(hostEl.removeChild)) { let c; while ((c = hostEl.firstChild || hostEl.children?.[0])) hostEl.removeChild(c); }
     else if (Array.isArray(hostEl.children)) hostEl.children.length = 0;

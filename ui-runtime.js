@@ -871,7 +871,7 @@ if (metricsKey !== lastMetricsKey) { const hadPrev = lastMetricsKey !== ''; last
 }
 
 // Composer Box & Clearance
-const _ts = (s) => `[data-testid="${s}"]`, T_TK = 'interaction-takeover-card', T_RP = 'running-items-panel', T_QM = 'queued-messages-card', T_SQ = 'side-question-panel', S_RP = _ts(T_RP), S_IB = _ts('agent-input-box'), S_SUB = _ts('subagent-tab-conversation');
+const _ts = (s) => `[data-testid="${s}"]`, T_TK = 'interaction-takeover-card', T_RP = 'running-items-panel', T_QM = 'queued-messages-card', T_SQ = 'side-question-panel', S_RP = _ts(T_RP), S_IB = _ts('agent-input-box'), S_SUB = `${_ts('subagent-tab-conversation')},${_ts('side-question-tab-conversation')}`; /* @host-compat */
 const TK_SEL = `${_ts(T_TK)}, ${_ts(T_SQ)}, .agy-takeover-frame`, S_AQO = _ts('ask-question-option'), A_Q = 'data-ag-cs-queued', A_QA = 'data-ag-queued-act', A_TK = 'data-ag-cs-takeover', A_TKO = A_TK + '-open', A_TT = 'data-ag-cs-top-toolbar', S_TB = _ts('input-box-bottom-toolbar'), A_PB = 'data-ag-cs-prism-box', A_PM = 'data-ag-cs-prism-mirror';
 const findTkCards = (sc) => {
 if (!sc) return [];
@@ -973,7 +973,7 @@ const slot = clHas(ib[K_PE], 'contents') ? ib[K_PE] : ib, wrap = slot[K_PE], sco
 if (scope) {
 const seen = new Set();
 let all = findTkCards(scope);
-if (og && !all.length && scope !== D && qa(D, S_CV).length <= 1) all = findTkCards(D);
+if (og && !all.length && scope !== D) all = findTkCards(D).filter((c) => isTkInScope(c, scope));
 for (let i = all.length - 1; i >= 0; i--) {
 const c = all[i]; if (!inSub && cl(c, S_SUB)) continue;
 let tgt = c, hid = false;
@@ -1008,23 +1008,29 @@ for (const [el, a, on, g] of p.ops) setClr(el, a, on, g);
 if (p.og) { const h = de(); if (p.tko) setAttrIfChanged(h, A_TKO, '1'); else if (ha(h, A_TKO)) ra(h, A_TKO); }
 };
 
-const S_CV = '[data-testid="conversation-view"]', S_CC = '.surface-composer-card';
+const S_CV = '[data-testid="conversation-view"]', S_CC = '.surface-composer-card', S_IBCC = `${S_IB} ${S_CC}`;
 let activePaneCard = null, activeConvView = null, lastNotifiedPaneCard = null, lastNotifiedConvView = null;
 const lastModelByCard = new WeakMap();
 const isLiveMainCard = (c) => !!(c && c[K_IC] !== false && !cl(c, S_SUB) && !c.hidden && c.style?.display !== 'none');
 const isLiveMainConv = (v) => !!(v && v[K_IC] !== false && !cl(v, S_SUB) && !v.hidden && v.style?.display !== 'none' && !cl(v, '.agy-home') && !qs(v, '.agy-home'));
+const isTkInScope = (e, sc) => !cl(e, S_SUB) && !(sc && cl(e, S_CV) && cl(e, S_CV) !== sc);
 const findCardForTarget = (t) => {
 if (!t?.closest) return null;
-for (const [sel, q] of [[S_CC, 0], [S_IB, S_CC], [S_CV, `${S_IB} ${S_CC},${S_CC}`], ['[data-tiling-pane]', `${S_IB} ${S_CC}`]]) {
-const h = cl(t, sel);
-if (!h || (sel === S_CV && cl(h, S_SUB))) continue;
-const c = q ? qs(h, q) : h;
+const qCC = `${S_IBCC},${S_CC}`, c0 = cl(t, S_CC) || qs(cl(t, S_IB), S_CC);
+if (isLiveMainCard(c0)) return c0;
+for (const s of [S_CV, '[data-tiling-pane]', '[data-side-panel-body]']) {
+const h = cl(t, s), c = h && (s !== S_CV || !cl(h, S_SUB)) ? qs(h, qCC) : null;
 if (isLiveMainCard(c)) return c;
+}
+const tk = cl(t, TK_SEL);
+if (tk && !cl(tk, S_SUB)) for (let p = tk[K_PE], d = 0; p && p !== D.body && d < 5; p = p[K_PE], d++) {
+const pt = tidOf(p); if (pt === 'aux-pane-split' || pt === 'sidebar-split') break;
+const c = qs(p, qCC); if (isLiveMainCard(c)) return c;
 }
 return null;
 };
 const findConvForTarget = (t, fb = null) => {
-const cv = (t?.closest && cl(t, S_CV)) || (fb?.closest && cl(fb, S_CV)) || (t?.closest && qs(cl(t, '[data-tiling-pane]'), S_CV)) || null;
+const cv = cl(t, S_CV) || cl(fb, S_CV) || qs(cl(t, '[data-tiling-pane]'), S_CV) || null;
 return isLiveMainConv(cv) ? cv : null;
 };
 const notifyActivePaneModules = (card, cv, force = false) => {
@@ -1044,10 +1050,7 @@ if (destroyed || !t?.closest || cl(t, '#' + SETTINGS_SEC_ID + ',#ag-prism-period
 const nc = findCardForTarget(t), nv = findConvForTarget(t, nc);
 if (!nc && !nv) return false;
 const hop = getMascotHop();
-if (nc && isMascotEnabled() && isFn(hop?.shouldTransferMascotFocus)) {
-const dec = hop.shouldTransferMascotFocus({ target: t, targetCard: nc, currentCard: activePaneCard || msAnc, cards: AF(qa(D, `${S_IB} ${S_CC}`)).filter(isLiveMainCard), doc: D });
-if (!dec?.allow) return false;
-}
+if (nc && isMascotEnabled() && isFn(hop?.shouldTransferMascotFocus) && !hop.shouldTransferMascotFocus({ target: t, targetCard: nc, currentCard: activePaneCard || msAnc, cards: AF(qa(D, S_IBCC)).filter(isLiveMainCard), doc: D })?.allow) return false;
 const chg = (nc && nc !== activePaneCard) || (nv && nv !== activeConvView);
 if (nc) activePaneCard = nc;
 if (nv) activeConvView = nv;
@@ -1067,24 +1070,15 @@ return pick;
 };
 
 let latestPrimaryModelInfo = null, latestPaneModelMap = new Map(), lastSyncedAwaitingDecision = null, lastSyncedHasError = false;
-const detectVisibleDecisionTakeover = (m = null, sc = null) => {
-if (sc && isLiveMainConv(sc)) {
-for (const el of findTkCards(sc)) if (!cl(el, S_SUB) && !isHidEl(el, false, m)) return true;
-if (qa(D, S_CV).length > 1) return false;
-}
-for (const el of findTkCards(D)) {
-if (cl(el, S_SUB) || (sc && cl(el, S_CV) && cl(el, S_CV) !== sc)) continue;
-if (!isHidEl(el, false, m)) return true;
-}
+const detectVisibleDecisionTakeover = (m = null, sc = null, incAttr = false) => {
+if (sc && isLiveMainConv(sc)) for (const el of findTkCards(sc)) if (!cl(el, S_SUB) && !isHidEl(el, false, m)) return true;
+for (const el of incAttr ? [...findTkCards(D), ...qa(D, `[${A_TK}="1"]`)] : findTkCards(D)) if (isTkInScope(el, sc) && !isHidEl(el, false, m)) return true;
 return false;
 };
 const measureCrabClearanceAll = () => {
-const cards = AF(qa(D, `${S_IB} ${S_CC}`)), pri = resolveActivePrimaryCard(cards), priCv = findConvForTarget(pri, pri);
+const cards = AF(qa(D, S_IBCC)), pri = resolveActivePrimaryCard(cards), priCv = findConvForTarget(pri, pri);
 const mOn = isMascotEnabled(), m = new Map(), pTk = new Set(), byCard = new Map();
-for (const c of pri ? [pri, ...cards.filter((x) => x !== pri)] : cards) {
-const ip = c === pri;
-byCard.set(c, measureCardClr(c, cl(c, S_IB), ip && mOn, ip, m, pTk));
-}
+for (const c of pri ? [pri, ...cards.filter((x) => x !== pri)] : cards) byCard.set(c, measureCardClr(c, cl(c, S_IB), c === pri && mOn, c === pri, m, pTk));
 return { cards, primaryCard: pri, primaryConv: priCv, byCard, awaitingDecision: detectVisibleDecisionTakeover(m, priCv) };
 };
 const syncConvAuraSemantics = (activeInfo, preAwaiting) => {
@@ -1101,13 +1095,13 @@ if (!qCards?.length) return;
 const allow = cfg.composerRestyle !== false && ga(de(), 'data-ag-prism-mode') !== 'chat', AR = 'data-ag-cs-prism-reflect';
 let anyNew = false, anyOff = false;
 for (const q of qCards) {
-if (q[K_PE] && cl(q[K_PE], '[data-testid="interaction-takeover-card"], .agy-takeover-frame')) continue;
+if (q[K_PE] && cl(q[K_PE], `${_ts(T_TK)},.agy-takeover-frame`)) continue;
+const isTk = tidOf(q) === T_TK || clHas(q, 'agy-takeover-frame');
 if (allow && !cl(q, S_SUB)) {
-if (ga(q, A_PB) !== '1' || ga(q, AR) !== 'bottom') anyNew = true;
-setAttrIfChanged(q, A_PB, '1'); setAttrIfChanged(q, AR, 'bottom');
-} else if (ha(q, A_PB) || ha(q, AR)) {
-clrPb(q); ra(q, AR); anyOff = true;
-}
+if (ga(q, A_PB) !== '1' || (isTk ? ha(q, AR) : ga(q, AR) !== 'bottom')) anyNew = true;
+setAttrIfChanged(q, A_PB, '1');
+isTk ? ha(q, AR) && ra(q, AR) : setAttrIfChanged(q, AR, 'bottom');
+} else if (ha(q, A_PB) || ha(q, AR)) { clrPb(q); ra(q, AR); anyOff = true; }
 }
 if (anyNew) prismRimCtl.mountNewBoxes ? prismRimCtl.mountNewBoxes() : invRim();
 else if (anyOff) invRim();
@@ -1180,32 +1174,17 @@ syncQueuedPrismBoxes();
 latestPrimaryModelInfo = primaryModelInfo;
 latestPaneModelMap = paneModelMap;
 if (primaryCard || primaryConv) notifyActivePaneModules(primaryCard, primaryConv);
-const priPlan = primaryCard ? cPlan.byCard.get(primaryCard) : null;
-const pulseOpen = readOpenPulseCardState();
-const pulseCoversPri = !!(pulseOpen.openNow && (!pulseOpen.openHost || !primaryConv || primaryConv.contains?.(pulseOpen.openHost) || primaryCard?.contains?.(pulseOpen.openHost)));
-const mascotShouldPeek = !!(
-cPlan.awaitingDecision ||
-priPlan?.tko ||
-priPlan?.mo ||
-priPlan?.ops?.some(([, attr, on]) => on && attr !== A_TT) ||
-pulseCoversPri ||
-ga(de(), 'data-ag-pp-open') === '1'
-);
+const pPl = primaryCard ? cPlan.byCard.get(primaryCard) : null, pO = readOpenPulseCardState();
+const pCov = !!(pO.openNow && (!pO.openHost || !primaryConv || primaryConv.contains?.(pO.openHost) || primaryCard?.contains?.(pO.openHost)));
+const mascotShouldPeek = !!(cPlan.awaitingDecision || pPl?.tko || pPl?.mo || pPl?.ops?.some(([, a, o]) => o && a !== A_TT) || detectVisibleDecisionTakeover(null, primaryConv, true) || pCov || ga(de(), 'data-ag-pp-open') === '1');
 const activeInfoForCrab = getLightweightActiveInfo(primaryCard);
-queuedCrabAnchor = priPlan?.queuedAnchor || null;
-syncCrab(primaryCard, activeInfoForCrab, primaryModelInfo, mascotShouldPeek ? 'peek' : 'none', priPlan?.queuedRoofH || 0);
+queuedCrabAnchor = pPl?.queuedAnchor || null;
+syncCrab(primaryCard, activeInfoForCrab, primaryModelInfo, mascotShouldPeek ? 'peek' : 'none', pPl?.queuedRoofH || 0);
 syncConvAuraSemantics(activeInfoForCrab, cPlan.awaitingDecision);
-if (hs.pendingModelShiftNotify) {
-hs.pendingModelShiftNotify = false;
-notifyMascot('model-shift');
-}
+if (hs.pendingModelShiftNotify) { hs.pendingModelShiftNotify = false; notifyMascot('model-shift'); }
 modelGlyphCtl.syncModelSelectorPanel(primaryModelInfo);
 if (!skipSparks) streamChoreoCtl.syncThinkingSparks(primaryModelInfo, paneModelMap);
-if (measured && 'caretList' in measured) {
-smoothCaretCtl.applyMutations(measured.caretList, false);
-} else {
-smoothCaretCtl.sync(false, false);
-}
+measured && 'caretList' in measured ? smoothCaretCtl.applyMutations(measured.caretList, false) : smoothCaretCtl.sync(false, false);
 }
 
 // Host Animated Icons
