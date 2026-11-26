@@ -173,55 +173,27 @@ const LZSS_SAFE_ASCII = (() => {
 // 纯同步零-eval UTF-16 LZSS 压缩器（~2.7ms 解码，自适应大窗口覆盖全量 CSS/词典，支持完整 BMP/CJK/Emoji）
 function packLzssJsExpr(text, protectFirstList = []) {
   if (typeof text !== 'string' || text.length < 1024) return null;
-  const n = text.length;
-  const usedLow = new Uint8Array(2048);
-  for (let i = 0; i < n; i++) {
-    const cc = text.charCodeAt(i);
-    if (cc >= 0x00a1 && cc < 0x0800) usedLow[cc] = 1;
-  }
+  const n = text.length, usedLow = new Uint8Array(2048);
+  for (let i = 0; i < n; i++) { const cc = text.charCodeAt(i); if (cc >= 0x00a1 && cc < 0x0800) usedLow[cc] = 1; }
   // 寻找 0x00A1..0x07FF（全部 2 字节 UTF-8、无转义、无代理项）内最长连续空闲区间
-  let bestStart = -1;
-  let bestLen = 0;
-  let curStart = -1;
+  let bestStart = -1, bestLen = 0, curStart = -1;
   for (let cc = 0x00a1; cc <= 0x0800; cc++) {
-    if (cc < 0x0800 && !usedLow[cc]) {
-      if (curStart < 0) curStart = cc;
-    } else if (curStart >= 0) {
-      const len = cc - curStart;
-      if (len > bestLen) {
-        bestLen = len;
-        bestStart = curStart;
-      }
-      curStart = -1;
-    }
+    if (cc < 0x0800 && !usedLow[cc]) { if (curStart < 0) curStart = cc; }
+    else if (curStart >= 0) { const len = cc - curStart; if (len > bestLen) { bestLen = len; bestStart = curStart; } curStart = -1; }
   }
   if (bestLen < 512) return null;
 
-  const tokStart = bestStart;
-  const tokEnd = bestStart + bestLen;
-  const BASE = LZSS_SAFE_ASCII.length; // 91
-  const isLarge = n > 80000;
-  const shortLenSpan = isLarge ? 18 : 22;
-  const longLenSpan = isLarge ? 56 : 96;
-  const shortMaxLen = 2 + shortLenSpan;
-  const longMaxLen = 3 + longLenSpan;
-  const maxSteps = isLarge ? 1024 : 768;
-  const shortSlots = Math.floor(bestLen * (isLarge ? 0.5 : 0.62));
-  const longBase = tokStart + shortSlots;
-  const longSlots = bestLen - shortSlots;
-  const shortMaxDist = Math.floor((shortSlots * BASE) / shortLenSpan);
-  const longMaxDist = Math.min(262144, Math.floor((longSlots * BASE * BASE) / longLenSpan));
+  const tokStart = bestStart, tokEnd = bestStart + bestLen, BASE = LZSS_SAFE_ASCII.length, isLarge = n > 80000;
+  const shortLenSpan = isLarge ? 18 : 22, longLenSpan = isLarge ? 56 : 96, shortMaxLen = 2 + shortLenSpan, longMaxLen = 3 + longLenSpan, maxSteps = isLarge ? 1024 : 768;
+  const shortSlots = Math.floor(bestLen * (isLarge ? 0.5 : 0.62)), longBase = tokStart + shortSlots, longSlots = bestLen - shortSlots;
+  const shortMaxDist = Math.floor((shortSlots * BASE) / shortLenSpan), longMaxDist = Math.min(262144, Math.floor((longSlots * BASE * BASE) / longLenSpan));
   if (shortMaxDist < 64 || longMaxDist < 512) return null;
 
   const protectedPos = protectFirstList && protectFirstList.length > 0 ? new Uint8Array(n) : null;
   if (protectedPos) {
     for (let p = 0; p < protectFirstList.length; p++) {
-      const lit = protectFirstList[p];
-      if (!lit) continue;
-      const idx = text.indexOf(lit);
-      if (idx >= 0) {
-        for (let k = 0; k < lit.length; k++) protectedPos[idx + k] = 1;
-      }
+      const lit = protectFirstList[p], idx = lit ? text.indexOf(lit) : -1;
+      if (idx >= 0) for (let k = 0; k < lit.length; k++) protectedPos[idx + k] = 1;
     }
   }
 
@@ -602,10 +574,25 @@ const CSS_BUCKET_ORDER = Object.freeze([
   'core', 'paletteWarm', 'paletteHost', 'accentCustom', 'convRipple', 'thoughtExt', 'viewHome', 'viewSidebar', 'viewSettings', 'motionOff', 'motionSubtle', 'motionFull', 'themeLight',
 ]);
 const CSS_BUCKET_MARK_PREFIX = '/*@ag:';
-const VIEW_HOME_RE = /(?:\.agy-home\b|\.ag-cs-home-|\.ag-cs-quota-|\.ag-cs-qbar-|\[data-ag-cs-home=)/;
+const VIEW_HOME_RE = /(?:\.agy-home\b|\.ag-cs-home-|\.ag-cs-quota-|\.ag-cs-qbar-|\[data-ag-cs-home="(?:studio|classic)"\])/;
 const VIEW_SIDEBAR_RE = /(?:\[data-ag-cs-sidebar="on"\]|\.ag-cs-sb-more-|\[data-ag-sb-more-)/;
 const VIEW_SETTINGS_RE = /(?:#ag-cs-settings-sec\b|\[data-ag-cs-settings-dlg="1"\]|\bdiv\[role="dialog"\]|\.agy-dialog\b)/;
-const THOUGHT_EXT_RE = /(?:\.ag-prism-thought-|\[data-ag-prism-thought-view=)/;
+const THOUGHT_EXT_RE = /(?:\.ag-prism-thought-|\[data-ag-prism-thought-view=|\[data-op-(?:thought-panel|zh-))/;
+const KEYFRAME_BUCKET_MAP = { 'ag-b-gr': 'viewHome', 'ag-cs-sonar-pulse-light': 'themeLight', 'ag-prism-thought-chunk-in': 'thoughtExt' };
+const BUCKET_PREDICATES = [
+  ['themeLight', (s) => s.includes('[data-ag-cs-theme="light"]')],
+  ['paletteWarm', (s) => s.includes('[data-ag-cs-palette="warm"]')],
+  ['paletteHost', (s) => s.includes('[data-ag-cs-palette="host"]')],
+  ['accentCustom', (s) => s.includes('[data-ag-cs-accent')],
+  ['convRipple', (s) => s.includes('[data-ag-cs-conv-ripple="1"]')],
+  ['viewHome', (s) => VIEW_HOME_RE.test(s)],
+  ['viewSettings', (s) => VIEW_SETTINGS_RE.test(s)],
+  ['thoughtExt', (s) => THOUGHT_EXT_RE.test(s)],
+  ['motionOff', (s) => s.includes('[data-ag-cs-motion="off"]')],
+  ['motionSubtle', (s) => s.includes('[data-ag-cs-motion="subtle"]')],
+  ['motionFull', (s) => s.includes('[data-ag-cs-motion="standard"]') || s.includes('[data-ag-cs-motion="ultra"]') || s.includes(':not([data-ag-cs-motion])')],
+  ['viewSidebar', (s) => VIEW_SIDEBAR_RE.test(s)],
+];
 
 // 词法安全地切分顶层 CSS 规则并按主题/视图/动效归类分片
 function splitTopLevelCssRules(css) {
@@ -623,22 +610,6 @@ function splitTopLevelCssRules(css) {
   return rules;
 }
 
-function stripNotPseudos(sel) {
-  let out = '';
-  for (let i = 0; i < sel.length; i++) {
-    if (sel.startsWith(':not(', i)) {
-      for (let d = 1, j = i + 5; j < sel.length && d > 0; j++) {
-        if (sel[j] === '\\') { j++; continue; }
-        if (sel[j] === '(') d++; else if (sel[j] === ')') d--;
-        i = j;
-      }
-      continue;
-    }
-    out += sel[i];
-  }
-  return out;
-}
-
 function splitSelectorTopCommas(sel) {
   const parts = [];
   for (let i = 0, st = 0, d = 0, n = sel.length; i <= n; i++) {
@@ -652,24 +623,55 @@ function splitSelectorTopCommas(sel) {
   return parts;
 }
 
-function classifyCssRule(rule) {
-  if (rule[0] === '@') return (rule.startsWith('@media') || rule.startsWith('@supports')) && rule.includes('.ag-cs-home-') ? 'viewHome' : 'core';
-  const brace = rule.indexOf('{'), rawSel = brace > 0 ? rule.slice(0, brace) : rule, posSel = stripNotPseudos(rawSel);
-  if (posSel.includes('[data-ag-cs-theme="light"]')) return 'themeLight';
-  if (posSel.includes('[data-ag-cs-palette="warm"]') && !posSel.includes('[data-ag-cs-palette="obsidian"]') && !posSel.includes('[data-ag-cs-palette="host"]')) return 'paletteWarm';
-  if (posSel.includes('[data-ag-cs-palette="host"]') && !posSel.includes('[data-ag-cs-palette="obsidian"]') && !posSel.includes('[data-ag-cs-palette="warm"]')) return 'paletteHost';
-  if (posSel.includes('[data-ag-cs-motion="subtle"]')) return 'motionSubtle';
-  if (posSel.includes('[data-ag-cs-motion="standard"]') || posSel.includes('[data-ag-cs-motion="ultra"]')) return 'motionFull';
-  if (posSel.includes('[data-ag-cs-motion="off"]') && !posSel.includes('[data-ag-cs-win-blur="1"]')) return 'motionOff';
-  if (posSel.includes('[data-ag-cs-conv-ripple="1"]')) return 'convRipple';
-  if (posSel.includes('[data-ag-cs-accent') && !posSel.includes('[data-ag-cs-sonar="1"]')) return 'accentCustom';
-  const parts = splitSelectorTopCommas(rawSel);
-  if (parts.length > 0) {
-    if (parts.every((p) => VIEW_HOME_RE.test(p))) return 'viewHome';
-    if (parts.every((p) => VIEW_SIDEBAR_RE.test(p))) return 'viewSidebar';
-    if (parts.every((p) => VIEW_SETTINGS_RE.test(p))) return 'viewSettings';
-    if (parts.every((p) => THOUGHT_EXT_RE.test(p))) return 'thoughtExt';
+function skipParenBlock(s, openIdx) {
+  for (let j = openIdx + 1, d = 1, n = s.length; j < n; j++) {
+    const c = s[j];
+    if (c === '\\') { j++; continue; }
+    if (c === '"' || c === "'") { for (j++; j < n && s[j] !== c; j++) if (s[j] === '\\') j++; continue; }
+    if (c === '(') d++; else if (c === ')' && --d === 0) return j;
   }
+  return s.length - 1;
+}
+
+function parseSelectorShellAndGroups(sel) {
+  let shell = '';
+  const groups = [];
+  for (let i = 0, n = sel.length; i < n; i++) {
+    const c = sel[i];
+    if (c === '\\') { shell += sel.slice(i, i + 2); i++; continue; }
+    if (c === '"' || c === "'") { const st = i; for (i++; i < n && sel[i] !== c; i++) if (sel[i] === '\\') i++; shell += sel.slice(st, i + 1); continue; }
+    if (sel.startsWith(':not(', i) && sel[i - 1] !== ':') {
+      const end = skipParenBlock(sel, i + 4);
+      if (sel.slice(i + 5, end).trim() === '[data-ag-cs-motion]') shell += ':not([data-ag-cs-motion])';
+      i = end; continue;
+    }
+    const fnLen = sel.startsWith(':is(', i) ? 4 : sel.startsWith(':where(', i) ? 7 : 0;
+    if (fnLen && sel[i - 1] !== ':') { const end = skipParenBlock(sel, i + fnLen - 1); groups.push(splitSelectorTopCommas(sel.slice(i + fnLen, end))); i = end; continue; }
+    shell += c;
+  }
+  return { shell, groups };
+}
+
+function selectorEveryBranchMatches(sel, pred) {
+  const parts = splitSelectorTopCommas(sel);
+  return parts.length > 0 && parts.every((part) => {
+    const { shell, groups } = parseSelectorShellAndGroups(part);
+    return pred(shell) || groups.some((mems) => mems.length > 0 && mems.every((m) => selectorEveryBranchMatches(m, pred)));
+  });
+}
+
+function classifyCssRule(rule) {
+  if (rule[0] === '@') {
+    const km = /^@keyframes\s+([A-Za-z0-9_-]+)/.exec(rule);
+    if (km) return KEYFRAME_BUCKET_MAP[km[1]] || 'core';
+    if (!rule.startsWith('@media') && !rule.startsWith('@supports')) return 'core';
+    const b1 = rule.indexOf('{'), b2 = rule.lastIndexOf('}');
+    const inner = b1 >= 0 && b2 > b1 ? splitTopLevelCssRules(rule.slice(b1 + 1, b2)) : [];
+    const first = inner.length ? classifyCssRule(inner[0]) : 'core';
+    return first !== 'core' && inner.every((r) => classifyCssRule(r) === first) ? first : 'core';
+  }
+  const brace = rule.indexOf('{'), rawSel = brace > 0 ? rule.slice(0, brace) : rule;
+  for (let i = 0; i < BUCKET_PREDICATES.length; i++) if (selectorEveryBranchMatches(rawSel, BUCKET_PREDICATES[i][1])) return BUCKET_PREDICATES[i][0];
   return 'core';
 }
 

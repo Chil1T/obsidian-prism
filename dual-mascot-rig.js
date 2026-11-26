@@ -700,11 +700,11 @@
       s.shadow = 'w14'; s.body = 'squash'; s.legs = isWhale ? null : 'crouch';
       if (isFelineRig) { s.ears = 'nod'; s.eyes = 'half'; if (isWhale) s.paws = 'tuck'; } else s.eyes = shiftFrame(p.eyes.squint, 0, 1);
     },
-    loaf(s, { isCat, isWhale, poseKey, phase4, tickIdx }) {
+    loaf(s, { isCat, isWhale, poseKey, tickIdx }) {
       if (!isCat && !isWhale) return;
       s.shadow = 'w14'; s.ears = 'loaf'; s.body = 'loaf'; s.legs = null;
       if (isWhale) s.paws = 'tuck';
-      s.eyes = poseKey === 'sleep' || isWhale || phase4 === 3 ? 'loafShut' : 'loafHalf';
+      s.eyes = 'loafShut';
       s.tail = poseKey === 'sleep' || isWhale ? 'loaf' : floor(tickIdx / 4) % 2 ? 'loaf' : 'curl';
     },
     sleep(s, c) {
@@ -2285,6 +2285,7 @@
 
     const resolvePoseFor = (actor, now) => {
       if (actor.dragging) return 'dangle';
+      if (yieldMode === 'peek') return 'peek';
       const st = seqStep(actor);
       if (st) return st.pose;
       if (actor.overridePose && now < actor.overrideUntil) return actor.overridePose;
@@ -2295,7 +2296,6 @@
         actor.faceDir = null;
         actor.clipParam = null;
       }
-      if (yieldMode === 'peek') return 'peek';
       const isWorker = isWorkingActor(actor);
       if (hasError && isWorker) return 'angry';
       if (streaming) {
@@ -4883,14 +4883,21 @@
           renderAllFrames();
         }
       },
+      'roof-land'() {
+        if (reducedMotion || dozing || yieldMode === 'peek' || isVramSleepState()) return;
+        for (const a of activeMainActors()) {
+          if (!a.dragging && !a.seq) startClip(a, 'squash', 240);
+        }
+      },
     };
     const handleNotify = (event, payload) => {
       if (disposed) return;
       const fn = hasOwn(NOTIFY, event) ? NOTIFY[event] : null;
       if (!fn) return;
       const pl = payload && typeof payload === 'object' ? payload : {};
-      if (event === 'host-sleep') {
+      if (event === 'host-sleep' || event === 'roof-land') {
         fn(pl);
+        if (event === 'roof-land' && !reducedMotion && !dozing && yieldMode !== 'peek' && !isVramSleepState()) renderAllFrames();
         return;
       }
       const wasDozing = dozing;
@@ -4905,6 +4912,7 @@
 
     // 鼠标靠近舞台或切回可见标签页时，0ms 恢复 100ms 灵敏心跳
     const onApproach = () => {
+      if (yieldMode === 'peek') return;
       markActivity();
     };
     if (isFn(hostEl.addEventListener)) {
@@ -4968,12 +4976,17 @@
       if (hostEl) {
         if (isPeek) hostEl.setAttribute?.('data-ag-mascot-peek', '1');
         else hostEl.removeAttribute?.('data-ag-mascot-peek');
+        if (hostEl.style) {
+          hostEl.style.pointerEvents = isPeek ? 'none' : '';
+          hostEl.style.zIndex = isPeek ? '8' : '';
+        }
       }
       if (isPeek) {
         dragReleaseHooks.forEach((fn) => { try { fn(); } catch {} });
       }
       for (const a of activeMainActors()) {
         if (!a?.el) continue;
+        if (isPeek && !a.dragging) { a.seq = null; a.overridePose = null; a.overrideUntil = 0; }
         a.el.setAttribute?.('tabindex', '-1');
         if (isPeek) a.el.setAttribute?.('aria-hidden', 'true');
         else a.el.removeAttribute?.('aria-hidden');
@@ -5248,7 +5261,7 @@
           miniPileEnabled,
           quadEnabled,
           reducedMotion,
-          // 生态联动与按需渲染遥测只读诊断
+          yieldMode,
           dozing,
           orchestrator,
           rimLight: { active: rim.on, strength: round(rim.s * 100) / 100, toneKey: rim.t },

@@ -2202,3 +2202,126 @@ test('Navigator outline mounts dedicated trigger, yields to Base UI turn tooltip
     assert.equal(rail.querySelector('.ag-cs-nav-outline-trigger'), null, 'destroy() must remove .ag-cs-nav-outline-trigger');
   }
 });
+
+test('Dual-pane .agy-scroll-bottom strict local viewport isolation (subagent/side-question never scrolls main conversation) & local passive scroll scope', () => {
+  const env = createMockEnv();
+  const split = env.createElement('div', { 'data-testid': 'aux-pane-split' });
+
+  // Left pane: main conversation view with its own autoscroll-viewport & scroll-bottom button
+  const mainPane = env.createElement('div', { 'data-main-content-body': 'true' });
+  const mainConv = env.createElement('div', { 'data-testid': 'conversation-view' });
+  const mainVp = env.createElement('div', { 'data-testid': 'autoscroll-viewport' });
+  mainVp.scrollHeight = 2400;
+  mainVp.clientHeight = 600;
+  mainVp.scrollTop = 120;
+  const mainBtn = env.createElement('button', { class: 'agy-scroll-bottom' });
+  mainConv.appendChild(mainVp);
+  mainConv.appendChild(mainBtn);
+  mainPane.appendChild(mainConv);
+
+  // Right pane A: subagent sidebar with its own local autoscroll-viewport (no conversation-view ancestor)
+  const sideBody = env.createElement('div', { 'data-side-panel-body': 'true' });
+  const subTab = env.createElement('div', { 'data-testid': 'subagent-tab-conversation' });
+  const subVp = env.createElement('div', { 'data-testid': 'autoscroll-viewport' });
+  subVp.scrollHeight = 1600;
+  subVp.clientHeight = 400;
+  subVp.scrollTop = 40;
+  const subBtn = env.createElement('button', { class: 'agy-scroll-bottom' });
+  subTab.appendChild(subVp);
+  subTab.appendChild(subBtn);
+
+  // Right pane B: side-question panel WITHOUT autoscroll-viewport (uses plain local scroll container)
+  const sideQ = env.createElement('div', { 'data-testid': 'side-question-panel' });
+  const sidePlainScroll = env.createElement('div', { class: 'overflow-y-auto' });
+  sidePlainScroll.scrollHeight = 1200;
+  sidePlainScroll.clientHeight = 320;
+  sidePlainScroll.scrollTop = 50;
+  const sideQBtn = env.createElement('button', { class: 'agy-scroll-bottom' });
+  sideQ.appendChild(sidePlainScroll);
+  sideQ.appendChild(sideQBtn);
+
+  // Right pane C: bare sidebar pane directly under aux-pane-split without S_VP
+  const barePane = env.createElement('div', { class: 'aux-custom-pane' });
+  const bareBtn = env.createElement('button', { class: 'agy-scroll-bottom' });
+  barePane.appendChild(bareBtn);
+
+  sideBody.appendChild(subTab);
+  sideBody.appendChild(sideQ);
+  split.appendChild(mainPane);
+  split.appendChild(sideBody);
+  split.appendChild(barePane);
+  env.body.appendChild(split);
+
+  const rafQueue = [];
+  let nowMs = 0;
+  env.win.performance = { now: () => nowMs };
+  env.win.requestAnimationFrame = (cb) => { rafQueue.push(cb); return rafQueue.length; };
+  env.win.cancelAnimationFrame = () => {};
+
+  const ctl = enhancerMod.createHostEnhancerController({
+    doc: env.doc,
+    win: env.win,
+    getLang: () => 'zh-CN',
+    getConfig: () => ({ scrollBottomMotion: 'smooth', motionLevel: 'standard' }),
+  });
+
+  try {
+    // 1) Clicking side-question .agy-scroll-bottom (no local S_VP) MUST NOT fall back to main conversation or swallow native click
+    assert.equal(ctl.runFastScrollToBottom(sideQBtn), false, 'side-question panel without local S_VP must return false');
+    let sideQPrevented = false;
+    let sideQStopped = false;
+    env.win.dispatchEvent({
+      type: 'click',
+      target: sideQBtn,
+      preventDefault() { sideQPrevented = true; },
+      stopPropagation() { sideQStopped = true; },
+    });
+    assert.equal(sideQPrevented, false, 'Must NOT preventDefault when no local viewport exists');
+    assert.equal(sideQStopped, false, 'Must NOT stopPropagation when no local viewport exists');
+    assert.equal(mainVp.scrollTop, 120, 'Main conversation scrollTop must remain completely untouched');
+
+    // Bare sidebar pane under aux-pane-split must stop at aux-pane-split and never cross into main pane
+    assert.equal(ctl.runFastScrollToBottom(bareBtn), false, 'Must stop at aux-pane-split boundary and never cross panes');
+    assert.equal(mainVp.scrollTop, 120);
+
+    // 2) Clicking subagent .agy-scroll-bottom scrolls ONLY subagent local viewport, never main conversation
+    let subPrevented = false;
+    let subStopped = false;
+    env.win.dispatchEvent({
+      type: 'click',
+      target: subBtn,
+      preventDefault() { subPrevented = true; },
+      stopPropagation() { subStopped = true; },
+    });
+    assert.equal(subPrevented, true, 'Local subagent viewport scroll-bottom click should be handled smoothly');
+    assert.equal(subStopped, true);
+    nowMs = 800;
+    while (rafQueue.length) rafQueue.shift()();
+    assert.equal(subVp.scrollTop, 1200, 'Subagent viewport must glide to its own bottom');
+    assert.equal(mainVp.scrollTop, 120, 'Scrolling subagent pane must NEVER move main conversation viewport');
+
+    // 3) Clicking main conversation .agy-scroll-bottom scrolls ONLY main conversation viewport
+    subVp.scrollTop = 40;
+    nowMs = 1000;
+    assert.equal(ctl.runFastScrollToBottom(mainBtn), true);
+    nowMs = 1800;
+    while (rafQueue.length) rafQueue.shift()();
+    assert.equal(mainVp.scrollTop, 1800, 'Main viewport must glide to its own bottom');
+    assert.equal(subVp.scrollTop, 40, 'Scrolling main pane must NEVER move subagent viewport');
+
+    // 4) onWinScrollPassive supports local scrollable containers beyond S_CV without cross-pane bleed
+    env.win.dispatchEvent({ type: 'scroll', target: subVp });
+    assert.equal(subTab.getAttribute('data-ag-scrolling'), '1', 'Subagent viewport scroll must mark local subagent container');
+    assert.equal(mainConv.hasAttribute('data-ag-scrolling'), false, 'Subagent scroll must not mark main conversation');
+
+    env.win.dispatchEvent({ type: 'scroll', target: sidePlainScroll });
+    assert.equal(sideQ.getAttribute('data-ag-scrolling'), '1', 'Plain local scrollable container in side-question-panel must mark its local scope');
+    assert.equal(subTab.hasAttribute('data-ag-scrolling'), false, 'Switching active scroll scope must clear previous scope marker');
+    assert.equal(mainConv.hasAttribute('data-ag-scrolling'), false);
+  } finally {
+    ctl.destroy();
+    assert.equal(sideQ.hasAttribute('data-ag-scrolling'), false);
+    assert.equal(subTab.hasAttribute('data-ag-scrolling'), false);
+    assert.equal(mainConv.hasAttribute('data-ag-scrolling'), false);
+  }
+});
