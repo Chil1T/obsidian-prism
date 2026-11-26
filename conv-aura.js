@@ -233,7 +233,7 @@
       if (overrideAmbient !== null) return normAmbientVal(overrideAmbient);
       if (typeof getAmbientIntensity === 'function') return normAmbientVal(getAmbientIntensity());
       try {
-        const raw = getHtml()?.getAttribute?.('data-ag-cs-ambient');
+        const raw = ga('data-ag-cs-ambient');
         if (raw !== null && raw !== '') return normAmbientVal(raw);
       } catch {}
       return 1;
@@ -241,7 +241,7 @@
 
     function resolveSpectrum() {
       const sp = overrideSpectrum ?? getSpectrumMode?.();
-      return (!sp || sp === 'follow' || sp === 'default') && isDarkTheme() && getHtml()?.getAttribute?.('data-ag-cs-dark-aura-style') === 'neon' ? 'neon' : sp;
+      return (!sp || sp === 'follow' || sp === 'default') && isDarkTheme() && ga('data-ag-cs-dark-aura-style') === 'neon' ? 'neon' : sp;
     }
 
     function checkWindowFocused() {
