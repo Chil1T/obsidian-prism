@@ -563,3 +563,215 @@ test('4) docs/CONTRIBUTORS.md credits @Gruu6y (#111), @DDykarc (#114/#115), and 
   assert.ok(contrib.includes('DDykarc') && contrib.includes('#114') && contrib.includes('#115'), 'CONTRIBUTORS.md must credit @DDykarc for PR #114/#115');
   assert.ok(contrib.includes('xiaojiang233') && contrib.includes('#112'), 'CONTRIBUTORS.md must credit @xiaojiang233 for Issue #112');
 });
+
+test('5) prism-rim-canvas: 0-lag scroll/transitionend/animationend & 64ms rect sync, local clipped mirror fillRect, 0.5px deadzone & 0-leak teardown', () => {
+  const domBusSrc = fs.readFileSync(path.join(ROOT, 'src', 'runtime', 'dom-bus.js'), 'utf8');
+  const env = createQaDomEnv();
+  const docCaps = [];
+  const winCaps = [];
+  const htmlCaps = [];
+  const normCap = (o) => (typeof o === 'boolean' ? o : Boolean(o && o.capture));
+
+  env.doc.addEventListener = (t, fn, o) => { docCaps.push({ t, fn, cap: normCap(o), o, active: true }); };
+  env.doc.removeEventListener = (t, fn, o) => {
+    const cap = normCap(o);
+    const rec = docCaps.find((r) => r.active && r.t === t && r.fn === fn && r.cap === cap);
+    if (rec) rec.active = false;
+  };
+  env.doc.dispatchCapture = (ev) => {
+    for (const r of [...docCaps]) if (r.active && r.t === ev.type) r.fn(ev);
+  };
+  env.win.addEventListener = (t, fn, o) => { winCaps.push({ t, fn, cap: normCap(o), o, active: true }); };
+  env.win.removeEventListener = (t, fn, o) => {
+    const cap = normCap(o);
+    const rec = winCaps.find((r) => r.active && r.t === t && r.fn === fn && r.cap === cap);
+    if (rec) rec.active = false;
+  };
+  env.html.addEventListener = (t, fn, o) => { htmlCaps.push({ t, fn, cap: normCap(o), o, active: true }); };
+  env.html.removeEventListener = (t, fn, o) => {
+    const cap = normCap(o);
+    const rec = htmlCaps.find((r) => r.active && r.t === t && r.fn === fn && r.cap === cap);
+    if (rec) rec.active = false;
+  };
+  env.html.dispatchEl = (ev) => {
+    for (const r of [...htmlCaps]) if (r.active && r.t === ev.type) r.fn(ev);
+  };
+
+  // Spy on canvas 2D drawing calls (radial gradient center/radius + fillRect bounding boxes)
+  const drawsByCanvas = new WeakMap();
+  const origCreate = env.doc.createElement;
+  env.doc.createElement = (tag) => {
+    const el = origCreate(tag);
+    if (String(tag).toLowerCase() === 'canvas') {
+      const log = { radials: [], fills: [], clears: 0 };
+      drawsByCanvas.set(el, log);
+      const ctx = {
+        globalAlpha: 1,
+        lineWidth: 1,
+        fillStyle: null,
+        strokeStyle: null,
+        clearRect() { log.clears++; },
+        save() {},
+        restore() {},
+        clip() {},
+        translate() {},
+        beginPath() {},
+        roundRect() {},
+        moveTo() {},
+        lineTo() {},
+        closePath() {},
+        fill() {},
+        stroke() {},
+        fillRect(x, y, w, h) { log.fills.push({ x, y, w, h }); },
+        createRadialGradient(x0, y0, r0, x1, y1, r1) {
+          log.radials.push({ x0, y0, r0, x1, y1, r1 });
+          return { addColorStop() {} };
+        },
+        createLinearGradient() { return { addColorStop() {} }; },
+      };
+      el.getContext = () => ctx;
+    }
+    return el;
+  };
+
+  env.html.setAttribute('data-ag-cs-motion', 'ultra');
+  env.html.setAttribute('data-ag-cs-ambient', '1');
+
+  // Mount real dom-bus & prism-rim-canvas inside sandboxed VM (with ResizeObserver active, never firing on scroll/translate)
+  vm.runInNewContext(domBusSrc, env.win);
+  vm.runInNewContext(rimSrc, env.win);
+  const bus = env.win.__agDomBus;
+  assert.ok(bus && typeof bus.observeSize === 'function', 'dom-bus must be active');
+
+  const outerWrap = env.mkEl('div', { class: 'outer-anim-wrap' });
+  const mirrorPanel = env.mkEl(
+    'div',
+    { 'data-ag-cs-prism-box': '1', 'data-ag-cs-prism-mirror': '1', 'data-ag-cs-overview-shell': '1' },
+    { left: 100, top: 80, right: 1000, bottom: 680, width: 900, height: 600 }
+  );
+  const innerChild = env.mkEl('div', { class: 'panel-inner' });
+  mirrorPanel.appendChild(innerChild);
+  outerWrap.appendChild(mirrorPanel);
+  env.body.appendChild(outerWrap);
+
+  const beforeDocCount = docCaps.filter((r) => r.active).length;
+  const beforeWinCount = winCaps.filter((r) => r.active).length;
+  const beforeHtmlCount = htmlCaps.filter((r) => r.active).length;
+
+  const ctl = env.win.__agPrismRimCanvas.createPrismRimCanvasController({
+    isDestroyed: () => false,
+    isDarkTheme: () => true,
+    motionReduced: () => false,
+    getMinFrameGapMs: () => 0,
+    canMountRealCanvas: () => true,
+    setAttrIfChanged: (el, k, v) => el.setAttribute(k, v),
+    runGuardedMut: (fn) => fn(),
+    getActiveCrystalTrack: () => null,
+    setCrystalPointerClient: () => {},
+    onPointerActivity: () => {},
+  });
+
+  const rimDocListeners = docCaps.slice(beforeDocCount);
+  for (const evName of ['scroll', 'transitionend', 'animationend']) {
+    const rec = rimDocListeners.find((r) => r.t === evName && r.active);
+    assert.ok(rec, `prism-rim-canvas must register document ${evName} listener`);
+    assert.equal(rec.cap, true, `${evName} listener must use capture:true`);
+    assert.equal(Boolean(rec.o && rec.o.passive), true, `${evName} listener must use passive:true`);
+  }
+
+  try {
+    // 1) Initial hover draw + verify local clipped fillRect on large 900x600 mirror canvas
+    ctl.onPointerMove({ clientX: 220, clientY: 400 });
+    env.flushRaf(16);
+    const cv = mirrorPanel.querySelector('.ag-cs-prism-rim-cv');
+    assert.ok(cv, 'Mirror panel must mount .ag-cs-prism-rim-cv');
+    const log = drawsByCanvas.get(cv);
+    const glow0 = log.radials.find((r) => r.r1 === 210);
+    assert.ok(glow0, 'Mirror 210px ambient glow must draw');
+    assert.equal(glow0.x0, 120);
+    assert.equal(glow0.y0, 320);
+    assert.equal(log.fills.length, 1);
+    assert.deepEqual(log.fills[0], { x: 0, y: 110, w: 330, h: 420 }, 'Large mirror canvas must clip fillRect to glow bounding box instead of full 900x600');
+    assert.ok(log.fills[0].w * log.fills[0].h < 900 * 600 * 0.4, 'Clipped fillRect area must save >60% over full canvas');
+
+    // 2) Scroll moves panel top by +240px with NO ResizeObserver -> FIRST frame after scroll must align 0px error (no 5000ms wait, no 1-frame async lag)
+    log.radials.length = 0;
+    log.fills.length = 0;
+    mirrorPanel._rect = { left: 100, top: 320, right: 1000, bottom: 920, width: 900, height: 600 };
+    env.doc.dispatchCapture({ type: 'scroll', target: env.body });
+    env.flushRaf(16);
+    const glowScroll = log.radials.find((r) => r.r1 === 210);
+    assert.ok(glowScroll, 'Scroll must trigger immediate first-frame redraw while pointer is inside');
+    assert.equal(glowScroll.x0, 120);
+    assert.equal(glowScroll.y0, 80, 'Scroll +240px must align localY = 400 - 320 = 80 on frame 1 (0px misalignment)');
+
+    // 3) 0.5px pointer deadzone (0.8px move must NOT be swallowed by legacy 1.5px deadzone)
+    log.radials.length = 0;
+    ctl.onPointerMove({ clientX: 220.8, clientY: 400 });
+    env.flushRaf(16);
+    const glowMicro = log.radials.find((r) => r.r1 === 210);
+    assert.ok(glowMicro, '0.8px slow pointer movement must redraw instead of sticking on legacy 1.5px deadzone');
+    assert.ok(Math.abs(glowMicro.x0 - 120.8) < 1e-6);
+
+    // 4) Chat stream push without scroll or RO: >= 64ms hover re-measures synchronously on the SAME frame (no 5000ms lag, no bus.measure 1-frame delay)
+    log.radials.length = 0;
+    mirrorPanel._rect = { left: 100, top: 180, right: 1000, bottom: 780, width: 900, height: 600 };
+    ctl.onPointerMove({ clientX: 222, clientY: 400 });
+    env.flushRaf(70);
+    const glow64 = log.radials.find((r) => r.r1 === 210);
+    assert.ok(glow64, 'Hover move after >=64ms must redraw');
+    assert.equal(glow64.x0, 122);
+    assert.equal(glow64.y0, 220, '64ms sync re-measure must apply new rect.top=180 on the exact same frame (localY=220)');
+
+    // 5) Entrance transform transitionend (on child) & animationend (on ancestor wrapper) realign on first frame without moving pointer
+    log.radials.length = 0;
+    mirrorPanel._rect = { left: 100, top: 80, right: 1000, bottom: 680, width: 900, height: 600 };
+    env.doc.dispatchCapture({ type: 'transitionend', target: innerChild });
+    env.flushRaf(16);
+    const glowTrans = log.radials.find((r) => r.r1 === 210);
+    assert.ok(glowTrans, 'transitionend inside floating panel must schedule immediate realignment');
+    assert.equal(glowTrans.y0, 320, 'transitionend must realign localY = 400 - 80 = 320 on frame 1');
+
+    log.radials.length = 0;
+    mirrorPanel._rect = { left: 100, top: 140, right: 1000, bottom: 740, width: 900, height: 600 };
+    env.doc.dispatchCapture({ type: 'animationend', target: outerWrap });
+    env.flushRaf(16);
+    const glowAnim = log.radials.find((r) => r.r1 === 210);
+    assert.ok(glowAnim, 'animationend on ancestor wrapping floating panel must schedule immediate realignment');
+    assert.equal(glowAnim.y0, 260, 'animationend must realign localY = 400 - 140 = 260 on frame 1');
+
+    // 6) Medium mirror panel (<=120,000 area) also clips 26px cursor reflection halo fillRect
+    const smallMirror = env.mkEl(
+      'div',
+      { 'data-ag-cs-prism-box': '1', 'data-ag-cs-prism-mirror': '1' },
+      { left: 50, top: 50, right: 350, bottom: 250, width: 300, height: 200 }
+    );
+    env.body.appendChild(smallMirror);
+    ctl.markDirty();
+    ctl.onPointerMove({ clientX: 200, clientY: 150 });
+    env.flushRaf(16);
+    const smallCv = smallMirror.querySelector('.ag-cs-prism-rim-cv');
+    assert.ok(smallCv);
+    const smallLog = drawsByCanvas.get(smallCv);
+    assert.equal(smallLog.fills.length, 2, 'Medium mirror draws ambient 210px glow + 26px cursor reflection halo');
+    const haloFill = smallLog.fills[1];
+    assert.ok(haloFill.w <= 54 && haloFill.h <= 54, `26px reflection halo fillRect must be locally clipped (<=54x54), got ${haloFill.w}x${haloFill.h}`);
+
+    // 7) Pointer leave preserves strict 0fps idle on scroll/transitionend/animationend
+    env.html.dispatchEl({ type: 'pointerleave' });
+    env.flushRaf(16);
+    const rafBeforeIdle = env.rafs.length;
+    env.doc.dispatchCapture({ type: 'scroll', target: env.body });
+    env.doc.dispatchCapture({ type: 'transitionend', target: mirrorPanel });
+    env.doc.dispatchCapture({ type: 'animationend', target: outerWrap });
+    assert.equal(env.rafs.length, rafBeforeIdle, 'Off-screen pointer must schedule 0 rAF on scroll/transitionend/animationend');
+  } finally {
+    ctl.teardown();
+    bus.dispose(env.doc, env.win);
+  }
+
+  // 8) teardown() removes 100% of scroll/transitionend/animationend/visibilitychange/pointerleave/blur listeners (capture-exact)
+  assert.equal(docCaps.slice(beforeDocCount).filter((r) => r.active).length, 0, 'teardown() must remove 100% of document scroll/transitionend/animationend/visibilitychange listeners');
+  assert.equal(winCaps.slice(beforeWinCount).filter((r) => r.active).length, 0, 'teardown() must remove 100% of window blur listeners');
+  assert.equal(htmlCaps.slice(beforeHtmlCount).filter((r) => r.active).length, 0, 'teardown() must remove 100% of pointerleave listeners');
+});
