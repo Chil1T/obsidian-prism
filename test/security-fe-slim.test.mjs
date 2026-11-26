@@ -913,9 +913,13 @@ test('Main bundle budget <= 704,000 B (< 690 KiB / 706,560 B CI hard limit), sid
   };
   sandbox.window = sandbox;
   sandbox.self = sandbox;
+  sandbox.top = sandbox;
   sandbox.globalThis = sandbox;
   const runRes = vm.runInNewContext(expr, sandbox);
   assert.equal(runRes?.status, 'ok');
+  const effortExpr = cdp.buildEffortSliderChannelExpression(cdp.DEFAULT_CONFIG);
+  assert.ok(effortExpr.length > 0, 'Channel 14 effortSlider must compile when enabled');
+  vm.runInNewContext(effortExpr, sandbox);
   const injectedCss = styles.join('\n');
   assert.ok(
     injectedCss.includes("html[data-ces-slider-ready='1'] [role='menu']:has([data-testid='model-selector-effort-option'])"),

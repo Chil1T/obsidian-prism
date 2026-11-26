@@ -20,6 +20,7 @@ const {
 } = require('./js-string-pool.cjs');
 const {
   RUNTIME_PARTS,
+  stripUnusedUpstreamMenuObserver,
   preprocessPartToUnits,
   desugarInterpolatedTemplateTokens,
   foldStaticCssConstTokens,
@@ -249,14 +250,14 @@ function createCh1Compiler({
     }
 
     let prepped = rawSource;
-    if (normName === 'pulse-vial-bridge.js') {
+    if (normName === 'pulse-vial-bridge.js' || normName === 'vendor/pulse-dashboard/inline-fallback.js') {
       prepped = minifyEmbeddedCssTemplate(prepped);
     } else if (normName === 'i18n-locales.js') {
       prepped = compactStaticStringArrayMap(prepped, 'UI_TABLE');
     } else if (normName === 'vendor/effort-slider/slider-coexist.js') {
       const upstreamPath = path.join(rootDir, 'vendor', 'effort-slider', 'upstream-client.js');
       if (fs.existsSync(upstreamPath) && !rawSource.includes('AntigravityCodexEffortSlider = exportsObj')) {
-        const upstreamRaw = fs.readFileSync(upstreamPath, 'utf8');
+        const upstreamRaw = stripUnusedUpstreamMenuObserver(fs.readFileSync(upstreamPath, 'utf8'));
         const upstreamMin = minifySingleSource(upstreamRaw);
         const wrapperMin = minifySingleSource(rawSource);
         return `globalThis.__agCodexEffortSliderDisableAutoBoot=!0;if(typeof window!=="undefined")window.__agCodexEffortSliderDisableAutoBoot=!0;\n${upstreamMin}\n${wrapperMin}`;

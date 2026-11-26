@@ -15,12 +15,16 @@ const {
   minifyEmbeddedCssTemplate,
 } = require('./js-serializer.cjs');
 
-// 按需独立通道模块（不打入 Channel 1 主包以严控体积 < 550 KB，仍纳入 SYNC_ROOT_FILES 随安装包/热更新同步）
+// 按需独立通道模块（不打入 Channel 1 主包以严控体积 < 390 KB，仍纳入 SYNC_ROOT_FILES 随安装包/热更新同步）
 const DEFERRED_ROOT_MODULES = [
   'i18n-locales.js',
   'dual-mascot-rig.js',
   'settings-panel.js',
   'home-studio-panel.js',
+  'vial-core.js',
+  'pulse-vial-bridge.js',
+  'host-workbench-enhancer.js',
+  'context-menu-btw.js',
 ];
 
 const RUNTIME_PARTS = [
@@ -32,16 +36,10 @@ const RUNTIME_PARTS = [
   'ripple-core.js',
   'conv-aura.js',
   'smooth-caret.js',
-  'vial-core.js',
-  'pulse-vial-bridge.js',
-  'vendor/pulse-dashboard/inline-fallback.js',
-  'vendor/effort-slider/slider-coexist.js',
   'home-ripple-host.js',
   'model-glyph-crystal.js',
   'stream-choreography.js',
   'prism-rim-canvas.js',
-  'host-workbench-enhancer.js',
-  'context-menu-btw.js',
   'ui-runtime.js',
 ];
 

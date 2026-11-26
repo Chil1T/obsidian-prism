@@ -321,9 +321,13 @@ test('静态红线门禁: cdp.js / tools/patch-asar.cjs / tools/install-plugin.c
     assert.equal(/\bSIGKILL\b/i.test(text), false, `${rel} must not contain SIGKILL`);
   }
 
-  // Channel 1 auto 字节必须 <= 546,954 B（本次纯服务端改造增量 <= 0 B）
+  // Channel 1 auto 字节必须 < 390,000 B（Phase 3B 下沉 4 组大体积模块后的收紧红线）
   const ch1Bytes = Buffer.byteLength(cdp.buildInjectExpression(), 'utf8');
-  assert.ok(ch1Bytes <= 546954, `Channel 1 auto bytes must be <= 546954, got ${ch1Bytes}`);
+  assert.ok(ch1Bytes < 390000, `Channel 1 auto bytes must be < 390000, got ${ch1Bytes}`);
+  for (const offId of ['telemetry', 'effortSlider', 'workbenchEnhancer', 'contextMenu']) {
+    const ch = cdp.findChannel(offId);
+    assert.ok(ch && Number.isInteger(ch.budgetBytes) && ch.budgetBytes > 0, `Missing declarative channel ${offId}`);
+  }
 });
 
 test('纯 Node MS-SHLLINK .lnk 读写器: Unicode/ANSI/中文/带参往返无损保留 Header/IDList/LinkInfo/StringData/ExtraData，拒绝非法与超大文件', () => {

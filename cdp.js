@@ -34,6 +34,7 @@ const { createCoreChannelBuilders } = require('./src/channels/builders-core.cjs'
 const { createI18nChannelBuilders } = require('./src/channels/builders-i18n.cjs');
 const { createStudioChannelBuilders } = require('./src/channels/builders-studio.cjs');
 const { createAddonChannelBuilders } = require('./src/channels/builders-addons.cjs');
+const { createRuntimeChannelBuilders } = require('./src/channels/builders-runtime.cjs');
 const { createChannelRegistry } = require('./src/channels/registry.cjs');
 
 const PLUGIN_VERSION = fsSafe.readPkgVersionSafe(ROOT_DIR);
@@ -91,19 +92,10 @@ const studioBuilders = createStudioChannelBuilders({
   readConfig: configStore.readConfig,
   bundleCache,
 });
-const addonBuilders = createAddonChannelBuilders({
-  rootDir: ROOT_DIR,
-  readConfig: configStore.readConfig,
-  bundleCache,
-});
-
+const addonBuilders = createAddonChannelBuilders({ rootDir: ROOT_DIR, readConfig: configStore.readConfig, bundleCache });
+const runtimeBuilders = createRuntimeChannelBuilders({ rootDir: ROOT_DIR, readConfig: configStore.readConfig, bundleCache });
 const channelRegistry = createChannelRegistry({
-  builders: {
-    ...coreBuilders,
-    ...i18nBuilders,
-    ...studioBuilders,
-    ...addonBuilders,
-  },
+  builders: { ...coreBuilders, ...i18nBuilders, ...studioBuilders, ...addonBuilders, ...runtimeBuilders },
   readConfig: configStore.readConfig,
 });
 
@@ -215,56 +207,20 @@ module.exports = {
   computeHash: fsSafe.computeHash,
   buildConfigRefreshExpression: ch1Templates.buildConfigRefreshExpression,
   buildInjectExpression: bundleCache.buildInjectExpression,
-  BUNDLE_CACHE_SCHEMA_VERSION: bundleCache.BUNDLE_CACHE_SCHEMA_VERSION,
-  BUNDLE_CACHE_FILENAME: bundleCache.BUNDLE_CACHE_FILENAME,
-  BUNDLE_CACHE_MAX_ENTRIES: bundleCache.BUNDLE_CACHE_MAX_ENTRIES,
-  computeBundleSourceHash: bundleCache.computeBundleSourceHash,
-  computeBundleConfigHash: bundleCache.computeBundleConfigHash,
-  getBundleCacheStats: bundleCache.getBundleCacheStats,
-  resetBundleCacheStats: bundleCache.resetBundleCacheStats,
-  flushPendingBundleCache: bundleCache.flushPendingBundleCache,
-  buildOmniClientExpression: coreBuilders.buildOmniClientExpression,
-  buildSidebarStudioExpression: coreBuilders.buildSidebarStudioExpression,
-  shouldEnableHostI18n: i18nBuilders.shouldEnableHostI18n,
+  ...bundleCache,
+  ...coreBuilders,
+  ...i18nBuilders,
+  ...studioBuilders,
+  ...addonBuilders,
   readWindowsPreferredUiLanguage: localeDialog.readWindowsPreferredUiLanguage,
   detectSystemUiLocale: localeDialog.detectSystemUiLocale,
   resolveSystemLangNode: ch1Templates.resolveSystemLangNode,
   _setWindowsUiLocaleReaderForTest: localeDialog._setWindowsUiLocaleReaderForTest,
-  buildHostI18nExpression: i18nBuilders.buildHostI18nExpression,
   buildRelaunchDialogCopy: localeDialog.buildRelaunchDialogCopy,
-  HOST_I18N_REMOVE_EXPRESSION: teardown.HOST_I18N_REMOVE_EXPRESSION,
-  shouldEnableSwarmI18n: i18nBuilders.shouldEnableSwarmI18n,
-  buildSwarmI18nExpression: i18nBuilders.buildSwarmI18nExpression,
-  SWARM_I18N_REMOVE_EXPRESSION: teardown.SWARM_I18N_REMOVE_EXPRESSION,
-  ISOLATED_HOST_I18N_PAUSE_EXPRESSION: teardown.ISOLATED_HOST_I18N_PAUSE_EXPRESSION,
-  ISOLATED_HOST_I18N_RESUME_EXPRESSION: teardown.ISOLATED_HOST_I18N_RESUME_EXPRESSION,
-  shouldEnableThought: addonBuilders.shouldEnableThought,
-  buildThoughtExpression: addonBuilders.buildThoughtExpression,
-  THOUGHT_REMOVE_EXPRESSION: teardown.THOUGHT_REMOVE_EXPRESSION,
-  buildInlineDiffInjectExpression: coreBuilders.buildInlineDiffInjectExpression,
-  INLINE_DIFF_REMOVE_EXPRESSION: teardown.INLINE_DIFF_REMOVE_EXPRESSION,
-  buildWallpaperExpression: studioBuilders.buildWallpaperExpression,
-  WALLPAPER_REMOVE_EXPRESSION: teardown.WALLPAPER_REMOVE_EXPRESSION,
-  PERIODIC_PICKER_MODULE_FILES: studioBuilders.PERIODIC_PICKER_MODULE_FILES,
-  shouldEnablePeriodicPicker: studioBuilders.shouldEnablePeriodicPicker,
-  buildPeriodicPickerExpression: studioBuilders.buildPeriodicPickerExpression,
-  PERIODIC_PICKER_REMOVE_EXPRESSION: teardown.PERIODIC_PICKER_REMOVE_EXPRESSION,
   DEFERRED_ROOT_MODULES: partPreprocess.DEFERRED_ROOT_MODULES,
-  buildSettingsChannelExpression: addonBuilders.buildSettingsChannelExpression,
-  SETTINGS_REMOVE_EXPRESSION: teardown.SETTINGS_REMOVE_EXPRESSION,
-  shouldEnableMascot: addonBuilders.shouldEnableMascot,
-  buildMascotChannelExpression: addonBuilders.buildMascotChannelExpression,
-  MASCOT_REMOVE_EXPRESSION: teardown.MASCOT_REMOVE_EXPRESSION,
-  buildSuggesterExpression: addonBuilders.buildSuggesterExpression,
-  SUGGESTER_REMOVE_EXPRESSION: teardown.SUGGESTER_REMOVE_EXPRESSION,
-  shouldEnableHomeStudio: studioBuilders.shouldEnableHomeStudio,
-  buildHomeStudioChannelExpression: studioBuilders.buildHomeStudioChannelExpression,
-  HOME_STUDIO_REMOVE_EXPRESSION: teardown.HOME_STUDIO_REMOVE_EXPRESSION,
-  isSafeV2SidebarClientSource: coreBuilders.isSafeV2SidebarClientSource,
-  CHANNEL_REGISTRY: channelRegistry.CHANNEL_REGISTRY,
-  getChannelDescriptors: channelRegistry.getChannelDescriptors,
-  getChannelBudgetReport: channelRegistry.getChannelBudgetReport,
-  findChannel: channelRegistry.findChannel,
+  ...teardown,
+  ...runtimeBuilders,
+  ...channelRegistry,
 };
 
 if (require.main === module) {

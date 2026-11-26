@@ -30,6 +30,7 @@
     "test:gates": "node scripts/run-tests.mjs --gates",
     "test:fast": "node scripts/run-tests.mjs --fast",
     "version:check": "node scripts/bump-version.mjs --check",
+    "compat:probe": "node scripts/probe-host-compat.mjs",
     "workbench": "node workbench/server.cjs",
     "inject": "node inject.js",
     "watch": "node inject.js --watch",

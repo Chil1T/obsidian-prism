@@ -16,6 +16,7 @@ import {
   recordChannelOff,
   recordChannelFailure,
 } from './session-fsm.mjs';
+import { RUNTIME_CHANNEL_SPECS } from './runtime-channel-specs.mjs';
 
 const SIMPLE_SCRIPT_FIELDS = Object.freeze([
   ['scriptId', null],
@@ -158,6 +159,25 @@ const HOME_STUDIO_SPEC = {
   getCleanup: (d) => d._getHomeStudioCleanupExpression(),
 };
 
+function toManagedRuntimeSpec(spec) {
+  return {
+    id: spec.id,
+    exprField: spec.exprField,
+    scriptField: spec.scriptField,
+    mountedField: spec.mountedField,
+    sigField: spec.sigField,
+    scriptSigField: spec.scriptSigField,
+    probeHasField: spec.probeHasField,
+    probeHashField: spec.probeHashField,
+    respectSkippedByLiveCfg: Boolean(spec.respectSkippedByLiveCfg),
+    checkEnabled: (d, cfg) => d._hasRuntimeChannelFile(spec) && d._isRuntimeChannelEnabled(spec, cfg),
+    buildExpr: (d, cfg) => d._buildRuntimeChannelExpr(spec, cfg),
+    getHash: (d, e) => d._getRuntimeChannelExprHash(spec, e),
+    getCfgSig: (d, cfg) => d._getRuntimeChannelCfgSig(spec, cfg),
+    getCleanup: (d) => d._getRuntimeChannelCleanupExpression(spec),
+  };
+}
+
 export const channelDeliveryMethods = {
   async _replaceEntryNewDocScript(entry, scriptProp, source) {
     if (!entry || entry.session?.closed) return null;
@@ -222,6 +242,9 @@ export const channelDeliveryMethods = {
     await this._resetPeriodicPickerEntryState(entry, session);
     if (resetMascot) await this._resetMascotEntryState(entry, session);
     if (resetHomeStudio) await this._resetHomeStudioEntryState(entry, session);
+    for (const spec of RUNTIME_CHANNEL_SPECS) {
+      await this._resetRuntimeChannelEntryState(entry, spec, session);
+    }
   },
 
   async _resetPeriodicPickerEntryState(entry, session = entry?.session) {
@@ -300,6 +323,24 @@ export const channelDeliveryMethods = {
 
   async _syncHomeStudioOnEntry(entry, cfgNow, opts = {}) {
     return syncStudioManagedChannel(this, entry, cfgNow, HOME_STUDIO_SPEC, opts);
+  },
+
+  async _resetRuntimeChannelEntryState(entry, spec, session = entry?.session) {
+    if (!entry || !spec) return;
+    if (entry[spec.scriptField] && session && !session.closed) {
+      await session
+        .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry[spec.scriptField] })
+        .catch(() => {});
+    }
+    entry[spec.scriptField] = null;
+    entry[spec.mountedField] = false;
+    entry[spec.sigField] = '';
+    entry[spec.scriptSigField] = '';
+    recordChannelOff(entry, spec.id);
+  },
+
+  async _syncRuntimeChannelOnEntry(entry, spec, cfgNow, opts = {}) {
+    return syncStudioManagedChannel(this, entry, cfgNow, toManagedRuntimeSpec(spec), opts);
   },
 
   async _deliverHomeStudioChannelToEntry(entry, executionContextId = null) {

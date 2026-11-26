@@ -89,6 +89,21 @@ export const PAGE_HEALTH_PROBE_EXPRESSION = `(() => {
       window.__agPrismPeriodicPicker.getStatus?.()?.status !== 'off'
     ),
     periodicPickerCodeHash: String(window.__agPrismPeriodicPicker?.__prismCodeHash || ''),
+    hasTelemetry: Boolean(
+      (window.__agPrismTelemetry || globalThis.__agPrismTelemetry) &&
+      (window.__agVialCore || globalThis.__agVialCore) &&
+      (window.__agCsPulseVialBridge || globalThis.__agCsPulseVialBridge)
+    ),
+    telemetryCodeHash: String((window.__agPrismTelemetry || globalThis.__agPrismTelemetry)?.__prismCodeHash || ''),
+    hasEffortSlider: Boolean(window.__agPrismEffortSlider || globalThis.__agPrismEffortSlider),
+    effortSliderCodeHash: String((window.__agPrismEffortSlider || globalThis.__agPrismEffortSlider)?.__prismCodeHash || ''),
+    hasWorkbenchEnhancer: Boolean(window.__agPrismHostEnhancer || globalThis.__agPrismHostEnhancer),
+    workbenchEnhancerCodeHash: String((window.__agPrismHostEnhancer || globalThis.__agPrismHostEnhancer)?.__prismCodeHash || ''),
+    hasContextMenu: Boolean(
+      (window.__agPrismContextMenu || globalThis.__agPrismContextMenu) &&
+      !(window.__agPrismContextMenu || globalThis.__agPrismContextMenu).getState?.()?.destroyed
+    ),
+    contextMenuCodeHash: String((window.__agPrismContextMenu || globalThis.__agPrismContextMenu)?.__prismCodeHash || ''),
     codeHash: (api && api.codeHash) || '',
     hasLegacyCss: Boolean(document.getElementById('ag-claude-style-css')),
     needsDashboardSync: Boolean(api && telMode !== 'off' && !isHome && hasModelBtn && !hasPulseBar),
@@ -261,6 +276,28 @@ export async function healSecondaryChannels(daemon, entry, cfg, probe, plan, { a
         probe,
         forceEval: Boolean(probe.needsHomeStudioChannel),
         runCleanup: plan.needsHomeStudioCleanup,
+      });
+    }
+  }
+
+  // Channels 13~16: Telemetry / Effort Slider / Workbench Enhancer / Context Menu
+  for (const rc of plan.runtimeChannels || []) {
+    const shouldMount = afterCh1Heal ? rc.enabled && rc.hasOnDisk : rc.enabled && rc.needsHeal;
+    if (shouldMount) {
+      if (!isChannelInCooldown(entry, rc.spec.id, now)) {
+        healed = true;
+        await daemon._syncRuntimeChannelOnEntry(entry, rc.spec, cfg, {
+          enabled: true,
+          probe,
+          forceEval: afterCh1Heal,
+        });
+      }
+    } else if (!rc.enabled && rc.needsCleanup) {
+      healed = true;
+      await daemon._syncRuntimeChannelOnEntry(entry, rc.spec, cfg, {
+        enabled: false,
+        probe,
+        runCleanup: true,
       });
     }
   }

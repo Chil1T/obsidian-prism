@@ -68,6 +68,7 @@ import { storageGuardCoordinatorMethods } from './storage-guard-coordinator.mjs'
 import { swarmSessionMethods } from './swarm-session-manager.mjs';
 import { channelCoordinatorMethods } from './channel-coordinator.mjs';
 import { channelDeliveryMethods } from './channel-delivery.mjs';
+import { initRuntimeChannelDaemonFields } from './runtime-channel-specs.mjs';
 import { isTrustedMainFrameBindingCall, isTrustedHostContext, rpcDispatcherMethods } from './rpc-dispatcher.mjs';
 import { sessionApplyMethods } from './session-apply.mjs';
 import { sessionBroadcastMethods } from './session-broadcast.mjs';
@@ -186,6 +187,7 @@ export class PrismDaemon {
     this.homeStudioExpr = '';
     this.homeStudioCodeHash = '';
     this._homeStudioHashSource = '';
+    initRuntimeChannelDaemonFields(this);
     this.codeHash = '';
     this.ownerToken = `${process.pid}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
     this.pidFile = path.join(this.rootDir, '.daemon.pid');

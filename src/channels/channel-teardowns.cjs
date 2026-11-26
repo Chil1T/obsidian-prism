@@ -341,6 +341,63 @@ const HOME_STUDIO_REMOVE_EXPRESSION = `(() => {
   return { ok: true, status: 'off' };
 })()`;
 
+const TELEMETRY_REMOVE_EXPRESSION = `(() => {
+  try { (window.__agPrism || window.__agClaudeStyle)?.detachTelemetry?.(); } catch {}
+  try { (window.__agCsPulseBridgeInst || globalThis.__agCsPulseBridgeInst)?.destroy?.(); } catch {}
+  try { (window.__agPrismTelemetry || globalThis.__agPrismTelemetry)?.destroy?.(); } catch {}
+  try { document.querySelectorAll?.('[data-ag-prism-fallback="1"]')?.forEach?.((n) => n.remove()); } catch {}
+  try {
+    document.querySelectorAll?.('[data-ag-prism-hidden="1"]')?.forEach?.((el) => {
+      el.removeAttribute('data-ag-prism-hidden');
+      const st = el.style;
+      if (st && typeof st.removeProperty === 'function') {
+        ['display','position','left','top','width','height','opacity','pointer-events','visibility','overflow'].forEach((p) => st.removeProperty(p));
+      }
+    });
+  } catch {}
+  for (const k of ['__agPrismTelemetry','__agVialCore','__agCsPulseVialBridge','__agCsPulseBridgeInst']) {
+    try { delete window[k]; } catch {}
+    try { delete globalThis[k]; } catch {}
+  }
+  return { ok: true, status: 'off' };
+})()`;
+
+const EFFORT_SLIDER_REMOVE_EXPRESSION = `(() => {
+  try { (window.__agPrismEffortSlider || globalThis.__agPrismEffortSlider)?.destroy?.(); } catch {}
+  try {
+    if (window.__agCodexEffortSliderInstance && window.__agCodexEffortSliderInstance.__prismOwned) {
+      try { window.__agCodexEffortSliderInstance.stop?.(); } catch {}
+      delete window.__agCodexEffortSliderInstance;
+    }
+  } catch {}
+  try { document.querySelector?.('#ag-codex-effort-slider-styles[data-ag-prism-slider="1"]')?.remove?.(); } catch {}
+  try { document.getElementById?.('ag-prism-effort-slider-hide')?.remove?.(); } catch {}
+  try { document.documentElement?.removeAttribute?.('data-ces-slider-ready'); } catch {}
+  for (const k of ['__agPrismEffortSlider','AntigravityCodexEffortSlider','__agCodexEffortSliderDisableAutoBoot']) {
+    try { delete window[k]; } catch {}
+    try { delete globalThis[k]; } catch {}
+  }
+  return { ok: true, status: 'off' };
+})()`;
+
+const WORKBENCH_ENHANCER_REMOVE_EXPRESSION = `(() => {
+  try { (window.__agPrism || window.__agClaudeStyle)?.detachHostEnhancer?.(); } catch {}
+  try {
+    document.querySelectorAll?.('.ag-cs-code-fold-btn,.ag-cs-nav-outline-popover,.ag-cs-nav-outline-trigger,.ag-cs-sb-more-wrap')?.forEach?.((n) => n.remove());
+  } catch {}
+  try { delete window.__agPrismHostEnhancer; } catch {}
+  try { delete globalThis.__agPrismHostEnhancer; } catch {}
+  return { ok: true, status: 'off' };
+})()`;
+
+const CONTEXT_MENU_REMOVE_EXPRESSION = `(() => {
+  try { (window.__agPrismContextMenu || globalThis.__agPrismContextMenu)?.destroy?.(); } catch {}
+  try { document.querySelectorAll?.('.ag-cs-ctx-menu,.ag-cs-ctx-toast')?.forEach?.((n) => n.remove()); } catch {}
+  try { delete window.__agPrismContextMenu; } catch {}
+  try { delete globalThis.__agPrismContextMenu; } catch {}
+  return { ok: true, status: 'off' };
+})()`;
+
 const CHANNEL_TEARDOWN_MAP = Object.freeze({
   omni: OMNI_REMOVE_EXPRESSION,
   sidebar: SIDEBAR_REMOVE_EXPRESSION,
@@ -354,6 +411,10 @@ const CHANNEL_TEARDOWN_MAP = Object.freeze({
   mascot: MASCOT_REMOVE_EXPRESSION,
   suggester: SUGGESTER_REMOVE_EXPRESSION,
   homeStudio: HOME_STUDIO_REMOVE_EXPRESSION,
+  telemetry: TELEMETRY_REMOVE_EXPRESSION,
+  effortSlider: EFFORT_SLIDER_REMOVE_EXPRESSION,
+  workbenchEnhancer: WORKBENCH_ENHANCER_REMOVE_EXPRESSION,
+  contextMenu: CONTEXT_MENU_REMOVE_EXPRESSION,
 });
 
 module.exports = {
@@ -371,5 +432,9 @@ module.exports = {
   MASCOT_REMOVE_EXPRESSION,
   SUGGESTER_REMOVE_EXPRESSION,
   HOME_STUDIO_REMOVE_EXPRESSION,
+  TELEMETRY_REMOVE_EXPRESSION,
+  EFFORT_SLIDER_REMOVE_EXPRESSION,
+  WORKBENCH_ENHANCER_REMOVE_EXPRESSION,
+  CONTEXT_MENU_REMOVE_EXPRESSION,
   CHANNEL_TEARDOWN_MAP,
 };
