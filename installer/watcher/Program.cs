@@ -70,6 +70,7 @@ namespace AgyClaudeStyle.Watcher
         private static bool _isWatch;
         private static bool _noNativeDaemon;
         private static bool _noRelaunchPrompt;
+        private static int _manualArchiveInFlight;
 
         private static string GetDefaultWatcherInstallDir()
         {
@@ -1000,10 +1001,22 @@ namespace AgyClaudeStyle.Watcher
                 bool yieldingToDaemon = false;
                 bool hadLiveHost = false;
                 int exitArchiveInFlight = 0;
+                Interlocked.Exchange(ref _manualArchiveInFlight, 0);
                 long lastDaemonBootTick = 0L;
                 long lastShortcutCheckTick = 0L;
                 string defaultWatcherDir = GetDefaultWatcherInstallDir();
                 string shortcutStateDir = !string.IsNullOrEmpty(_pluginDir) ? _pluginDir : _baseDir;
+                Action closeAllAttached = () =>
+                {
+                    foreach (KeyValuePair<string, AttachedEntry> kv in attached)
+                    {
+                        AttachedEntry oldEntry;
+                        if (attached.TryRemove(kv.Key, out oldEntry) && oldEntry != null && oldEntry.Session != null)
+                        {
+                            try { oldEntry.Session.Close(); } catch { }
+                        }
+                    }
+                };
                 try
                 {
                     while (!exitEvent.IsSet)
@@ -1038,12 +1051,14 @@ namespace AgyClaudeStyle.Watcher
                                 consecutiveProbePort = previewRawPort;
                             }
 
+                            TryClaimAndStartPendingArchiveTask(exitEvent);
+
                             bool nativeAlive = !string.IsNullOrEmpty(_pluginDir) && CdpHelper.IsNativeDaemonAlive(_pluginDir);
                             ActivePortProbeResult portProbe = null;
                             if (!nativeAlive)
                             {
                                 portProbe = await CdpHelper.ProbeActivePortAsync(overridePort, hasActiveAttached, consecutiveProbeFailures).ConfigureAwait(false);
-                                if (!_noNativeDaemon && !string.IsNullOrEmpty(_pluginDir))
+                                if (!_noNativeDaemon && !string.IsNullOrEmpty(_pluginDir) && !ShouldSuppressNativeDaemonRespawn())
                                 {
                                     long nowTick = Environment.TickCount & int.MaxValue;
                                     if ((lastDaemonBootTick == 0L || Math.Abs(nowTick - lastDaemonBootTick) >= 6000L) &&
@@ -1092,14 +1107,7 @@ namespace AgyClaudeStyle.Watcher
                                 catch { }
                                 if (!yieldingToDaemon || attached.Count > 0)
                                 {
-                                    foreach (KeyValuePair<string, AttachedEntry> kv in attached)
-                                    {
-                                        AttachedEntry oldEntry;
-                                        if (attached.TryRemove(kv.Key, out oldEntry) && oldEntry != null && oldEntry.Session != null)
-                                        {
-                                            try { oldEntry.Session.Close(); } catch { }
-                                        }
-                                    }
+                                    closeAllAttached();
                                     lastPort = null;
                                     lastLoggedStalePort = null;
                                     consecutiveProbeFailures = 0;
@@ -1159,14 +1167,7 @@ namespace AgyClaudeStyle.Watcher
                                 }
                                 if (lastPort.HasValue || attached.Count > 0)
                                 {
-                                    foreach (KeyValuePair<string, AttachedEntry> kv in attached)
-                                    {
-                                        AttachedEntry oldEntry;
-                                        if (attached.TryRemove(kv.Key, out oldEntry) && oldEntry != null && oldEntry.Session != null)
-                                        {
-                                            try { oldEntry.Session.Close(); } catch { }
-                                        }
-                                    }
+                                    closeAllAttached();
                                     lastPort = null;
                                     lastShortcutCheckTick = Environment.TickCount & int.MaxValue;
                                     CdpHelper.EnsureAntigravityShortcutsOptIn(
@@ -1191,6 +1192,8 @@ namespace AgyClaudeStyle.Watcher
                             {
                                 hadLiveHost = false;
                                 if (!overridePort.HasValue &&
+                                    Volatile.Read(ref _manualArchiveInFlight) == 0 &&
+                                    !HasPendingArchiveTask() &&
                                     IsAutoArchiveOnExitAllowed() &&
                                     IsAutoArchiveOnExitEnabled() &&
                                     Interlocked.CompareExchange(ref exitArchiveInFlight, 1, 0) == 0)
@@ -1201,7 +1204,8 @@ namespace AgyClaudeStyle.Watcher
                                     });
                                 }
                             }
-                            if (!livePort.HasValue && !overridePort.HasValue && !isTransientProbeGrace)
+                            if (!livePort.HasValue && !overridePort.HasValue && !isTransientProbeGrace &&
+                                Volatile.Read(ref _manualArchiveInFlight) == 0 && !HasPendingArchiveTask())
                             {
                                 string noPromptEnv1 = Environment.GetEnvironmentVariable("PRISM_NO_RELAUNCH_PROMPT");
                                 string noPromptEnv2 = Environment.GetEnvironmentVariable("AG_PRISM_NO_RELAUNCH_PROMPT");
@@ -1272,15 +1276,7 @@ namespace AgyClaudeStyle.Watcher
                                 List<CdpPageInfo> pages = portProbe.Pages;
                                 if (!lastPort.HasValue || lastPort.Value != livePort.Value)
                                 {
-                                    // Close stale sessions if Antigravity restarted on a new port
-                                    foreach (KeyValuePair<string, AttachedEntry> kv in attached)
-                                    {
-                                        AttachedEntry oldEntry;
-                                        if (attached.TryRemove(kv.Key, out oldEntry) && oldEntry != null && oldEntry.Session != null)
-                                        {
-                                            try { oldEntry.Session.Close(); } catch { }
-                                        }
-                                    }
+                                    closeAllAttached();
                                     Log(InstallerI18n.TrFormat(
                                         "[+] 连接到调试端口 {0}",
                                         "[+] Connected to debug port {0}",
@@ -1508,31 +1504,165 @@ namespace AgyClaudeStyle.Watcher
             return 0;
         }
 
+        private static string GetConversationsArchiveDir()
+        {
+            string home = Environment.GetEnvironmentVariable("USERPROFILE");
+            if (string.IsNullOrEmpty(home)) home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) ?? "";
+            if (string.IsNullOrEmpty(home)) return null;
+            return Path.Combine(home, Path.Combine(".gemini", Path.Combine("antigravity", "conversations_archive")));
+        }
+
+        private static bool HasPendingArchiveTask()
+        {
+            try
+            {
+                string archiveDir = GetConversationsArchiveDir();
+                if (string.IsNullOrEmpty(archiveDir) || !Directory.Exists(archiveDir)) return false;
+                if (CdpHelper.IsUnsafeReparsePoint(archiveDir)) return true;
+                string pendingPath = Path.Combine(archiveDir, ".archive-task-pending.json");
+                if (!File.Exists(pendingPath)) return false;
+                if (CdpHelper.IsUnsafeReparsePoint(pendingPath)) return true;
+                DateTime tsUtc = File.GetLastWriteTimeUtc(pendingPath);
+                try
+                {
+                    string raw = File.ReadAllText(pendingPath, Encoding.UTF8).TrimStart('\uFEFF').Trim();
+                    Dictionary<string, object> parsed = MiniJson.ParseObject(raw);
+                    object reqObj;
+                    DateTime parsedTs;
+                    if (parsed != null && parsed.TryGetValue("requestedAt", out reqObj) && TryParseIsoUtc(reqObj, out parsedTs)) tsUtc = parsedTs;
+                }
+                catch { }
+                double ageSec = (DateTime.UtcNow - tsUtc).TotalSeconds;
+                return ageSec >= -15.0 && ageSec < 120.0;
+            }
+            catch { return false; }
+        }
+
+        private static bool ShouldSuppressNativeDaemonRespawn()
+        {
+            return Volatile.Read(ref _manualArchiveInFlight) == 1 ||
+                   HasPendingArchiveTask() ||
+                   HasActiveArchiveLockOrRecentRestore();
+        }
+
+        private static bool TryRunConversationArchiveScript(string argSuffix, int timeoutMs, ManualResetEventSlim exitEvent, out int exitCode, out bool timedOut, out string errMsg)
+        {
+            exitCode = -1;
+            timedOut = false;
+            errMsg = null;
+            string scriptPath = ResolveConversationArchiveScriptPath();
+            if (string.IsNullOrEmpty(scriptPath)) { errMsg = "conversation-archive.mjs not found"; return false; }
+            string runtimeExe = CdpHelper.FindFallbackNodeExecutable();
+            bool useElectronAsNode = false;
+            if (string.IsNullOrEmpty(runtimeExe))
+            {
+                runtimeExe = CdpHelper.FindAntigravityExecutable(null);
+                useElectronAsNode = !string.IsNullOrEmpty(runtimeExe);
+            }
+            if (string.IsNullOrEmpty(runtimeExe) || !File.Exists(runtimeExe)) { errMsg = "no usable Node/Electron runtime"; return false; }
+            try
+            {
+                ProcessStartInfo psi = new ProcessStartInfo();
+                psi.FileName = runtimeExe;
+                psi.Arguments = "\"" + scriptPath + "\" " + argSuffix;
+                psi.WorkingDirectory = Path.GetDirectoryName(scriptPath);
+                psi.UseShellExecute = false;
+                psi.CreateNoWindow = true;
+                if (useElectronAsNode) psi.EnvironmentVariables["ELECTRON_RUN_AS_NODE"] = "1";
+                else psi.EnvironmentVariables.Remove("ELECTRON_RUN_AS_NODE");
+                using (Process proc = Process.Start(psi))
+                {
+                    if (proc == null) { errMsg = "Process.Start returned null"; return false; }
+                    DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+                    while (!proc.HasExited && DateTime.UtcNow < deadline)
+                    {
+                        if (exitEvent != null && exitEvent.IsSet) break;
+                        proc.WaitForExit(250);
+                    }
+                    if (proc.HasExited) { exitCode = proc.ExitCode; return true; }
+                    timedOut = true;
+                    return true;
+                }
+            }
+            catch (Exception ex) { errMsg = ex.Message; return false; }
+        }
+
+        private static void TryClaimAndStartPendingArchiveTask(ManualResetEventSlim exitEvent)
+        {
+            try
+            {
+                string archiveDir = GetConversationsArchiveDir();
+                if (string.IsNullOrEmpty(archiveDir) || !Directory.Exists(archiveDir) || CdpHelper.IsUnsafeReparsePoint(archiveDir)) return;
+                string pendingPath = Path.Combine(archiveDir, ".archive-task-pending.json");
+                if (!File.Exists(pendingPath)) return;
+                if (CdpHelper.IsUnsafeReparsePoint(pendingPath))
+                {
+                    Log(InstallerI18n.Tr("[storage-guard] 检测到不安全的待执行归档移交路径（重解析点），已拒绝执行", "[storage-guard] Refusing unsafe pending archive handoff path (reparse point)"));
+                    return;
+                }
+                if (!HasPendingArchiveTask()) { try { File.Delete(pendingPath); } catch { } return; }
+                if (Interlocked.CompareExchange(ref _manualArchiveInFlight, 1, 0) != 0) return;
+
+                string claimedPath = Path.Combine(archiveDir, ".archive-task-claimed-" + Guid.NewGuid().ToString("N") + ".json");
+                try
+                {
+                    if (CdpHelper.IsUnsafeReparsePoint(claimedPath)) { Interlocked.Exchange(ref _manualArchiveInFlight, 0); return; }
+                    File.Move(pendingPath, claimedPath);
+                }
+                catch { Interlocked.Exchange(ref _manualArchiveInFlight, 0); return; }
+
+                Task.Run(() => RunClaimedArchiveTask(claimedPath, exitEvent));
+            }
+            catch { }
+        }
+
+        private static void RunClaimedArchiveTask(string claimedPath, ManualResetEventSlim exitEvent)
+        {
+            try
+            {
+                Log(InstallerI18n.Tr("[storage-guard] Watcher 已接管离线归档/还原任务（完全脱离宿主 Job Object）", "[storage-guard] Watcher claimed offline archive/restore task (outside host Job Object)"));
+                int exitCode;
+                bool timedOut;
+                string errMsg;
+                if (!TryRunConversationArchiveScript("\"--run-task=" + claimedPath + "\"", 180000, exitEvent, out exitCode, out timedOut, out errMsg))
+                {
+                    Log(InstallerI18n.TrFormat("[storage-guard] Watcher 接管离线归档/还原任务失败: {0}", "[storage-guard] Watcher archive/restore handoff failed: {0}", errMsg ?? "unknown"));
+                }
+                else if (timedOut)
+                {
+                    Log(InstallerI18n.Tr("[storage-guard] Watcher 接管离线归档/还原任务等待超过 180 秒，已释放协调锁", "[storage-guard] Watcher archive/restore handoff wait exceeded 180s; releasing lock"));
+                }
+                else
+                {
+                    Log(InstallerI18n.TrFormat("[storage-guard] Watcher 接管离线归档/还原任务完成 (exitCode={0})", "[storage-guard] Watcher archive/restore handoff finished (exitCode={0})", exitCode));
+                }
+            }
+            finally
+            {
+                try
+                {
+                    if (!string.IsNullOrEmpty(claimedPath) && File.Exists(claimedPath) && !CdpHelper.IsUnsafeReparsePoint(claimedPath)) File.Delete(claimedPath);
+                }
+                catch { }
+                Interlocked.Exchange(ref _manualArchiveInFlight, 0);
+            }
+        }
+
         private static bool HasActiveArchiveLockOrRecentRestore()
         {
             try
             {
-                string home = Environment.GetEnvironmentVariable("USERPROFILE");
-                if (string.IsNullOrEmpty(home)) home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) ?? "";
-                if (string.IsNullOrEmpty(home)) return false;
-                string archiveDir = Path.Combine(home, Path.Combine(".gemini", Path.Combine("antigravity", "conversations_archive")));
-                if (!Directory.Exists(archiveDir)) return false;
-                // 归档目录若为不安全重解析点/符号链接，一律 fail-closed 拦截
+                string archiveDir = GetConversationsArchiveDir();
+                if (string.IsNullOrEmpty(archiveDir) || !Directory.Exists(archiveDir)) return false;
                 if (CdpHelper.IsUnsafeReparsePoint(archiveDir)) return true;
 
                 string lockPath = Path.Combine(archiveDir, ".archive.lock");
                 if (File.Exists(lockPath))
                 {
                     if (CdpHelper.IsUnsafeReparsePoint(lockPath)) return true;
-                    DateTime mtime = File.GetLastWriteTimeUtc(lockPath);
-                    if ((DateTime.UtcNow - mtime).TotalSeconds < 300.0)
-                    {
-                        return true;
-                    }
+                    if ((DateTime.UtcNow - File.GetLastWriteTimeUtc(lockPath)).TotalSeconds < 300.0) return true;
                 }
 
-                // 协调正在静置/等待退出的脱离归档或还原任务（消除 4s vs 5.5s 抢跑竞态）；
-                // 若记录的 auto-exit-archive PID 已随宿主 Job Object 一起死亡，则不让步，立即由 Watcher 接棒兜底
                 string activePath = Path.Combine(archiveDir, ".archive-task-active.json");
                 if (File.Exists(activePath))
                 {
@@ -1545,26 +1675,19 @@ namespace AgyClaudeStyle.Watcher
                         {
                             DateTime startedUtc;
                             object startObj;
-                            if (!activeObj.TryGetValue("startedAt", out startObj) || !TryParseIsoUtc(startObj, out startedUtc))
-                            {
-                                startedUtc = File.GetLastWriteTimeUtc(activePath);
-                            }
+                            if (!activeObj.TryGetValue("startedAt", out startObj) || !TryParseIsoUtc(startObj, out startedUtc)) startedUtc = File.GetLastWriteTimeUtc(activePath);
                             double ageSec = (DateTime.UtcNow - startedUtc).TotalSeconds;
                             if (ageSec >= -10.0 && ageSec < 180.0)
                             {
                                 int taskPid = ReadPositiveIntField(activeObj, "pid");
-                                if (taskPid > 0 && IsProcessIdAlive(taskPid))
-                                {
-                                    return true;
-                                }
-                                object activeActObj;
+                                if (taskPid > 0 && IsProcessIdAlive(taskPid)) return true;
+                                object activeActObj, handoffObj;
                                 string activeAct = activeObj.TryGetValue("action", out activeActObj) ? (activeActObj as string) : null;
-                                if ((string.Equals(activeAct, "restore-and-restart", StringComparison.Ordinal) ||
+                                bool isHandoff = activeObj.TryGetValue("handoff", out handoffObj) && (handoffObj is bool) && (bool)handoffObj;
+                                if ((isHandoff ||
+                                     string.Equals(activeAct, "restore-and-restart", StringComparison.Ordinal) ||
                                      string.Equals(activeAct, "restore", StringComparison.Ordinal)) &&
-                                    ageSec < 30.0)
-                                {
-                                    return true;
-                                }
+                                    ageSec < 30.0) return true;
                             }
                         }
                     }
@@ -1577,35 +1700,20 @@ namespace AgyClaudeStyle.Watcher
                     if (CdpHelper.IsUnsafeReparsePoint(resPath)) return true;
                     string raw = File.ReadAllText(resPath, Encoding.UTF8).TrimStart('\uFEFF').Trim();
                     Dictionary<string, object> parsed = MiniJson.ParseObject(raw);
-                    object actObj;
-                    object tsObj;
+                    object actObj, tsObj;
                     if (parsed != null &&
                         parsed.TryGetValue("action", out actObj) &&
                         ((parsed.TryGetValue("recordedAt", out tsObj) && tsObj is string) ||
                          (parsed.TryGetValue("updatedAt", out tsObj) && tsObj is string)))
                     {
                         DateTime parsedTsUtc;
-                        if (TryParseIsoUtc(tsObj, out parsedTsUtc))
+                        if (TryParseIsoUtc(tsObj, out parsedTsUtc) && Math.Abs((DateTime.UtcNow - parsedTsUtc).TotalSeconds) < 90.0)
                         {
-                            double ageSec = Math.Abs((DateTime.UtcNow - parsedTsUtc).TotalSeconds);
-                            if (ageSec < 90.0)
-                            {
-                                string act = actObj as string;
-                                if (string.Equals(act, "restore-and-restart", StringComparison.Ordinal) ||
-                                    string.Equals(act, "restore", StringComparison.Ordinal))
-                                {
-                                    return true;
-                                }
-                                object okObj;
-                                bool isOk = parsed.TryGetValue("ok", out okObj) && (okObj is bool) && (bool)okObj;
-                                if (isOk &&
-                                    (string.Equals(act, "archive-and-restart", StringComparison.Ordinal) ||
-                                     string.Equals(act, "auto-exit-archive", StringComparison.Ordinal) ||
-                                     string.Equals(act, "archive", StringComparison.Ordinal)))
-                                {
-                                    return true;
-                                }
-                            }
+                            string act = actObj as string;
+                            if (string.Equals(act, "restore-and-restart", StringComparison.Ordinal) || string.Equals(act, "restore", StringComparison.Ordinal)) return true;
+                            object okObj;
+                            bool isOk = parsed.TryGetValue("ok", out okObj) && (okObj is bool) && (bool)okObj;
+                            if (isOk && (string.Equals(act, "archive-and-restart", StringComparison.Ordinal) || string.Equals(act, "auto-exit-archive", StringComparison.Ordinal) || string.Equals(act, "archive", StringComparison.Ordinal))) return true;
                         }
                     }
                 }
@@ -1618,24 +1726,14 @@ namespace AgyClaudeStyle.Watcher
         {
             Task.Run(async () =>
             {
-                try
-                {
-                    await RunAutoArchiveOnExitFallbackAsync(overridePort, exitEvent).ConfigureAwait(false);
-                }
+                try { await RunAutoArchiveOnExitFallbackAsync(overridePort, exitEvent).ConfigureAwait(false); }
                 catch { }
-                finally
-                {
-                    if (onComplete != null)
-                    {
-                        try { onComplete(); } catch { }
-                    }
-                }
+                finally { if (onComplete != null) { try { onComplete(); } catch { } } }
             });
         }
 
         private static async Task RunAutoArchiveOnExitFallbackAsync(int? overridePort, ManualResetEventSlim exitEvent)
         {
-            // 1) 等待 Antigravity 与 language_server 均彻底退出（绝不强杀宿主）
             for (int waitIdx = 0; waitIdx < 15; waitIdx++)
             {
                 if (!IsAntigravityOrLanguageServerRunning()) break;
@@ -1645,64 +1743,29 @@ namespace AgyClaudeStyle.Watcher
                 if (pWait.HasValue && await CdpHelper.IsPortAliveAsync(pWait.Value, 500).ConfigureAwait(false)) return;
             }
             if (IsAntigravityOrLanguageServerRunning()) return;
-
-            // 2) 静置 4 秒等待 SQLite WAL/SHM 完全释放
             if (WaitExitSafe(exitEvent, 4000)) return;
-
-            // 3) 二次 fail-closed 确认：配置仍开启、无活跃 CDP 端口、原生 Daemon 未运行、宿主与 language_server 均未运行、无互斥锁/刚还原记录
             if (!IsAutoArchiveOnExitEnabled()) return;
             if (!string.IsNullOrEmpty(_pluginDir) && CdpHelper.IsNativeDaemonAlive(_pluginDir)) return;
             int? portRecheck = CdpHelper.ReadPort(overridePort);
             if (portRecheck.HasValue && await CdpHelper.IsPortAliveAsync(portRecheck.Value, 600).ConfigureAwait(false)) return;
             if (IsAntigravityOrLanguageServerRunning()) return;
-            if (HasActiveArchiveLockOrRecentRestore()) return;
+            if (HasPendingArchiveTask() || HasActiveArchiveLockOrRecentRestore()) return;
 
-            string scriptPath = ResolveConversationArchiveScriptPath();
-            if (string.IsNullOrEmpty(scriptPath)) return;
-
-            string runtimeExe = CdpHelper.FindFallbackNodeExecutable();
-            bool useElectronAsNode = false;
-            if (string.IsNullOrEmpty(runtimeExe))
+            int exitCode;
+            bool timedOut;
+            string errMsg;
+            if (TryRunConversationArchiveScript("--archive --subagent-hours=2", 60000, exitEvent, out exitCode, out timedOut, out errMsg))
             {
-                runtimeExe = CdpHelper.FindAntigravityExecutable(null);
-                useElectronAsNode = !string.IsNullOrEmpty(runtimeExe);
-            }
-            if (string.IsNullOrEmpty(runtimeExe) || !File.Exists(runtimeExe)) return;
-
-            try
-            {
-                ProcessStartInfo psi = new ProcessStartInfo();
-                psi.FileName = runtimeExe;
-                psi.Arguments = "\"" + scriptPath + "\" --archive --subagent-hours=2";
-                psi.WorkingDirectory = Path.GetDirectoryName(scriptPath);
-                psi.UseShellExecute = false;
-                psi.CreateNoWindow = true;
-                psi.WindowStyle = ProcessWindowStyle.Hidden;
-                if (useElectronAsNode)
+                if (!timedOut)
                 {
-                    psi.EnvironmentVariables["ELECTRON_RUN_AS_NODE"] = "1";
-                }
-                using (Process proc = Process.Start(psi))
-                {
-                    if (proc == null) return;
-                    bool exited = proc.WaitForExit(60000);
-                    if (exited)
-                    {
-                        Log(InstallerI18n.TrFormat(
-                            "[storage-guard] Watcher 退出兜底自动归档已执行 (exitCode={0})",
-                            "[storage-guard] Watcher auto-archive on exit finished (exitCode={0})",
-                            proc.ExitCode
-                        ));
-                    }
+                    Log(InstallerI18n.TrFormat("[storage-guard] Watcher 退出兜底自动归档已执行 (exitCode={0})", "[storage-guard] Watcher auto-archive on exit finished (exitCode={0})", exitCode));
                 }
             }
-            catch (Exception ex)
+            else if (!string.IsNullOrEmpty(errMsg) &&
+                     !string.Equals(errMsg, "conversation-archive.mjs not found", StringComparison.Ordinal) &&
+                     !string.Equals(errMsg, "no usable Node/Electron runtime", StringComparison.Ordinal))
             {
-                Log(InstallerI18n.TrFormat(
-                    "[storage-guard] Watcher 退出兜底自动归档异常: {0}",
-                    "[storage-guard] Watcher auto-archive on exit error: {0}",
-                    ex.Message
-                ));
+                Log(InstallerI18n.TrFormat("[storage-guard] Watcher 退出兜底自动归档异常: {0}", "[storage-guard] Watcher auto-archive on exit error: {0}", errMsg));
             }
         }
     }
