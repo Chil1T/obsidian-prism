@@ -688,7 +688,9 @@ function assembleBucketedCss(buckets) {
 function packCssJsExpr(css, options = null) {
   const shouldFlatten = !(options && options.flatten === false);
   const flatMin = shouldFlatten ? minifyCss(flattenNestedCss(css)) : css;
-  const shouldBucket = shouldFlatten && !(options && options.bucketize === false) && flatMin.includes('html[data-ag-cs-style]');
+  // 默认输出单块连续扁平压缩 CSS（不切 13 桶、不插入 /*@ag:*/*/ 边界标记，保持连续 LZSS 窗口与零漏桶激活）；
+  // 仅显式传 { bucketize: true } 时保留旧分桶拼接格式供向后兼容调用
+  const shouldBucket = shouldFlatten && Boolean(options && options.bucketize === true) && flatMin.includes('html[data-ag-cs-style]');
   const preparedCss = shouldBucket ? assembleBucketedCss(splitCssIntoBuckets(flatMin)) : flatMin;
   const lzPacked = packLzssJsExpr(preparedCss, PROTECTED_CSS_LITERALS);
   if (lzPacked && Buffer.byteLength(lzPacked, 'utf8') + 12 < Buffer.byteLength(serializeJsValue(preparedCss), 'utf8')) {

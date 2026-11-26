@@ -150,12 +150,22 @@ test('Compile-time css-flatten.cjs: semantic equivalence across @media/@supports
   assert.ok(flatGuarded.includes('html[x] .card [data-x=":is(p,q)&{;}"]{content:"& { ; }";background:url(https://cdn.example/x;y&z.png);}'));
   assert.ok(flatGuarded.includes('html[x] .card :is(.ok,::-moz-bad){opacity:.5;}'), 'forgiving :is() with vendor pseudo must not expand');
 
-  // 7) Real repository style.css compile-time flattening via packCssJsExpr: 0 bare &, roundtrip exact, balanced braces
+  // 7) Real repository style.css compile-time flattening via packCssJsExpr: single-block flat CSS, 0 bucket markers, 0 bare &, smaller LZSS than bucketed
   const rawStyleCss = fs.readFileSync(path.join(ROOT, 'style.css'), 'utf8');
-  const packedExpr = cssPack.packCssJsExpr(cssPack.minifyCss(rawStyleCss));
+  const minStyleCss = cssPack.minifyCss(rawStyleCss);
+  const flatMinExpected = cssPack.minifyCss(cssFlatten.flattenNestedCss(minStyleCss));
+  const packedExpr = cssPack.packCssJsExpr(minStyleCss);
+  const legacyBucketedExpr = cssPack.packCssJsExpr(minStyleCss, { bucketize: true });
   const unpackedCss = vm.runInNewContext(packedExpr);
+  assert.equal(unpackedCss, flatMinExpected, 'Default packCssJsExpr must unpack to exact single-block flattened CSS without rule reordering');
+  assert.equal(unpackedCss.includes('/*@ag:'), false, 'Single-block packed CSS must contain 0 /*@ag: bucket markers');
+  assert.ok(
+    Buffer.byteLength(packedExpr, 'utf8') < Buffer.byteLength(legacyBucketedExpr, 'utf8'),
+    `Single-block LZSS (${Buffer.byteLength(packedExpr, 'utf8')} B) must beat legacy bucketed LZSS (${Buffer.byteLength(legacyBucketedExpr, 'utf8')} B)`
+  );
   assert.equal((unpackedCss.match(/(?<!["'=\w])&(?![\w])/g) || []).length, 0, 'Compiled Ch1 CSS must have 0 residual & nesting');
   assert.ok(unpackedCss.includes('html[data-ag-cs-style]'), 'Flattened CSS must retain root scope selectors');
+  assert.ok(unpackedCss.includes('div[role="dialog"]') && unpackedCss.includes('#ag-cs-settings-sec'), 'Single-block CSS must always ship nested dialog & settings rules unconditionally');
   assert.ok(unpackedCss.includes('@keyframes ag-cs-orbit-spin'), 'Flattened CSS must preserve @keyframes verbatim');
   assert.ok(unpackedCss.includes('@property --_fa'), 'Flattened CSS must preserve @property verbatim');
   assert.ok(unpackedCss.includes('data-ag-cs-perf-mode="performance"'), 'Flattened CSS must include performance-mode blur degradation rules');
