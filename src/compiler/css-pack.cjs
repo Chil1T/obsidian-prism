@@ -1,5 +1,7 @@
-// 零依赖词法级 CSS 压缩器、UTF-16 LZSS 压缩器与 CSS 短语字典打包器（L0 纯变换，零内部依赖）
+// 零依赖词法级 CSS 压缩器、UTF-16 LZSS 压缩器与 CSS 短语字典打包器（L1 src/compiler/）
 'use strict';
+
+const { flattenNestedCss } = require('./css-flatten.cjs');
 
 function minifyCss(css) {
   const n = css.length;
@@ -590,23 +592,25 @@ function applyBatchPhraseReplacements(work, freq, freeTokens, dict, tokChars, co
   return { work: curWork, added: accepted.length };
 }
 
-function packCssJsExpr(css) {
-  const lzPacked = packLzssJsExpr(css, PROTECTED_CSS_LITERALS);
-  if (lzPacked && Buffer.byteLength(lzPacked, 'utf8') + 12 < Buffer.byteLength(serializeJsValue(css), 'utf8')) {
+function packCssJsExpr(css, options = null) {
+  const shouldFlatten = !(options && options.flatten === false);
+  const preparedCss = shouldFlatten ? minifyCss(flattenNestedCss(css)) : css;
+  const lzPacked = packLzssJsExpr(preparedCss, PROTECTED_CSS_LITERALS);
+  if (lzPacked && Buffer.byteLength(lzPacked, 'utf8') + 12 < Buffer.byteLength(serializeJsValue(preparedCss), 'utf8')) {
     return lzPacked;
   }
   const TOKEN_BASE = 0x00a1;
   const MAX_DICT = 4800; // 0x00A1..0x1360 (1,887 2-byte + 2,913 3-byte UTF-8 chars, all < 0x2028)
-  for (let i = 0; i < css.length; i++) {
-    const cc = css.charCodeAt(i);
+  for (let i = 0; i < preparedCss.length; i++) {
+    const cc = preparedCss.charCodeAt(i);
     if (cc >= TOKEN_BASE && cc < TOKEN_BASE + MAX_DICT) {
-      return serializeJsValue(css);
+      return serializeJsValue(preparedCss);
     }
   }
 
-  let work = css;
+  let work = preparedCss;
   for (let p = 0; p < PROTECTED_CSS_LITERALS.length; p++) {
-    if (work.includes(String.fromCharCode(0xe000 + p))) return serializeJsValue(css);
+    if (work.includes(String.fromCharCode(0xe000 + p))) return serializeJsValue(preparedCss);
     work = work.split(PROTECTED_CSS_LITERALS[p]).join(String.fromCharCode(0xe000 + p));
   }
 
@@ -652,7 +656,7 @@ function packCssJsExpr(css) {
   for (let p = 0; p < PROTECTED_CSS_LITERALS.length; p++) {
     work = work.split(String.fromCharCode(0xe000 + p)).join(PROTECTED_CSS_LITERALS[p]);
   }
-  if (dict.length === 0) return serializeJsValue(css);
+  if (dict.length === 0) return serializeJsValue(preparedCss);
 
   const maxCodeHex = (TOKEN_BASE + dict.length - 1).toString(16).padStart(4, '0');
   const decRe = new RegExp(`[\\u00A1-\\u${maxCodeHex}]`, 'g');
@@ -664,12 +668,13 @@ function packCssJsExpr(css) {
       return dict[c.charCodeAt(0) - TOKEN_BASE];
     });
   }
-  if (verify !== css) return serializeJsValue(css);
+  if (verify !== preparedCss) return serializeJsValue(preparedCss);
 
   return `(()=>{let s=${serializeJsValue(work)},d=${serializeStringListExpr(dict)};for(let f=1;f;)f=0,s=s.replace(/[\\u00A1-\\u${maxCodeHex}]/g,(c)=>(f=1,d[c.charCodeAt(0)-${TOKEN_BASE}]));return s})()`;
 }
 
 module.exports = {
+  flattenNestedCss,
   minifyCss,
   serializeJsValue,
   serializeStringListExpr,

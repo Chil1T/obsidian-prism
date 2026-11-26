@@ -28,6 +28,7 @@ const DEFERRED_ROOT_MODULES = [
 ];
 
 const RUNTIME_PARTS = [
+  'src/runtime/dom-bus.js',
   'src/runtime/reduced-motion-guard.js',
   'src/runtime/font-customizer.js',
   'src/runtime/ripple-worker.js',

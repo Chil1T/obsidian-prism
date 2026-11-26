@@ -59,6 +59,7 @@ const CONFIG_SCHEMA = Object.freeze({
   lightPreset: Object.freeze({ type: 'enum', values: Object.freeze(['crystal', 'alabaster']), default: 'crystal' }),
   darkAuraStyle: Object.freeze({ type: 'enum', values: Object.freeze(['prism', 'neon']), default: 'prism' }),
   motionLevel: Object.freeze({ type: 'enum', values: Object.freeze(['off', 'subtle', 'standard', 'ultra']), default: 'ultra' }),
+  performanceMode: Object.freeze({ type: 'enum', values: Object.freeze(['balanced', 'performance', 'quality', 'auto', 'eco']), default: 'balanced', legacyMap: Object.freeze({ auto: 'balanced', eco: 'performance' }) }),
   ignoreReducedMotion: Object.freeze({ type: 'boolean', default: false, stringBoolMode: 'strictOn' }),
   targetFps: Object.freeze({ type: 'enum', values: Object.freeze(['60', '120', '180', 'native']), default: '180' }),
   telemetryModule: Object.freeze({ type: 'enum', values: AUTO_ON_OFF_VALUES, default: 'auto', coerceBoolToOnOff: true }),

@@ -115,59 +115,64 @@ function createCh1Templates({
       if (api && api.version === __AG_REF_VER__ && api.codeHash === __AG_REF_HASH__ && typeof api.refreshConfig === 'function') {
         if (api.refreshConfig(cfg) === false) return { refreshed: true, skippedStale: true, version: api.version };
         const e = api.getState?.()?.cfg || cfg, de = D.documentElement;
-        if (e?.telemetryModule === 'off' || e?.telemetryModule === false) { try { api.detachTelemetry?.(); W.__agPrismTelemetry?.destroy?.(); } catch {} }
-        else { try { W.__agPrismTelemetry?.sync?.(e); api.syncTelemetry?.(); } catch {} }
-        if (e?.effortSliderModule === 'off' || e?.effortSliderModule === false) { try { W.__agPrismEffortSlider?.destroy?.(); } catch {} }
-        else { try { W.__agPrismEffortSlider?.sync?.(e); } catch {} }
-        if (e?.contextMenu === false || e?.contextMenu === 'off') { try { W.__agPrismContextMenu?.destroy?.(); } catch {} }
-        try { W.__agPrismThought?.sync?.(e); } catch {}
-        try { W.__agPrismInlineDiff?.sync?.(e); } catch {}
-        if (e?.omniModule === 'off') { try { W.__agPrismOmni?.destroy?.(); } catch {} }
-        else { try { W.__agPrismOmni?.sync?.(e, W.__agPrismOmniServerMeta || null); } catch {} }
+        const T = (f) => { try { f(); } catch {} };
+        const qa = (s) => D.querySelectorAll?.(s) || [];
+        const rm = (s) => qa(s).forEach((n) => n.remove?.());
+        const ra = (s) => de && s.split(',').forEach((a) => de.removeAttribute?.(a));
+        const dw = (s) => s.split(',').forEach((k) => { T(() => delete W[k]); T(() => delete G[k]); });
+        T(() => (e?.telemetryModule === 'off' || e?.telemetryModule === false ? (api.detachTelemetry?.(), W.__agPrismTelemetry?.destroy?.()) : (W.__agPrismTelemetry?.sync?.(e), api.syncTelemetry?.())));
+        T(() => (e?.effortSliderModule === 'off' || e?.effortSliderModule === false ? W.__agPrismEffortSlider?.destroy?.() : W.__agPrismEffortSlider?.sync?.(e)));
+        if (e?.contextMenu === false || e?.contextMenu === 'off') T(() => W.__agPrismContextMenu?.destroy?.());
+        T(() => W.__agPrismThought?.sync?.(e));
+        T(() => W.__agPrismInlineDiff?.sync?.(e));
+        T(() => (e?.omniModule === 'off' ? W.__agPrismOmni?.destroy?.() : W.__agPrismOmni?.sync?.(e, W.__agPrismOmniServerMeta || null)));
         if (e?.sidebarStudio !== 'on') {
-          try { W.__agPrismSidebar?.sync?.(e, W.__agPrismSidebarMeta || null); W.__agPrismSidebar?.destroy?.(); delete W.__agPrismSidebar; } catch {}
-          try { if (de) 'data-ag-prism-mode,data-ag-prism-chat-kind,data-ag-prism-chat-telemetry,data-ag-cs-space,data-ag-cs-space-palette,data-ag-cs-space-accent'.split(',').forEach((a) => de.removeAttribute(a)); } catch {}
-        } else { try { W.__agPrismSidebar?.sync?.(e, W.__agPrismSidebarMeta || null); } catch {} }
-        try {
-          const hiMode = e?.hostLocalization, hiLang = e?.language;
-          const navL = String((typeof navigator !== 'undefined' && ((navigator.languages && navigator.languages[0]) || navigator.language)) || '').trim();
-          if (hiMode === 'off') W.__agPrismHostI18n?.setMode?.('off');
-          else if (hiMode === 'on') W.__agPrismHostI18n?.setMode?.('on');
-          else if ((hiLang && hiLang !== 'zh-CN' && hiLang !== 'auto') || ((!hiLang || hiLang === 'auto') && navL && !/^zh(?:$|-(?:cn|hans|sg)(?:-|$))/i.test(navL))) W.__agPrismHostI18n?.destroy?.();
+          T(() => { W.__agPrismSidebar?.sync?.(e, W.__agPrismSidebarMeta || null); W.__agPrismSidebar?.destroy?.(); delete W.__agPrismSidebar; });
+          T(() => ra('data-ag-prism-mode,data-ag-prism-chat-kind,data-ag-prism-chat-telemetry,data-ag-cs-space,data-ag-cs-space-palette,data-ag-cs-space-accent'));
+        } else T(() => W.__agPrismSidebar?.sync?.(e, W.__agPrismSidebarMeta || null));
+        T(() => {
+          const m = e?.hostLocalization, l = e?.language;
+          const navL = String((typeof navigator !== 'undefined' && (navigator.languages?.[0] || navigator.language)) || '').trim();
+          if (m === 'off' || m === 'on') W.__agPrismHostI18n?.setMode?.(m);
+          else if ((l && l !== 'zh-CN' && l !== 'auto') || ((!l || l === 'auto') && navL && !/^zh(?:$|-(?:cn|hans|sg)(?:-|$))/i.test(navL))) W.__agPrismHostI18n?.destroy?.();
           else W.__agPrismHostI18n?.setMode?.('auto');
-        } catch {}
+        });
         if (e?.mascot === 'off' || e?.mascot === false) {
-          try {
-            try { W.__agDualMascotRig?.dispose?.(); } catch {}
-            try { api.sync?.(); } catch {}
-            D.querySelectorAll?.('.ag-cs-crab,.ag-cs-dual-stage,.ag-cs-crab-stage,.ag-cs-mascot-stage,.ag-v2-mascot-stage,.ag-v2-habitat-prop').forEach((n) => { try { n.__agMascotApi?.dispose?.(); } catch {} n.remove?.(); });
-            D.querySelectorAll?.('[data-ag-cs-crab-anchor]').forEach((n) => n.removeAttribute?.('data-ag-cs-crab-anchor'));
-            de?.removeAttribute?.('data-ag-cs-has-crab'); de?.removeAttribute?.('data-ag-cs-mascot-drag');
-            delete W.__agDualMascotRig; delete G.__agDualMascotRig; delete W.__agPrismMascotArt; delete G.__agPrismMascotArt;
-          } catch {}
+          T(() => {
+            T(() => W.__agDualMascotRig?.dispose?.()); T(() => api.sync?.());
+            qa('.ag-cs-crab,.ag-cs-dual-stage,.ag-cs-crab-stage,.ag-cs-mascot-stage,.ag-v2-mascot-stage,.ag-v2-habitat-prop').forEach((n) => { T(() => n.__agMascotApi?.dispose?.()); n.remove?.(); });
+            qa('[data-ag-cs-crab-anchor]').forEach((n) => n.removeAttribute?.('data-ag-cs-crab-anchor'));
+            ra('data-ag-cs-has-crab,data-ag-cs-mascot-drag');
+            dw('__agDualMascotRig,__agPrismMascotArt');
+          });
         }
         if (e?.homeLayout && e.homeLayout !== 'studio') {
-          try {
+          T(() => {
             api.detachHomeStudio?.(); D.getElementById?.('ag-prism-studio-v101-css')?.remove?.();
-            D.querySelectorAll?.('.ag-cs-home-panel-seat,.ag-cs-home-panel')?.forEach?.((n) => n.remove());
-            de?.removeAttribute?.('data-ag-prism-scope');
-            for (const k of ['__agPrismHomeStudioPanel', '__agHomeStudioPanel']) { delete W[k]; delete G[k]; }
-          } catch {}
+            rm('.ag-cs-home-panel-seat,.ag-cs-home-panel'); ra('data-ag-prism-scope');
+            dw('__agPrismHomeStudioPanel,__agHomeStudioPanel');
+          });
         }
         if (e?.periodicModelPicker === 'off' || e?.periodicModelPicker === false) {
-          try {
+          T(() => {
             W.__agPrismPeriodicPicker?.destroy?.();
-            'data-ag-prism-periodic-picker,data-ag-pp-open,data-ag-pp-holding'.split(',').forEach((a) => de?.removeAttribute?.(a));
-            D.querySelectorAll?.('#ag-prism-periodic-picker-css,#ag-prism-periodic-picker-root,.ag-pp-hold-ring,.ag-pp-mini-keycap').forEach((n) => n.remove());
-            '__agPrismPeriodicPicker,__agPrismPeriodicPickerFactory,__agPrismKeyboard3D,__agPrismPeriodicKeyboard3D,__agPrismOledScreen,__agPrismGrainAssets,__agPeriodicAudioFx,__agPeriodicModelCatalog,__agPeriodicHostBridge,__agPeriodicBentoUi,__agPeriodicPbrGrainAssets,__agPeriodicOledScreen,__agPeriodicKeyboard3D'.split(',').forEach((k) => { try { delete W[k]; } catch {} try { delete G[k]; } catch {} });
-          } catch {}
+            ra('data-ag-prism-periodic-picker,data-ag-pp-open,data-ag-pp-holding');
+            rm('#ag-prism-periodic-picker-css,#ag-prism-periodic-picker-root,.ag-pp-hold-ring,.ag-pp-mini-keycap');
+            dw('__agPrismPeriodicPicker,__agPrismPeriodicPickerFactory,__agPrismKeyboard3D,__agPrismPeriodicKeyboard3D,__agPrismOledScreen,__agPrismGrainAssets,__agPeriodicAudioFx,__agPeriodicModelCatalog,__agPeriodicHostBridge,__agPeriodicBentoUi,__agPeriodicPbrGrainAssets,__agPeriodicOledScreen,__agPeriodicKeyboard3D');
+          });
         }
         if (de) {
           if (e?.thoughtTranslate && e.thoughtTranslate !== 'off') de.setAttribute('data-ag-prism-thought-view', e.thoughtView === 'bilingual' ? 'bilingual' : 'immersive');
           else de.removeAttribute('data-ag-prism-thought-view');
           de.setAttribute('data-ag-prism-sidebar-studio', e?.sidebarStudio === 'on' ? 'on' : 'off');
         }
-        try { W.__agPrismApplyIgnoreReducedMotion?.(!!e?.ignoreReducedMotion); W.__agPrismFontCustomizer?.applyCustomFonts?.(e, D); } catch {}
+        T(() => {
+          const pm = e?.performanceMode;
+          if (W.__agPrismDomBus?.applyPerformanceMode) W.__agPrismDomBus.applyPerformanceMode(pm, D, W);
+          else if (de && pm) de.setAttribute('data-ag-cs-perf-mode', pm === 'eco' ? 'performance' : pm === 'auto' ? 'balanced' : pm);
+          W.__agPrismApplyIgnoreReducedMotion?.(!!e?.ignoreReducedMotion);
+          W.__agPrismFontCustomizer?.applyCustomFonts?.(e, D);
+        });
         return { refreshed: true, version: api.version };
       }
       return { refreshed: false };
@@ -223,8 +228,8 @@ function createCh1Templates({
         if (!flatOk && !rawOk) {
           const c = getCss();
           if (st.textContent !== c) st.textContent = c;
-          st.removeAttribute?.('data-ag-cs-flat');
           st.setAttribute?.('data-ag-cs-css-hash', fk);
+          st.setAttribute?.('data-ag-cs-flat', fk + ':' + c.length);
         }
         if (st.parentNode !== p || p.lastElementChild !== st) p.appendChild(st);
         try { W.__agPrism?.flattenCss?.(); } catch {}

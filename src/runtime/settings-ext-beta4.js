@@ -14,6 +14,12 @@
 
   const STYLE_ID = 'ag-prism-settings-ext-beta4-css';
   const DATALIST_ID = 'ag-prism-local-fonts-list';
+  const PERF_MODES = Object.freeze(['performance', 'balanced', 'quality']);
+  const PERF_MODE_OPT_KEYS = Object.freeze({
+    performance: 'optPerfPerformance',
+    balanced: 'optPerfBalanced',
+    quality: 'optPerfQuality',
+  });
   const CHAT_FONT_MODES = Object.freeze(['default', 'system-sans', 'noto-sans', 'inter', 'harmony', 'custom']);
   const CHAT_FONT_OPT_KEYS = Object.freeze({
     default: 'optChatFontDefault',
@@ -230,6 +236,78 @@
     return { box, inp, loadBtn, resetBtn, hint };
   }
 
+  function normPerfMode(raw) {
+    const bus = G.__agPrismDomBus || (typeof window !== 'undefined' ? window.__agPrismDomBus : null);
+    if (bus && typeof bus.normalizePerformanceMode === 'function') return bus.normalizePerformanceMode(raw);
+    const low = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
+    if (low === 'performance' || low === 'eco') return 'performance';
+    if (low === 'quality') return 'quality';
+    return 'balanced';
+  }
+
+  function ensurePerformanceModeRow(rootEl, doc, ctx) {
+    let row = qs(rootEl, '[data-ag-cs-row="performanceMode"]');
+    if (row) return row;
+    const motionRow = qs(rootEl, '[data-ag-cs-row="motionLevel"]');
+    if (!motionRow || !motionRow.parentElement) return null;
+
+    row = mk(doc, 'div');
+    sa(row, 'data-ag-cs-row', 'performanceMode');
+    sa(row, 'data-ag-cs-ext-owned', '1');
+
+    const inner = mk(doc, 'div', 'py-2');
+    const textCol = mk(doc, 'div', 'flex-1');
+    const titleLine = mk(doc, 'div', 'ag-cs-settings-title-line');
+    const tSpan = mk(doc, 'span');
+    sa(tSpan, 'data-k', 't');
+    const dSpan = mk(doc, 'span', 'whitespace-pre-wrap');
+    sa(dSpan, 'data-k', 'd');
+    titleLine.appendChild(tSpan);
+    textCol.appendChild(titleLine);
+    textCol.appendChild(dSpan);
+
+    const ctrlWrap = mk(doc, 'div', 'shrink-0');
+    const grp = mk(doc, 'div', 'ag-cs-seg-group');
+    sa(grp, 'role', 'group');
+
+    const BTN_CLS = 'ag-cs-seg-btn data-[pressed]:bg-secondary data-[pressed]:text-foreground';
+    for (let i = 0; i < PERF_MODES.length; i++) {
+      const val = PERF_MODES[i];
+      const btn = mk(doc, 'button', BTN_CLS);
+      btn.type = 'button';
+      sa(btn, 'type', 'button');
+      sa(btn, 'data-ag-cs-ext-key', 'performanceMode');
+      sa(btn, 'data-ag-cs-ext-val', JSON.stringify(val));
+      sa(btn, 'data-ag-cs-ext-perf', val);
+      btn.addEventListener('click', (ev) => {
+        ev?.stopPropagation?.();
+        const bus = (ctx.win && ctx.win.__agPrismDomBus) || G.__agPrismDomBus;
+        if (bus && typeof bus.applyPerformanceMode === 'function') {
+          bus.applyPerformanceMode(val, doc, ctx.win);
+        } else if (doc && doc.documentElement) {
+          try { if (doc.documentElement.dataset) doc.documentElement.dataset.agCsPerfMode = val; } catch {}
+          sa(doc.documentElement, 'data-ag-cs-perf-mode', val);
+        }
+        if (typeof ctx.saveSetting === 'function') ctx.saveSetting('performanceMode', val);
+        if (typeof row.__extResync === 'function') row.__extResync();
+      });
+      grp.appendChild(btn);
+    }
+
+    ctrlWrap.appendChild(grp);
+    inner.appendChild(textCol);
+    inner.appendChild(ctrlWrap);
+    row.appendChild(inner);
+
+    const parent = motionRow.parentElement;
+    if (typeof parent.insertBefore === 'function') {
+      parent.insertBefore(row, motionRow);
+    } else {
+      parent.appendChild(row);
+    }
+    return row;
+  }
+
   function ensureIgnoreRmRow(rootEl, doc, ctx) {
     let row = qs(rootEl, '[data-ag-cs-row="ignoreReducedMotion"]');
     if (row) return row;
@@ -405,6 +483,7 @@
     const ctx = Object.assign({}, rawCtx || {}, { doc, win, lang, ui: extUi });
     const runMut = typeof ctx.runGuardedMut === 'function' ? ctx.runGuardedMut : (fn) => fn();
 
+    const perfMode = normPerfMode(readLiveCfg(ctx, 'performanceMode', 'balanced'));
     const ignoreRm = Boolean(readLiveCfg(ctx, 'ignoreReducedMotion', false));
     const motionOff = readLiveCfg(ctx, 'motionLevel', 'ultra') === 'off';
     const chatFont = String(readLiveCfg(ctx, 'chatFont', 'default') || 'default');
@@ -412,9 +491,10 @@
     const codeFont = String(readLiveCfg(ctx, 'codeFont', 'default') || 'default');
     const codeFontCustom = String(readLiveCfg(ctx, 'codeFontCustom', '') || '');
 
-    const extSig = `${lang}|${ignoreRm ? 1 : 0}|${motionOff ? 1 : 0}|${chatFont}|${chatFontCustom}|${codeFont}|${codeFontCustom}`;
+    const extSig = `${lang}|${perfMode}|${ignoreRm ? 1 : 0}|${motionOff ? 1 : 0}|${chatFont}|${chatFontCustom}|${codeFont}|${codeFontCustom}`;
     if (
       rootEl.__extBeta4Sig === extSig &&
+      qs(rootEl, '[data-ag-cs-row="performanceMode"]') &&
       qs(rootEl, '[data-ag-cs-row="ignoreReducedMotion"]') &&
       qs(rootEl, '[data-ag-cs-row="chatFont"]') &&
       qs(rootEl, 'button[data-ag-cs-code-custom="1"]')
@@ -427,6 +507,31 @@
     runMut(() => {
       ensureStyle(doc);
       ensureLocalFontDatalist(doc, rootEl);
+
+      // 0. 无损性能模式分段选择器（动效区顶部，不改写动效/波纹/宠物设置）
+      const perfRow = ensurePerformanceModeRow(rootEl, doc, ctx);
+      if (perfRow) {
+        perfRow.__extResync = resyncNow;
+        const tEl = qs(perfRow, '[data-k="t"]');
+        const dEl = qs(perfRow, '[data-k="d"]');
+        if (tEl && tEl.textContent !== extUi.setPerformanceModeTitle) tEl.textContent = extUi.setPerformanceModeTitle || 'Performance Mode';
+        if (dEl && dEl.textContent !== extUi.setPerformanceModeDesc) dEl.textContent = extUi.setPerformanceModeDesc || '';
+        const grp = qs(perfRow, '.ag-cs-seg-group');
+        if (grp) {
+          const btns = grp.querySelectorAll ? grp.querySelectorAll('button[data-ag-cs-ext-key="performanceMode"]') : [];
+          for (let i = 0; i < btns.length; i++) {
+            const b = btns[i];
+            const val = ga(b, 'data-ag-cs-ext-perf') || 'balanced';
+            const optKey = PERF_MODE_OPT_KEYS[val];
+            const lbl = (optKey && extUi[optKey]) || val;
+            if (b.textContent !== lbl) b.textContent = lbl;
+            const act = val === perfMode;
+            sa(b, 'aria-pressed', act ? 'true' : 'false');
+            if (act) sa(b, 'data-pressed');
+            else ra(b, 'data-pressed');
+          }
+        }
+      }
 
       // 1. 忽略系统减弱动效开关（动效区）
       const rmRow = ensureIgnoreRmRow(rootEl, doc, ctx);
@@ -545,6 +650,7 @@
   return {
     STYLE_ID,
     DATALIST_ID,
+    PERF_MODES,
     CHAT_FONT_MODES,
     sync,
     dispose,

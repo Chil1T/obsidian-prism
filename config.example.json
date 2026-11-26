@@ -5,6 +5,7 @@
   "lightPreset": "crystal",
   "darkAuraStyle": "prism",
   "motionLevel": "ultra",
+  "performanceMode": "balanced",
   "ignoreReducedMotion": false,
   "targetFps": "180",
   "telemetryModule": "auto",
