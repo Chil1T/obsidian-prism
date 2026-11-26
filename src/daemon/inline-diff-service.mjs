@@ -211,71 +211,71 @@ function findGitRootFast(startDir) {
         cur = parent;
         continue;
       }
-      return null;
+      return { status: 'invalid' };
     }
 
     // 严格 Fail-Closed：.git 为符号链接或非常规文件/目录时一律立即拒绝
-    if (gst.isSymbolicLink()) return null;
+    if (gst.isSymbolicLink()) return { status: 'invalid' };
 
     let realCur;
     try {
       realCur = canonicalRealpathSync(cur);
     } catch {
-      return null;
+      return { status: 'invalid' };
     }
-    if (hasBlockedInlineDiffUnc(realCur)) return null;
+    if (hasBlockedInlineDiffUnc(realCur)) return { status: 'invalid' };
 
     if (gst.isDirectory()) {
       let realGitDir;
       try {
         realGitDir = canonicalRealpathSync(gitMarker);
         const rgst = fs.lstatSync(realGitDir);
-        if (rgst.isSymbolicLink() || !rgst.isDirectory()) return null;
+        if (rgst.isSymbolicLink() || !rgst.isDirectory()) return { status: 'invalid' };
       } catch {
-        return null;
+        return { status: 'invalid' };
       }
-      if (hasBlockedInlineDiffUnc(realGitDir)) return null;
-      if (!isSameCanonicalPath(path.join(realCur, '.git'), realGitDir, false)) return null;
+      if (hasBlockedInlineDiffUnc(realGitDir)) return { status: 'invalid' };
+      if (!isSameCanonicalPath(path.join(realCur, '.git'), realGitDir, false)) return { status: 'invalid' };
       const commonGitDir = resolveValidatedCommonGitDir(realGitDir);
-      if (!commonGitDir) return null;
+      if (!commonGitDir) return { status: 'invalid' };
       const indexMtimeMs = readGitIndexMtimeSafe(realGitDir);
-      if (indexMtimeMs === null) return null;
-      return { root: realCur, gitDir: realGitDir, commonGitDir, indexMtimeMs };
+      if (indexMtimeMs === null) return { status: 'invalid' };
+      return { status: 'ok', root: realCur, gitDir: realGitDir, commonGitDir, indexMtimeMs };
     }
 
     if (gst.isFile()) {
-      if (gst.size <= 0 || gst.size > INLINE_DIFF_MAX_GIT_POINTER_BYTES) return null;
+      if (gst.size <= 0 || gst.size > INLINE_DIFF_MAX_GIT_POINTER_BYTES) return { status: 'invalid' };
       const gitPtrRaw = readSmallNoFollowFileSync(gitMarker, INLINE_DIFF_MAX_GIT_POINTER_BYTES);
-      if (typeof gitPtrRaw !== 'string') return null;
+      if (typeof gitPtrRaw !== 'string') return { status: 'invalid' };
       const gitPtr = gitPtrRaw.trim();
       const m = /^gitdir:\s*([^\r\n]+)$/i.exec(gitPtr);
-      if (!m || !m[1]) return null;
+      if (!m || !m[1]) return { status: 'invalid' };
       const rawPtr = m[1].trim();
-      if (!rawPtr || /[\x00-\x1f\x7f]/.test(rawPtr) || hasBlockedInlineDiffUnc(rawPtr)) return null;
+      if (!rawPtr || /[\x00-\x1f\x7f]/.test(rawPtr) || hasBlockedInlineDiffUnc(rawPtr)) return { status: 'invalid' };
       const gitDirPath = path.resolve(realCur, rawPtr);
-      if (hasBlockedInlineDiffUnc(gitDirPath)) return null;
+      if (hasBlockedInlineDiffUnc(gitDirPath)) return { status: 'invalid' };
       let realGitDir;
       try {
         const gdLstat = fs.lstatSync(gitDirPath);
-        if (gdLstat.isSymbolicLink() || !gdLstat.isDirectory()) return null;
+        if (gdLstat.isSymbolicLink() || !gdLstat.isDirectory()) return { status: 'invalid' };
         realGitDir = canonicalRealpathSync(gitDirPath);
-        if (hasBlockedInlineDiffUnc(realGitDir)) return null;
+        if (hasBlockedInlineDiffUnc(realGitDir)) return { status: 'invalid' };
         const rgst = fs.lstatSync(realGitDir);
-        if (rgst.isSymbolicLink() || !rgst.isDirectory()) return null;
+        if (rgst.isSymbolicLink() || !rgst.isDirectory()) return { status: 'invalid' };
       } catch {
-        return null;
+        return { status: 'invalid' };
       }
-      if (!isSameCanonicalPath(gitDirPath, realGitDir, path.isAbsolute(rawPtr))) return null;
+      if (!isSameCanonicalPath(gitDirPath, realGitDir, path.isAbsolute(rawPtr))) return { status: 'invalid' };
       const commonGitDir = resolveValidatedCommonGitDir(realGitDir);
-      if (!commonGitDir) return null;
+      if (!commonGitDir) return { status: 'invalid' };
       const indexMtimeMs = readGitIndexMtimeSafe(realGitDir);
-      if (indexMtimeMs === null) return null;
-      return { root: realCur, gitDir: realGitDir, commonGitDir, indexMtimeMs };
+      if (indexMtimeMs === null) return { status: 'invalid' };
+      return { status: 'ok', root: realCur, gitDir: realGitDir, commonGitDir, indexMtimeMs };
     }
 
-    return null;
+    return { status: 'invalid' };
   }
-  return null;
+  return { status: 'none' };
 }
 
 function hasUnsafeGitConfig(gitDir, commonGitDir = null) {
@@ -382,7 +382,7 @@ function projectInlineDiffEntry(rawEntry, { maxDiffLines, maxSnapshotLines, maxL
   }
   const lineTruncated = textLines.length > maxSnapshotLines;
   const capped = lineTruncated ? textLines.slice(0, maxSnapshotLines) : textLines;
-  const isNewFile = Boolean(rawEntry.isUntracked || (hintAdd > 0 && hintDel === 0));
+  const isNewFile = !rawEntry.isNonGit && Boolean(rawEntry.isUntracked || (hintAdd > 0 && hintDel === 0));
   const mode = isNewFile ? 'new-file' : 'snapshot';
   const kind = isNewFile ? 'add' : 'ctx';
   const sign = isNewFile ? '+' : ' ';
@@ -430,6 +430,9 @@ export async function readSafeInlineDiff(rawUri, opts = {}) {
 
   if (hasBlockedInlineDiffUnc(realPath)) return { ok: false, error: 'blocked_unc' };
   if (isSensitiveInlineDiffPath(realPath)) return { ok: false, error: 'blocked_sensitive' };
+  if (process.platform === 'win32' && (!/^[A-Za-z]:[\\/]/.test(realPath) || realPath.slice(2).includes(':'))) {
+    return { ok: false, error: 'invalid_uri' };
+  }
 
   let st;
   try {
@@ -447,8 +450,12 @@ export async function readSafeInlineDiff(rawUri, opts = {}) {
   let realCommonGitDir = null;
   let gitRelPath = '';
   let gitIndexMtimeMs = 0;
+  let isNonGit = false;
   const fastGit = findGitRootFast(dir);
-  if (fastGit && fastGit.root && fastGit.gitDir && !hasBlockedInlineDiffUnc(fastGit.root)) {
+  if (fastGit.status === 'invalid') {
+    return { ok: false, reason: 'outside_git_repo', error: 'outside_git_repo' };
+  }
+  if (fastGit.status === 'ok' && fastGit.root && fastGit.gitDir && !hasBlockedInlineDiffUnc(fastGit.root)) {
     try {
       const candidateRoot = canonicalRealpathSync(fastGit.root);
       const rootStat = fs.lstatSync(candidateRoot);
@@ -469,15 +476,17 @@ export async function readSafeInlineDiff(rawUri, opts = {}) {
         }
       }
     } catch {}
+    if (!realRepoRoot || !gitRelPath || !realGitDir) {
+      return { ok: false, reason: 'outside_git_repo', error: 'outside_git_repo' };
+    }
+  } else {
+    // 已通过全部路径规范化、敏感路径、UNC/ADS 与非符号链接校验的纯非 Git 文件：降级为受控只读快照
+    isNonGit = true;
   }
 
-  if (!realRepoRoot || !gitRelPath || !realGitDir) {
-    return { ok: false, reason: 'outside_git_repo', error: 'outside_git_repo' };
-  }
-
-  const skipGitSubprocess = hasUnsafeGitConfig(realGitDir, realCommonGitDir);
-  const wantCommitFallback = hintDel > 0 ? 1 : 0;
-  const rawCacheKey = `${realPath}|${st.mtimeMs}|${st.size}|${gitIndexMtimeMs}|${skipGitSubprocess ? 1 : 0}|${wantCommitFallback}|${maxReadBytes}|${gitMaxBuffer}`;
+  const skipGitSubprocess = isNonGit || hasUnsafeGitConfig(realGitDir, realCommonGitDir);
+  const wantCommitFallback = !isNonGit && hintDel > 0 ? 1 : 0;
+  const rawCacheKey = `${realPath}|${st.mtimeMs}|${st.size}|${isNonGit ? 'nogit' : gitIndexMtimeMs}|${skipGitSubprocess ? 1 : 0}|${wantCommitFallback}|${maxReadBytes}|${gitMaxBuffer}`;
   const projectionOpts = { maxDiffLines, maxSnapshotLines, maxLineChars, hintAdd, hintDel };
 
   if (!opts?.noCache) {
@@ -579,7 +588,7 @@ export async function readSafeInlineDiff(rawUri, opts = {}) {
 
       const rawText = slice.toString('utf8').replace(/\r\n/g, '\n');
       const byteTruncated = bytesRead < fileSize;
-      return { ok: true, kind: 'file', fileName, rawText, byteTruncated, isUntracked };
+      return { ok: true, kind: 'file', fileName, rawText, byteTruncated, isUntracked, isNonGit };
     });
 
   if (opts?.noCache) {

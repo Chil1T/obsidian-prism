@@ -122,7 +122,7 @@ test('inline-diff-rpc 1: reads modified git diff, staged (--cached) diff, untrac
       { kind: 'add', ln: '2', sign: '+', text: 'export const y = 2;' },
     ]);
 
-    // 4) Clean committed file -> snapshot (all ctx); non-git file -> fail-closed outside_git_repo
+    // 4) Clean committed file -> snapshot (all ctx); non-git normal file -> safe bounded snapshot; non-git sensitive file -> blocked_sensitive
     const cleanRes = await readSafeInlineDiff(cleanFile);
     assert.equal(cleanRes.ok, true);
     assert.equal(cleanRes.mode, 'snapshot');
@@ -133,9 +133,22 @@ test('inline-diff-rpc 1: reads modified git diff, staged (--cached) diff, untrac
     const outsideFile = path.join(outsideDir, 'notes.txt');
     fs.writeFileSync(outsideFile, 'hello\nworld\n', 'utf8');
     const outsideRes = await readSafeInlineDiff(outsideFile);
-    assert.equal(outsideRes.ok, false);
-    assert.equal(outsideRes.error, 'outside_git_repo');
-    assert.equal(outsideRes.reason, 'outside_git_repo');
+    assert.equal(outsideRes.ok, true);
+    assert.equal(outsideRes.mode, 'snapshot');
+    assert.equal(outsideRes.fileName, 'notes.txt');
+    assert.equal(outsideRes.additions, 0);
+    assert.equal(outsideRes.deletions, 0);
+    assert.equal(outsideRes.truncated, false);
+    assert.deepEqual(outsideRes.lines, [
+      { kind: 'ctx', ln: '1', sign: ' ', text: 'hello' },
+      { kind: 'ctx', ln: '2', sign: ' ', text: 'world' },
+    ]);
+
+    const outsideSecret = path.join(outsideDir, '.env');
+    fs.writeFileSync(outsideSecret, 'SECRET_KEY=1\n', 'utf8');
+    const outsideSecretRes = await readSafeInlineDiff(outsideSecret);
+    assert.equal(outsideSecretRes.ok, false);
+    assert.equal(outsideSecretRes.error, 'blocked_sensitive');
 
     // 5) Hard limits: git-diff <= 120 lines & <= 240 chars/line
     const hugeLine = `const wide = "${'x'.repeat(400)}";`;

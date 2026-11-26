@@ -47,18 +47,8 @@
     TITLE: 1,
   };
 
-  var IGNORED_CLASSES = [
-    'monaco-editor',
-    'view-lines',
-    'view-line',
-    'monaco-mouse-cursor-text',
-    'xterm',
-    'terminal',
-    'token',
-    'hljs',
-    'code-block',
-    'editor-instance',
-  ];
+  var IGNORED_CLASSES = ['monaco-editor', 'monaco-diff-editor', 'diffOverview', 'view-lines', 'view-line', 'cdr', 'line-insert', 'line-delete', 'monaco-mouse-cursor-text', 'xterm', 'terminal', 'token', 'hljs', 'shiki', 'cm-editor', 'code-block', 'editor-instance', 'ag-cs-inline-diff-box', 'ag-cs-inline-diff-card', 'diff-editor', 'diff-view', 'diff-line', 'diff-hunk'];
+  var DIFF_CLASS_SUBSTRS = ['diff-editor', 'diff-view', 'diff-line', 'diff-hunk', 'cm-editor', 'shiki', 'hljs'];
 
   function toLookupMap(arr) {
     var map = Object.create(null);
@@ -380,6 +370,18 @@
     return false;
   }
 
+  function isCodeDiffContainerSelf(el, tokens, tid) {
+    if (hasAttr(el, 'data-ag-cs-inline-diff')) return true;
+    if (tid) { var tl = String(tid).toLowerCase(); if (tl.indexOf('diff') !== -1 || tl.indexOf('code-viewer') !== -1 || tl.indexOf('file-viewer') !== -1) return true; }
+    for (var i = 0; i < tokens.length; i++) {
+      var tok = tokens[i];
+      if (IGNORED_CLASS_MAP[tok]) return true;
+      var cl = tok.toLowerCase();
+      for (var d = 0; d < DIFF_CLASS_SUBSTRS.length; d++) { if (cl.indexOf(DIFF_CLASS_SUBSTRS[d]) !== -1) return true; }
+    }
+    return false;
+  }
+
   function isDirectIgnoredSelf(el) {
     if (!el || el.nodeType !== 1) return false;
     var tag = el.tagName ? String(el.tagName).toUpperCase() : '';
@@ -392,10 +394,7 @@
     if (isModelSelectorSelf(el, tid)) return true;
     if (isChatProseSelf(el, tokens, tid)) return true;
     if (isUserContentBoundarySelf(el, tokens, tid)) return true;
-    for (var i = 0; i < tokens.length; i++) {
-      if (IGNORED_CLASS_MAP[tokens[i]]) return true;
-    }
-    return false;
+    return isCodeDiffContainerSelf(el, tokens, tid);
   }
 
   /**
