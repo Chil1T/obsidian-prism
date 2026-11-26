@@ -2414,3 +2414,213 @@ test('Phase 4A P0: C# CdpClient fixes bundleUnchanged/destroy() and static runti
     }
   }
 });
+
+test(
+  'Windows C# CdpClient 54-key schema runtime parity: defaults, validators, deserialization tolerance & zero silent key drop',
+  { skip: process.platform !== 'win32' ? 'Windows-only csc runtime verification' : false },
+  () => {
+    const winDir = process.env.WINDIR || 'C:\\Windows';
+    const csc = [
+      path.join(winDir, 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe'),
+      path.join(winDir, 'Microsoft.NET', 'Framework', 'v4.0.30319', 'csc.exe'),
+    ].find((p) => fs.existsSync(p));
+    assert.ok(csc, 'Expected .NET Framework csc.exe on Windows');
+
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-prism-cs-schema54-'));
+    try {
+      const cfgDir = path.join(tmpDir, 'plugin');
+      fs.mkdirSync(cfgDir, { recursive: true });
+
+      // Simulate legacy manifest.json missing all 26 newly added keys
+      fs.writeFileSync(
+        path.join(cfgDir, 'manifest.json'),
+        JSON.stringify({
+          version: cdp.PLUGIN_VERSION,
+          styleId: cdp.STYLE_ID,
+          settingBinding: cdp.SETTING_BINDING,
+          parts: ['ui-runtime.js'],
+          defaultConfig: { palette: 'obsidian', language: 'auto' },
+          validators: { palette: ['host', 'obsidian', 'warm', 'claude'] },
+        }),
+        'utf8'
+      );
+
+      // Config with legacy aliases, invalid/null values for tolerance test, optional keys & unknown future key
+      fs.writeFileSync(
+        path.join(cfgDir, 'config.json'),
+        JSON.stringify({
+          lang: 'yue',
+          palette: 'claude',
+          performanceMode: 'eco',
+          ignoreReducedMotion: 'on',
+          sidebarCompact: 'not-on',
+          autoArchiveOnExit: 'true',
+          effortMemory: false,
+          periodicModelPicker: true,
+          mascot: 'r:c1,k1+m',
+          chatFontCustom: 'Inter\r\nBad\0Name',
+          codeFontCustom: 12345,
+          telemetryQuotaMode: null,
+          targetFps: '999',
+          pollIntervalMs: 'not-a-number',
+          autoRelaunchOnBareLaunch: false,
+          customFutureKey: 'preserve-me',
+        }),
+        'utf8'
+      );
+
+      const probeCs = path.join(tmpDir, 'SchemaProbe.cs');
+      const probeExe = path.join(tmpDir, 'schema-probe.exe');
+      fs.writeFileSync(
+        probeCs,
+        [
+          'using System;',
+          'using System.Collections.Generic;',
+          'using System.IO;',
+          'using AgyClaudeStyle;',
+          'class SchemaProbe {',
+          '  static void Main(string[] args) {',
+          '    string dir = args[0];',
+          '    var m = PluginManifest.Load(dir);',
+          '    var defaults = CdpHelper.CreateDefaultConfig();',
+          '    var validators = CdpHelper.CreateDefaultValidators();',
+          '    var readBefore = CdpHelper.ReadConfig(dir, m);',
+          '    var valChecks = new Dictionary<string, object>(StringComparer.Ordinal) {',
+          '      { "quotaCompact", CdpHelper.ValidateConfigEntry(m, "telemetryQuotaMode", "compact") },',
+          '      { "quotaBoth", CdpHelper.ValidateConfigEntry(m, "telemetryQuotaMode", "both") },',
+          '      { "quotaBad", CdpHelper.ValidateConfigEntry(m, "telemetryQuotaMode", "full") },',
+          '      { "fps180", CdpHelper.ValidateConfigEntry(m, "targetFps", "180") },',
+          '      { "fpsNative", CdpHelper.ValidateConfigEntry(m, "targetFps", "native") },',
+          '      { "fpsNumBad", CdpHelper.ValidateConfigEntry(m, "targetFps", 180) },',
+          '      { "perfEco", CdpHelper.ValidateConfigEntry(m, "performanceMode", "eco") },',
+          '      { "pollOkMin", CdpHelper.ValidateConfigEntry(m, "pollIntervalMs", 500) },',
+          '      { "pollOkMax", CdpHelper.ValidateConfigEntry(m, "pollIntervalMs", 60000) },',
+          '      { "pollLow", CdpHelper.ValidateConfigEntry(m, "pollIntervalMs", 499) },',
+          '      { "pollHigh", CdpHelper.ValidateConfigEntry(m, "pollIntervalMs", 60001) },',
+          '      { "pollFloat", CdpHelper.ValidateConfigEntry(m, "pollIntervalMs", 2500.5) },',
+          '      { "pollStr", CdpHelper.ValidateConfigEntry(m, "pollIntervalMs", "2500") },',
+          '      { "optPromptTrue", CdpHelper.ValidateConfigEntry(m, "autoPromptCdpRelaunch", true) },',
+          '      { "optPromptStr", CdpHelper.ValidateConfigEntry(m, "autoPromptCdpRelaunch", "on") },',
+          '      { "optBareFalse", CdpHelper.ValidateConfigEntry(m, "autoRelaunchOnBareLaunch", false) },',
+          '      { "optBareStr", CdpHelper.ValidateConfigEntry(m, "autoRelaunchOnBareLaunch", "off") },',
+          '      { "mascotRosterOk", CdpHelper.ValidateConfigEntry(m, "mascot", "r:c1,d1+m") },',
+          '      { "mascotRosterOver", CdpHelper.ValidateConfigEntry(m, "mascot", "r:c4,k3") },',
+          '      { "mascotRosterDup", CdpHelper.ValidateConfigEntry(m, "mascot", "r:c1,c1") },',
+          '      { "unknownKey", CdpHelper.ValidateConfigEntry(m, "totallyUnknownKey", "x") }',
+          '    };',
+          '    var patch = new Dictionary<string, object>(StringComparer.Ordinal) {',
+          '      { "telemetryQuotaMode", "both" },',
+          '      { "lightPreset", "alabaster" },',
+          '      { "darkAuraStyle", "neon" },',
+          '      { "performanceMode", "auto" },',
+          '      { "pollIntervalMs", 4000 },',
+          '      { "autoPromptCdpRelaunch", false },',
+          '      { "mascot", "r:c1,d1+m" },',
+          '      { "invalidIgnored", "nope" }',
+          '    };',
+          '    bool updated = CdpHelper.UpdateConfigBatch(dir, m, patch);',
+          '    var persisted = MiniJson.ParseObject(File.ReadAllText(Path.Combine(dir, "config.json"), System.Text.Encoding.UTF8));',
+          '    var outObj = new Dictionary<string, object>(StringComparer.Ordinal) {',
+          '      { "defaults", defaults },',
+          '      { "validators", validators },',
+          '      { "manifestDefaultCount", m.DefaultConfig.Count },',
+          '      { "manifestValidatorCount", m.Validators.Count },',
+          '      { "readBefore", readBefore },',
+          '      { "valChecks", valChecks },',
+          '      { "updated", updated },',
+          '      { "persisted", persisted }',
+          '    };',
+          '    Console.Write(MiniJson.Stringify(outObj, false));',
+          '  }',
+          '}',
+        ].join('\n'),
+        'utf8'
+      );
+
+      execFileSync(
+        csc,
+        [
+          '/nologo',
+          '/utf8output',
+          '/codepage:65001',
+          '/warnaserror',
+          '/target:exe',
+          `/out:${probeExe}`,
+          '/r:System.dll',
+          '/r:System.Core.dll',
+          '/r:System.Net.Http.dll',
+          path.join(ROOT_DIR, 'installer', 'common', 'MiniJson.cs'),
+          path.join(ROOT_DIR, 'installer', 'common', 'CdpClient.cs'),
+          probeCs,
+        ],
+        { stdio: 'pipe' }
+      );
+
+      const res = JSON.parse(execFileSync(probeExe, [cfgDir], { encoding: 'utf8' }));
+      assert.deepEqual(res.defaults, cdp.DEFAULT_CONFIG, 'C# CreateDefaultConfig() must match DEFAULT_CONFIG 100%');
+      assert.deepEqual(res.validators, cdp.VALIDATORS, 'C# CreateDefaultValidators() must match VALIDATORS 100%');
+      assert.equal(res.manifestDefaultCount, Object.keys(cdp.DEFAULT_CONFIG).length);
+      assert.equal(res.manifestValidatorCount, Object.keys(cdp.VALIDATORS).length);
+
+      // Reconcile & tolerance checks on readBefore
+      assert.equal(res.readBefore.language, 'zh-CN');
+      assert.equal(res.readBefore.lang, 'zh-CN');
+      assert.equal(res.readBefore.palette, 'warm');
+      assert.equal(res.readBefore.performanceMode, 'performance');
+      assert.equal(res.readBefore.ignoreReducedMotion, true);
+      assert.equal(res.readBefore.sidebarCompact, false);
+      assert.equal(res.readBefore.autoArchiveOnExit, true);
+      assert.equal(res.readBefore.effortMemory, 'off');
+      assert.equal(res.readBefore.periodicModelPicker, 'on');
+      assert.equal(res.readBefore.mascot, 'minis');
+      assert.equal(res.readBefore.chatFontCustom, 'InterBadName');
+      assert.equal(res.readBefore.codeFontCustom, '');
+      assert.equal(res.readBefore.telemetryQuotaMode, 'compact');
+      assert.equal(res.readBefore.targetFps, '180');
+      assert.equal(res.readBefore.pollIntervalMs, 2500);
+      assert.equal(res.readBefore.autoRelaunchOnBareLaunch, false);
+      assert.equal(res.readBefore.customFutureKey, 'preserve-me');
+
+      // ValidateConfigEntry parity
+      assert.equal(res.valChecks.quotaCompact, true);
+      assert.equal(res.valChecks.quotaBoth, true);
+      assert.equal(res.valChecks.quotaBad, false);
+      assert.equal(res.valChecks.fps180, true);
+      assert.equal(res.valChecks.fpsNative, true);
+      assert.equal(res.valChecks.fpsNumBad, false);
+      assert.equal(res.valChecks.perfEco, true);
+      assert.equal(res.valChecks.pollOkMin, true);
+      assert.equal(res.valChecks.pollOkMax, true);
+      assert.equal(res.valChecks.pollLow, false);
+      assert.equal(res.valChecks.pollHigh, false);
+      assert.equal(res.valChecks.pollFloat, false);
+      assert.equal(res.valChecks.pollStr, false);
+      assert.equal(res.valChecks.optPromptTrue, true);
+      assert.equal(res.valChecks.optPromptStr, false);
+      assert.equal(res.valChecks.optBareFalse, true);
+      assert.equal(res.valChecks.optBareStr, false);
+      assert.equal(res.valChecks.mascotRosterOk, true);
+      assert.equal(res.valChecks.mascotRosterOver, false);
+      assert.equal(res.valChecks.mascotRosterDup, false);
+      assert.equal(res.valChecks.unknownKey, false);
+
+      // UpdateConfigBatch persists all 52 non-optional keys + set optional keys with zero silent drop
+      assert.equal(res.updated, true);
+      for (const k of Object.keys(cdp.DEFAULT_CONFIG)) {
+        assert.ok(Object.prototype.hasOwnProperty.call(res.persisted, k), `Persisted config.json silently dropped key "${k}"`);
+      }
+      assert.equal(res.persisted.telemetryQuotaMode, 'both');
+      assert.equal(res.persisted.lightPreset, 'alabaster');
+      assert.equal(res.persisted.darkAuraStyle, 'neon');
+      assert.equal(res.persisted.performanceMode, 'balanced');
+      assert.equal(res.persisted.pollIntervalMs, 4000);
+      assert.equal(res.persisted.autoPromptCdpRelaunch, false);
+      assert.equal(res.persisted.autoRelaunchOnBareLaunch, false);
+      assert.equal(res.persisted.mascot, 'r:c1,d1+m');
+      assert.equal(res.persisted.customFutureKey, 'preserve-me');
+      assert.equal(Object.prototype.hasOwnProperty.call(res.persisted, 'invalidIgnored'), false);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }
+);
