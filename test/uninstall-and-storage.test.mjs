@@ -26,6 +26,8 @@ function mkTempDir(prefix) {
 function createMockDomAndStorage() {
   const storeMap = new Map();
   const storage = {
+    get length() { return storeMap.size; },
+    key: (i) => Array.from(storeMap.keys())[i] ?? null,
     getItem: (k) => (storeMap.has(k) ? storeMap.get(k) : null),
     setItem: (k, v) => storeMap.set(k, String(v)),
     removeItem: (k) => storeMap.delete(k),
@@ -558,7 +560,7 @@ test('PrismDaemon executeRepoAction uninstall enforces confirm:true, symlink che
   }
 });
 
-test('settings-panel.js inline uninstall UI works across 5 languages and purgeData clears exactly 12 Prism keys while preserving 4 upstream keys', async () => {
+test('settings-panel.js inline uninstall UI works across 5 languages and purgeData clears all 16 Prism keys + dynamic trajRollup shards while preserving external Pulse keys', async () => {
   const prevDoc = globalThis.document;
   const prevWin = globalThis.window;
   const prevStorage = globalThis.localStorage;
@@ -570,6 +572,7 @@ test('settings-panel.js inline uninstall UI works across 5 languages and purgeDa
     'agClaudeStyle.settings.v3',
     'ag-claude-style:config',
     'ag-prism:trajRollup.v1',
+    'ag-prism:homeSessionScope.v1',
     'ag-prism:settings-open',
     'ag-prism:settings-subtab',
     '__op_chroma_v1',
@@ -577,14 +580,20 @@ test('settings-panel.js inline uninstall UI works across 5 languages and purgeDa
     'ag_prism_thought_zh_cache_v1',
     'ag_prism_thought_view_mode_v1',
     'ag_prism_thought_style_tag_v1',
+    'ag_prism_pp_muted',
+    'ag.prism.effortMemory.v1',
+    'ag.codexEffortSlider.settings.v1',
+  ];
+  const dynamicShardKeys = [
+    'ag-prism:trajRollup.v1:ws-alpha',
+    'ag-prism:trajRollup.v1:ws-beta',
   ];
   const upstreamKeys = [
-    'ag.codexEffortSlider.settings.v1',
     'ag-pulse-enabled',
     'ag-pulse-theme',
     'ag-pulse-cache-v1',
   ];
-  for (const k of [...prismKeys, ...upstreamKeys]) storage.setItem(k, 'val-' + k);
+  for (const k of [...prismKeys, ...dynamicShardKeys, ...upstreamKeys]) storage.setItem(k, 'val-' + k);
 
   const calls = [];
   const state = settingsPanel.getDefaultSettingsPatch();
@@ -662,7 +671,7 @@ test('settings-panel.js inline uninstall UI works across 5 languages and purgeDa
     for (const k of prismKeys) assert.ok(storage.getItem(k), `Key ${k} must remain when purgeData=false`);
     assert.equal(uChip.getAttribute('data-status'), 'ok');
 
-    // Confirm WITH purgeData -> deletes exact 12 Prism keys and preserves 4 upstream keys
+    // Confirm WITH purgeData -> deletes all 16 Prism keys + dynamic trajRollup shards and preserves external Pulse keys
     uBtn.click();
     uCb.checked = true;
     uConfirm.click();
@@ -670,7 +679,7 @@ test('settings-panel.js inline uninstall UI works across 5 languages and purgeDa
     const uCalls2 = calls.filter((c) => c?.action === 'uninstall');
     assert.equal(uCalls2.length, 2);
     assert.deepEqual(uCalls2[1], { action: 'uninstall', confirm: true, purgeData: true });
-    for (const k of prismKeys) assert.equal(storage.getItem(k), null, `Prism key ${k} must be purged`);
+    for (const k of [...prismKeys, ...dynamicShardKeys]) assert.equal(storage.getItem(k), null, `Prism key ${k} must be purged`);
     for (const k of upstreamKeys) assert.ok(storage.getItem(k), `Upstream key ${k} must be preserved`);
   } finally {
     if (prevDoc === undefined) delete globalThis.document;

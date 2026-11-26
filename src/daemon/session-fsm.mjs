@@ -1,5 +1,6 @@
 // Obsidian Prism 显式分层有限状态机（Host FSM + Per-Window Entry FSM + Per-Channel 熔断器 + 配置 SHA-256 指纹 + 目标事件过滤）
 import crypto from 'node:crypto';
+import { sanitizeLogLine } from '../../sidecars/daemon/redact.mjs';
 
 export const HOST_FSM_STATES = Object.freeze({
   IDLE: 'IDLE',
@@ -30,6 +31,22 @@ export const AWAITING_DOM_MAX_ATTEMPTS = 3;
 export const CHANNEL_CIRCUIT_FAIL_THRESHOLD = 3;
 export const CHANNEL_CIRCUIT_BASE_COOLDOWN_MS = 30_000;
 export const CHANNEL_CIRCUIT_MAX_COOLDOWN_MS = 300_000;
+export const CHANNEL_ERROR_MAX_CHARS = 240;
+
+function formatSanitizedChannelError(rawError) {
+  if (rawError === null || rawError === undefined) return '';
+  const text = typeof rawError === 'object' && typeof rawError.message === 'string'
+    ? rawError.message
+    : String(rawError);
+  const singleLine = text.replace(/[\r\n\t]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
+  if (!singleLine) return '';
+  return sanitizeLogLine(singleLine).slice(0, CHANNEL_ERROR_MAX_CHARS);
+}
+
+function normalizeChannelStage(stage) {
+  const s = String(stage || '').trim();
+  return s ? s.slice(0, 32) : '';
+}
 
 export function ensureEntryFsm(entry) {
   if (!entry || typeof entry !== 'object') return null;
@@ -180,8 +197,15 @@ export function getChannelState(entry, channelId) {
       scriptId: null,
       failCount: 0,
       cooldownUntil: 0,
+      lastError: '',
+      lastFailAt: 0,
+      lastStage: '',
     };
     entry.channelStates[channelId] = st;
+  } else {
+    if (typeof st.lastError !== 'string') st.lastError = '';
+    if (typeof st.lastFailAt !== 'number') st.lastFailAt = 0;
+    if (typeof st.lastStage !== 'string') st.lastStage = '';
   }
   return st;
 }
@@ -218,15 +242,25 @@ export function recordChannelOff(entry, channelId) {
   return st;
 }
 
-export function recordChannelFailure(entry, channelId, { now = Date.now(), baseCooldownMs = CHANNEL_CIRCUIT_BASE_COOLDOWN_MS } = {}) {
+export function recordChannelFailure(
+  entry,
+  channelId,
+  { now = Date.now(), baseCooldownMs = CHANNEL_CIRCUIT_BASE_COOLDOWN_MS, error = '', stage = '' } = {}
+) {
   const st = getChannelState(entry, channelId);
   if (!st) return null;
+  const ts = Number.isFinite(now) && now > 0 ? now : Date.now();
   st.failCount = (st.failCount || 0) + 1;
+  st.lastFailAt = ts;
+  const cleanErr = formatSanitizedChannelError(error);
+  if (cleanErr) st.lastError = cleanErr;
+  const cleanStage = normalizeChannelStage(stage);
+  if (cleanStage) st.lastStage = cleanStage;
   if (st.failCount >= CHANNEL_CIRCUIT_FAIL_THRESHOLD) {
     const exp = Math.min(4, st.failCount - CHANNEL_CIRCUIT_FAIL_THRESHOLD);
     const delay = Math.min(CHANNEL_CIRCUIT_MAX_COOLDOWN_MS, Math.max(1000, baseCooldownMs) * Math.pow(2, exp));
     st.status = CHANNEL_FSM_STATES.COOLDOWN;
-    st.cooldownUntil = now + delay;
+    st.cooldownUntil = ts + delay;
   }
   return st;
 }

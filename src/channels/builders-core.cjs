@@ -85,6 +85,7 @@ function createCoreChannelBuilders({ rootDir, pluginVersion, readConfig, bundleC
     const verJson = JSON.stringify(pluginVersion);
 
     return `(() => {
+  try {
 ${CHANNEL_OMNI_SIDEBAR_HOST_GUARD}
 
     const serverMeta = ${metaJson};
@@ -186,6 +187,9 @@ ${CHANNEL_OMNI_SIDEBAR_HOST_GUARD}
       document.addEventListener('DOMContentLoaded', mountOmni, { once: true });
     }
     return { ok: true, status: omniStatus, version: ${verJson}, codeHash: omniHash };
+  } catch (err) {
+    return { ok: false, status: 'error', channel: 'omni', error: String(err && err.message || err).slice(0, 300), stack: String(err && err.stack || '').slice(0, 600) };
+  }
   })()`;
   }
 
@@ -251,6 +255,7 @@ ${CHANNEL_OMNI_SIDEBAR_HOST_GUARD}
     const verJson = serializeJsonForEval(pluginVersion);
 
     return `(() => {
+  try {
 ${CHANNEL_OMNI_SIDEBAR_HOST_GUARD}
 
     const serverMeta = ${metaJson};
@@ -373,6 +378,9 @@ ${CHANNEL_OMNI_SIDEBAR_HOST_GUARD}
       document.addEventListener('DOMContentLoaded', mountSidebar, { once: true });
     }
     return { ok: true, status: sidebarStatus, version: ${verJson}, codeHash: sidebarHash };
+  } catch (err) {
+    return { ok: false, status: 'error', channel: 'sidebar', error: String(err && err.message || err).slice(0, 300), stack: String(err && err.stack || '').slice(0, 600) };
+  }
   })()`;
   }
 
@@ -433,6 +441,7 @@ ${CHANNEL_OMNI_SIDEBAR_HOST_GUARD}
     const hashJson = serializeJsonForEval(codeHash);
 
     return `(() => {
+  try {
 ${CHANNEL_MAIN_FRAME_HOST_GUARD}
 
     const cleanupInlineDiff = () => {
@@ -495,6 +504,9 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
       return { ok: true, status: 'deferred', codeHash: targetHash };
     }
     return mountOrReuse();
+  } catch (err) {
+    return { ok: false, status: 'error', channel: 'inlineDiff', error: String(err && err.message || err).slice(0, 300), stack: String(err && err.stack || '').slice(0, 600) };
+  }
   })()`;
   }
 

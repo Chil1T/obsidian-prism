@@ -35,6 +35,7 @@ import {
   healSingleChannelOnEntry,
   applyAllChannelsToEntry,
   runBroadcastConfigRefresh,
+  recordChannelEvalFailure,
 } from './channel-sync-engine.mjs';
 import { verifyAndHealEntry, verifyAndHealEntryUnlocked } from './session-heal.mjs';
 
@@ -608,13 +609,23 @@ export class ChannelOrchestrator {
     try {
       const evalParams = { expression: expr, returnByValue: true };
       if (typeof executionContextId === 'number' && executionContextId > 0) evalParams.contextId = executionContextId;
-      const res = await entry.session.send('Runtime.evaluate', evalParams, 5000).catch(() => null);
-      if (res?.result?.value?.ok) {
+      let caughtErr = null;
+      const res = await entry.session.send('Runtime.evaluate', evalParams, 5000).catch((err) => {
+        caughtErr = err;
+        return null;
+      });
+      const val = res?.result?.value;
+      if (val?.ok) {
         entry.settingsChannelDelivered = true;
         recordChannelSuccess(entry, 'settings', { codeHash: this.getChannelExprHash('settings', expr) });
         return true;
       }
-      recordChannelFailure(entry, 'settings');
+      const errObj = caughtErr
+        ? { ok: false, status: 'eval-error', error: String(caughtErr.message || caughtErr).slice(0, 300), stack: String(caughtErr.stack || '').slice(0, 600) }
+        : res?.exceptionDetails
+          ? { ok: false, status: 'eval-error', error: String(res.exceptionDetails.exception?.description || res.exceptionDetails.text || 'exception').slice(0, 300) }
+          : val;
+      recordChannelEvalFailure(this, entry, 'settings', errObj, { stage: 'apply' });
       return false;
     } finally {
       entry._settingsChannelInFlight = false;
@@ -639,15 +650,25 @@ export class ChannelOrchestrator {
       }
       const evalParams = { expression: expr, returnByValue: true };
       if (typeof executionContextId === 'number' && executionContextId > 0) evalParams.contextId = executionContextId;
-      const res = await entry.session.send('Runtime.evaluate', evalParams, 5000).catch(() => null);
-      if (res?.result?.value?.ok) {
-        entry.homeStudioMounted = !res.result.value.skippedByLiveCfg;
+      let caughtErr = null;
+      const res = await entry.session.send('Runtime.evaluate', evalParams, 5000).catch((err) => {
+        caughtErr = err;
+        return null;
+      });
+      const val = res?.result?.value;
+      if (val?.ok) {
+        entry.homeStudioMounted = !val.skippedByLiveCfg;
         entry.lastHomeStudioSig = hsSig;
-        if (res.result.value.skippedByLiveCfg) recordChannelSkipped(entry, 'homeStudio', { codeHash: hsHash });
+        if (val.skippedByLiveCfg) recordChannelSkipped(entry, 'homeStudio', { codeHash: hsHash });
         else recordChannelSuccess(entry, 'homeStudio', { codeHash: hsHash, scriptId: entry.homeStudioScriptId });
         return true;
       }
-      recordChannelFailure(entry, 'homeStudio');
+      const errObj = caughtErr
+        ? { ok: false, status: 'eval-error', error: String(caughtErr.message || caughtErr).slice(0, 300), stack: String(caughtErr.stack || '').slice(0, 600) }
+        : res?.exceptionDetails
+          ? { ok: false, status: 'eval-error', error: String(res.exceptionDetails.exception?.description || res.exceptionDetails.text || 'exception').slice(0, 300) }
+          : val;
+      recordChannelEvalFailure(this, entry, 'homeStudio', errObj, { stage: 'apply' });
       return false;
     } finally {
       entry._homeStudioChannelInFlight = false;

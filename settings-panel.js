@@ -9,28 +9,19 @@
   const STORAGE_SETTINGS_OPEN_KEY = 'ag-prism:settings-open';
   const STORAGE_SETTINGS_SUBTAB_KEY = 'ag-prism:settings-subtab';
   const SETTINGS_STYLE_ID = 'ag-prism-settings-v101-css';
-  const PRISM_STORAGE_KEYS = [
-    'ag-prism:config',
-    'ag-prism:lastFileConfig',
-    'agClaudeStyle.settings.v3',
-    'ag-claude-style:config',
-    'ag-prism:trajRollup.v1',
-    STORAGE_SETTINGS_OPEN_KEY,
-    STORAGE_SETTINGS_SUBTAB_KEY,
-    '__op_chroma_v1',
-    'agCs.pulseVialMode.v1',
-    'ag_prism_thought_zh_cache_v1',
-    'ag_prism_thought_view_mode_v1',
-    'ag_prism_thought_style_tag_v1',
-  ];
+  const PRISM_STORAGE_KEYS = 'ag-prism:config|ag-prism:lastFileConfig|agClaudeStyle.settings.v3|ag-claude-style:config|ag-prism:trajRollup.v1|ag-prism:homeSessionScope.v1|ag-prism:settings-open|ag-prism:settings-subtab|__op_chroma_v1|agCs.pulseVialMode.v1|ag_prism_thought_zh_cache_v1|ag_prism_thought_view_mode_v1|ag_prism_thought_style_tag_v1|ag_prism_pp_muted|ag.prism.effortMemory.v1|ag.codexEffortSlider.settings.v1'.split('|');
+  const PRISM_STORAGE_PREFIXES = ['ag-prism:trajRollup.v1:'];
 
   const clearPrismLocalStorage = (store) => {
     const st = store || (typeof localStorage !== 'undefined' ? localStorage : null);
     if (!st || !isFn(st.removeItem)) return 0;
     let n = 0;
-    for (const k of PRISM_STORAGE_KEYS) {
-      try { st.removeItem(k); n += 1; } catch {}
-    }
+    for (const k of PRISM_STORAGE_KEYS) try { st.removeItem(k); n++; } catch {}
+    if (isFn(st.key)) try {
+      const dk = [];
+      for (let i = 0, len = st.length | 0; i < len; i++) { const k = st.key(i); if (k && PRISM_STORAGE_PREFIXES.some((p) => k.startsWith(p))) dk.push(k); }
+      for (const k of dk) try { st.removeItem(k); n++; } catch {}
+    } catch {}
     return n;
   };
 
@@ -162,7 +153,7 @@
     homeRipple: S_T,
     convRipple: mkSp(['off', 'subtle', 'medium', 'full'], 'off', { on: 'medium', true: 'medium', false: 'off' }),
     logoInk: mkSp(['accent', 'foreground']),
-    language: mkSp(['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de'], 'zh-CN', { yue: 'zh-CN', 'zh-HK': 'zh-TW', 'zh-MO': 'zh-TW' }),
+    language: mkSp(['auto', 'zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de'], 'auto', { yue: 'zh-CN', 'zh-HK': 'zh-TW', 'zh-MO': 'zh-TW' }),
     hostLocalization: S_AUTO,
     composerRestyle: S_T,
     placeholderStyle: mkSp(['studio', 'host']),
@@ -171,7 +162,7 @@
     contextMenu: S_T,
     codeFont: mkSp(['default', 'jetbrains', 'cascadia', 'sfmono']),
     codeLigatures: S_F,
-    mascot: mkSp(['crab', 'quad', 'quad-minis', 'off'], null, { dual: 'crab' }),
+    mascot: mkSp(['crab', 'minis', 'quad', 'quad-minis', 'off'], null, { dual: 'crab' }),
     sidebarRestyle: S_T,
     sidebarCompact: S_F,
     sidebarNavFold: mkSp(['off', 'on']),
@@ -3523,7 +3514,6 @@
           const resetBtn = mkB('ag-cs-cfg-btn', U('cfgResetBtn', 'Reset Defaults'), 'data-ag-cs-cfg-action', 'reset');
           onClk(resetBtn, () => {
             const defs = getDefaultSettingsPatch();
-            defs.language = 'auto';
             pendingCfgToast = { key: 'cfgResetOk', fallback: 'OK', tone: 'ok', exp: Date.now() + 2500 };
             applyBatch(defs);
             const curTh = getThoughtUiHandle();
@@ -3616,6 +3606,7 @@
     SETTINGS_SEC_ID,
     PRISM_SETTINGS_SCHEMA,
     PRISM_STORAGE_KEYS,
+    PRISM_STORAGE_PREFIXES,
     SCENE_PRESETS,
     UPSTREAM_CREDITS,
     parseMascotSpec,

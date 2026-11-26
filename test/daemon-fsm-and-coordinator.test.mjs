@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import vm from 'node:vm';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
@@ -35,10 +36,14 @@ import {
   shouldHoldAwaitingDomReinject,
   resetEntryForNewDocument,
   getChannelState,
+  recordChannelSuccess,
   recordChannelFailure,
   isChannelInCooldown,
   resetAllChannelCircuits,
+  CHANNEL_ERROR_MAX_CHARS,
 } from '../src/daemon/session-fsm.mjs';
+import { DaemonLogger, DAEMON_LOG_MAX_BYTES } from '../src/daemon/logger.mjs';
+import { healSingleChannelOnEntry } from '../src/daemon/channel-sync-engine.mjs';
 
 const require = createRequire(import.meta.url);
 const __filename = fileURLToPath(import.meta.url);
@@ -785,4 +790,194 @@ test('Phase 4B True Microkernel: PrismDaemon composes 4 isolated subsystems (0 p
   assert.notEqual(daemon.telemetrySubsystem, daemon2.telemetrySubsystem);
   assert.notEqual(daemon.updateStorageSubsystem, daemon2.updateStorageSubsystem);
   assert.equal(daemon2.periodicPickerExpr, '');
+});
+
+test('Phase 4D: all 16 channel builders wrap execution in structured try/catch error boundaries without throwing into host', () => {
+  const allEnabledCfg = {
+    ...cdp.DEFAULT_CONFIG,
+    omniModule: 'on',
+    sidebarStudio: 'on',
+    hostLocalization: 'on',
+    language: 'zh-CN',
+    thoughtTranslate: 'ai',
+    periodicModelPicker: 'on',
+    mascot: 'crab',
+    homeLayout: 'studio',
+    telemetryModule: 'on',
+    effortSliderModule: 'on',
+    workbenchEnhancer: 'on',
+    contextMenu: true,
+  };
+
+  for (const ch of cdp.CHANNEL_REGISTRY) {
+    const expr = ch._buildForReport(allEnabledCfg, { noDiskCache: true });
+    assert.ok(typeof expr === 'string' && expr.length > 0, `Channel ${ch.id} must build non-empty expression`);
+    assert.doesNotThrow(() => new vm.Script(expr), `Channel ${ch.id} expression with error boundary must parse cleanly`);
+    assert.ok(
+      expr.includes(`status: 'error', channel: '${ch.id}'`),
+      `Channel ${ch.id} expression must declare structured error boundary with channel: '${ch.id}'`
+    );
+
+    // Inject a hostile getter on window/document that throws synchronously inside the channel shell
+    const bomb = new TypeError(`simulated-${ch.id}-crash`);
+    const hostileDoc = new Proxy(
+      {
+        readyState: 'complete',
+        title: 'Antigravity',
+        documentElement: {
+          setAttribute() { throw bomb; },
+          getAttribute() { throw bomb; },
+          removeAttribute() { throw bomb; },
+        },
+        body: { classList: { contains: () => true } },
+        querySelector() { throw bomb; },
+        querySelectorAll() { throw bomb; },
+        getElementById() { throw bomb; },
+        addEventListener() { throw bomb; },
+      },
+      {}
+    );
+    const trapExisting = {
+      get codeHash() { throw bomb; },
+      get __prismCodeHash() { throw bomb; },
+      get destroyed() { throw bomb; },
+      get getDebugState() { throw bomb; },
+      get getState() { throw bomb; },
+    };
+    const hostileWin = {
+      location: ch.id === 'swarmI18n'
+        ? { protocol: 'plugin:', hostname: 'swarm--swarm_board-1', pathname: '/', port: '', username: '', password: '' }
+        : { href: 'vscode-file://vscode-app/workbench.html' },
+      document: hostileDoc,
+      __agPrism: { getState: () => ({ cfg: { sidebarStudio: 'on', omniModule: 'on', thoughtTranslate: 'ai', homeLayout: 'studio', mascot: 'crab', telemetryModule: 'on', effortSliderModule: 'on', workbenchEnhancer: 'on', contextMenu: true, periodicModelPicker: 'on', hostLocalization: 'on', language: 'zh-CN' } }) },
+      __agPrismOmni: trapExisting,
+      __agPrismSidebar: trapExisting,
+      __agPrismInlineDiff: trapExisting,
+      __agPrismHostI18n: trapExisting,
+      __agPrismSwarmI18n: trapExisting,
+      __agPrismWallpaper: trapExisting,
+      __agPrismPeriodicPicker: trapExisting,
+      __agPrismHomeStudioPanel: trapExisting,
+      __agPrismThought: trapExisting,
+      __agPrismSettingsPanel: trapExisting,
+      __agDualMascotRig: trapExisting,
+      __agPrismSuggester: trapExisting,
+      __agPrismTelemetry: trapExisting,
+      __agPrismEffortSlider: trapExisting,
+      __agPrismHostEnhancer: trapExisting,
+      __agPrismContextMenu: trapExisting,
+    };
+    hostileWin.self = hostileWin;
+    hostileWin.top = hostileWin;
+    hostileWin.window = hostileWin;
+    hostileWin.globalThis = hostileWin;
+
+    const res = vm.runInNewContext(expr, hostileWin);
+    assert.equal(res?.ok, false, `Channel ${ch.id} crash must return ok:false`);
+    assert.equal(res?.status, 'error', `Channel ${ch.id} crash must return status:'error'`);
+    assert.equal(res?.channel, ch.id, `Channel ${ch.id} crash must tag channel:'${ch.id}'`);
+    assert.ok(String(res?.error || '').includes(`simulated-${ch.id}-crash`), `Channel ${ch.id} must preserve error message`);
+    assert.equal(typeof res?.stack, 'string');
+    assert.ok(res.error.length <= 300 && res.stack.length <= 600);
+  }
+});
+
+test('Phase 4D: session-fsm records sanitized lastError/lastFailAt/lastStage and channel-sync-engine logs crash stack without silent swallow', async () => {
+  const { entry } = makeMockEntry();
+  const fakeSecret = 'sk-' + 'SUPERSECRETTOKEN9876543210';
+  const longHomeErr = `Crash at ${os.homedir()}\\secret\\file.js with ${fakeSecret} ` + 'x'.repeat(400);
+  const t0 = 1_750_000_000_000;
+
+  const st1 = recordChannelFailure(entry, 'wallpaper', { now: t0, error: longHomeErr, stage: 'heal' });
+  assert.equal(st1.failCount, 1);
+  assert.equal(st1.lastFailAt, t0);
+  assert.equal(st1.lastStage, 'heal');
+  assert.ok(st1.lastError.length <= CHANNEL_ERROR_MAX_CHARS, 'lastError must truncate to <= 240 chars');
+  assert.equal(st1.lastError.includes(fakeSecret), false, 'lastError must redact secrets');
+  assert.equal(st1.lastError.includes(os.homedir()), false, 'lastError must redact user home directory');
+  assert.ok(st1.lastError.includes('<USER_HOME>'), 'lastError must mask user home directory as <USER_HOME>');
+
+  // Recovery clears failCount/cooldown while retaining diagnostic snapshot
+  recordChannelSuccess(entry, 'wallpaper', { codeHash: 'abc123' });
+  const stRec = getChannelState(entry, 'wallpaper');
+  assert.equal(stRec.failCount, 0);
+  assert.equal(stRec.status, CHANNEL_FSM_STATES.MOUNTED);
+  assert.equal(stRec.lastStage, 'heal');
+  assert.equal(stRec.lastFailAt, t0);
+
+  // End-to-end channel-sync-engine healSingleChannelOnEntry captures structured error & logs redacted diagnostics
+  const logs = [];
+  const { entry: healEntry } = makeMockEntry({
+    evalHandler: async () => ({
+      ok: false,
+      status: 'error',
+      channel: 'thought',
+      error: `Boom with ${fakeSecret} in ${os.homedir()}/foo`,
+      stack: `Error: Boom\n  at mount (${os.homedir()}/foo:1:1)`,
+    }),
+  });
+  const fakeOrch = {
+    getCdp: () => cdp,
+    ensureChannelExpr: () => '(() => {})()',
+    getChannelExprHash: () => 'h1',
+    getChannelCfgSig: () => 's1',
+    redact: (s) => String(s || '').replace(fakeSecret, '***REDACTED***'),
+    log: (m) => logs.push(m),
+  };
+  const thoughtSpec = cdp.findChannel('thought');
+  await healSingleChannelOnEntry(fakeOrch, healEntry, thoughtSpec, { ...cdp.DEFAULT_CONFIG, thoughtTranslate: 'ai' }, null, {
+    forceEval: true,
+    now: t0 + 1000,
+  });
+  const thState = getChannelState(healEntry, 'thought');
+  assert.equal(thState.failCount, 1);
+  assert.equal(thState.lastStage, 'heal');
+  assert.equal(thState.lastFailAt, t0 + 1000);
+  assert.equal(thState.lastError.includes(fakeSecret), false);
+  assert.ok(thState.lastError.includes('Boom'));
+  assert.equal(logs.length, 1, 'Structured channel crash must emit diagnostic log line');
+  assert.ok(logs[0].includes('thought') && logs[0].includes('[heal]'));
+  assert.equal(logs[0].includes(fakeSecret), false);
+});
+
+test('Phase 4D: DaemonLogger rolls daemon.log -> daemon.log.1 at 512 KB without erasing pre-crash logs', () => {
+  const tmpDir = makeTempDir('prism-rolling-log-');
+  try {
+    const logFile = path.join(tmpDir, 'daemon.log');
+    const backupFile = `${logFile}.1`;
+    assert.equal(DAEMON_LOG_MAX_BYTES, 512 * 1024);
+
+    // 1) Pre-seed daemon.log right at 512 KB with a critical pre-crash marker at the tail
+    const preCrashMarker = 'CRITICAL-PRE-CRASH-SNAPSHOT-LINE-001';
+    const filler = 'A'.repeat(DAEMON_LOG_MAX_BYTES - preCrashMarker.length - 16) + '\n' + preCrashMarker + '\n';
+    fs.writeFileSync(logFile, filler, { encoding: 'utf8', mode: 0o600 });
+
+    const logger = new DaemonLogger({ logFile, silent: false });
+    const postRollMarker = 'POST-ROLLOVER-FRESH-LINE-002';
+    logger.log(postRollMarker);
+
+    assert.equal(fs.existsSync(backupFile), true, 'Exceeding 512 KB must rotate daemon.log to daemon.log.1');
+    assert.equal(fs.existsSync(logFile), true, 'Fresh daemon.log must exist after rotation');
+    const backupContent = fs.readFileSync(backupFile, 'utf8');
+    const freshContent = fs.readFileSync(logFile, 'utf8');
+    assert.ok(backupContent.includes(preCrashMarker), 'daemon.log.1 must preserve pre-crash log lines');
+    assert.ok(freshContent.includes(postRollMarker), 'New daemon.log must contain the post-rotation line');
+    assert.equal(freshContent.includes(preCrashMarker), false, 'New daemon.log must start fresh after rotation');
+    assert.ok(fs.statSync(logFile).size < 4096, 'Fresh daemon.log size must reset near 0');
+
+    // 2) Second rotation overwrites stale daemon.log.1 cleanly with latest batch
+    const loggerSmall = new DaemonLogger({ logFile, silent: false, maxBytes: 256 });
+    loggerSmall.log('SECOND-GEN-LINE-A-' + 'B'.repeat(200));
+    loggerSmall.log('THIRD-GEN-LINE-C');
+    const backupContent2 = fs.readFileSync(backupFile, 'utf8');
+    const freshContent2 = fs.readFileSync(logFile, 'utf8');
+    assert.ok(backupContent2.includes('SECOND-GEN-LINE-A'), 'Second rollover must replace old daemon.log.1 atomically');
+    assert.ok(freshContent2.includes('THIRD-GEN-LINE-C'), 'Latest log line must land in fresh daemon.log');
+    if (process.platform !== 'win32') {
+      assert.equal(fs.statSync(logFile).mode & 0o777, 0o600);
+      assert.equal(fs.statSync(backupFile).mode & 0o777, 0o600);
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });

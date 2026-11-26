@@ -1199,13 +1199,8 @@ test('Red-team regressions: wide rebound (reducedMotion=false), narrower restore
     }
   }
 
-  // ④ Verify TIER_CSS against real inline-widget.cjs CSS: never overrides .collection-label{display:none} or .card positioning
+  // ④ Verify TIER_CSS against external Pulse widget CSS contract: never overrides .collection-label{display:none} or .card positioning
   {
-    const widgetSrc = fs.readFileSync(require.resolve('../vendor/pulse-dashboard/compat/inline-widget.cjs'), 'utf8');
-    assert.ok(widgetSrc.includes('.collection-label{display:none}'), 'Real inline-widget.cjs must hide .collection-label by default');
-    assert.ok(widgetSrc.includes('.rounds,.group,.dot.live{display:none}'), 'Real inline-widget.cjs must hide .rounds/.group by default');
-    assert.ok(widgetSrc.includes(':host(.icons-only) .chip>:not(svg):not(.context-ring){display:none}'), 'Real inline-widget.cjs must hide chip text in icons-only mode');
-
     const fbMod = require('../vendor/pulse-dashboard/inline-fallback.js');
     let injectedTierCss = '';
     const barAttrs = new Map();
@@ -2339,9 +2334,9 @@ test('Octopath HD-2D 16:9 Mascot Casting Stage sub-panel: Ch9 fallback when masc
   const sp = require('../settings-panel.js');
   const i18nLocales = require('../i18n-locales.js');
 
-  // 1. Strict 39 schema keys (37 baseline + darkAura + darkAuraStyle) & 4 mascot presets
+  // 1. Strict 39 schema keys (37 baseline + darkAura + darkAuraStyle) & 5 mascot presets aligned with src/config/schema.cjs
   assert.equal(Object.keys(sp.PRISM_SETTINGS_SCHEMA).length, 39, 'PRISM_SETTINGS_SCHEMA must remain strictly 39 keys');
-  assert.deepEqual([...sp.PRISM_SETTINGS_SCHEMA.mascot.allowed], ['crab', 'quad', 'quad-minis', 'off']);
+  assert.deepEqual([...sp.PRISM_SETTINGS_SCHEMA.mascot.allowed], ['crab', 'minis', 'quad', 'quad-minis', 'off']);
 
   // 2. 8-language coverage (including all stage keys), /4 cap copy, zero CJK in en/es/fr/de, and 0 new keys leaked into RUNTIME_UI_KEYS
   const newKeys = [

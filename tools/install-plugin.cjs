@@ -16,7 +16,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const zlib = require("node:zlib");
-const { spawnBreakawayNodeProcess, isPidAlive } = require("./patch-asar.cjs");
+const { spawnBreakawayNodeProcess, isPidAlive } = require("../src/platform/process-probe.cjs");
 
 const ROOT_DIR = path.resolve(__dirname, "..");
 const {

@@ -299,7 +299,7 @@ function collectLinuxPortableEntries({ configPath = null, version = cdp.PLUGIN_V
     pushEntry(`${ARCHIVE_ROOT_PREFIX}/${item.name}`, item.data, 0o644);
   }
 
-  for (const toolRel of ['tools/install-plugin.cjs', 'tools/patch-asar.cjs']) {
+  for (const toolRel of ['tools/install-plugin.cjs']) {
     const abs = path.join(ROOT_DIR, ...toolRel.split('/'));
     if (fs.existsSync(abs) && fs.statSync(abs).isFile()) {
       const buf = fs.readFileSync(abs);

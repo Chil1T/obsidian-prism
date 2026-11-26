@@ -83,6 +83,7 @@ function createStudioChannelBuilders({ rootDir, readConfig, bundleCache }) {
     const hashJson = serializeJsonForEval(codeHash);
 
     return `(() => {
+  try {
 ${CHANNEL_MAIN_FRAME_HOST_GUARD}
 
     const mountSettingsSlot = () => {
@@ -184,6 +185,9 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
       return { ok: true, status: 'deferred', codeHash: targetHash };
     }
     return mountOrReuse();
+  } catch (err) {
+    return { ok: false, status: 'error', channel: 'wallpaper', error: String(err && err.message || err).slice(0, 300), stack: String(err && err.stack || '').slice(0, 600) };
+  }
   })()`;
   }
 
@@ -263,6 +267,7 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
     const hashJson = serializeJsonForEval(codeHash);
 
     return `(() => {
+  try {
 ${CHANNEL_MAIN_FRAME_HOST_GUARD}
 
     try {
@@ -321,6 +326,9 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
       return { ok: true, status: 'deferred', codeHash: targetHash };
     }
     return mountOrReuse();
+  } catch (err) {
+    return { ok: false, status: 'error', channel: 'periodicPicker', error: String(err && err.message || err).slice(0, 300), stack: String(err && err.stack || '').slice(0, 600) };
+  }
   })()`;
   }
 
@@ -390,6 +398,7 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
     }
     const hashJson = serializeJsonForEval(codeHash);
     return `(() => {
+  try {
     try {
       if (window.self !== window.top) return { ok: false, status: 'skipped-subframe' };
     } catch {
@@ -444,6 +453,9 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
       else api?.sync?.();
     } catch {}
     return { ok: true, status: 'mounted', codeHash: targetHash };
+  } catch (err) {
+    return { ok: false, status: 'error', channel: 'homeStudio', error: String(err && err.message || err).slice(0, 300), stack: String(err && err.stack || '').slice(0, 600) };
+  }
   })()`;
   }
 

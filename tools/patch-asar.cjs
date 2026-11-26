@@ -17,7 +17,8 @@ const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
 const crypto = require("node:crypto");
-const { spawn, execFileSync } = require("node:child_process");
+const { execFileSync } = require("node:child_process");
+const { spawnBreakawayNodeProcess, isPidAlive } = require("../src/platform/process-probe.cjs");
 
 const ROOT_DIR = path.resolve(__dirname, "..");
 
@@ -102,17 +103,6 @@ function readActiveCdpPortSync() {
     return Number.isInteger(port) && port > 0 ? port : null;
   } catch {
     return null;
-  }
-}
-
-function isPidAlive(pid) {
-  const num = Number(pid);
-  if (!Number.isInteger(num) || num <= 0) return false;
-  try {
-    process.kill(num, 0);
-    return true;
-  } catch (err) {
-    return Boolean(err && err.code === "EPERM");
   }
 }
 
@@ -632,38 +622,6 @@ function extractInjectExprFromAsarIfPresent(asarPath) {
   } catch {
     return null;
   }
-}
-
-/**
- * 使用 Node 原生 detached + windowsHide 派生独立后台无窗子进程（0 黑框、零 PowerShell、零 WMI）。
- */
-function spawnBreakawayNodeProcess(nodeArgs, opts = {}) {
-  const exe = process.execPath;
-  const cwd = opts.cwd || ROOT_DIR;
-
-  try {
-    const spawnOpts = {
-      cwd,
-      detached: true,
-      stdio: "ignore",
-      windowsHide: true,
-    };
-    if (opts.env && typeof opts.env === "object") {
-      spawnOpts.env = opts.env;
-    }
-    const child = spawn(exe, nodeArgs, spawnOpts);
-    if (child && typeof child.on === "function") {
-      child.on("error", () => {});
-    }
-    if (child && Number.isInteger(child.pid) && child.pid > 0) {
-      child.unref();
-      return { spawned: true, pid: child.pid, method: "node-detached-windowshide" };
-    }
-  } catch {
-    // Ignore
-  }
-
-  return { spawned: false, pid: null, method: null };
 }
 
 function spawnDeferredFileSwap(stagedPath, targetPath, opts = {}) {

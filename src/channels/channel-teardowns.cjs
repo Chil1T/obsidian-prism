@@ -11,6 +11,8 @@ const OMNI_REMOVE_EXPRESSION = `(() => {
   try { delete window.__agPrismOmniBridge; } catch {}
   try { delete window.__agPrismOmniResolve; } catch {}
   try { delete window.__agPrismOmniServerMeta; } catch {}
+  try { delete window.__agPrismOmniBootCfg; delete globalThis.__agPrismOmniBootCfg; } catch {}
+  try { delete window.__agPrismOmniDisableAutoBoot; delete globalThis.__agPrismOmniDisableAutoBoot; } catch {}
   return { ok: true, status: 'off' };
 })()`;
 
@@ -29,6 +31,10 @@ const SIDEBAR_REMOVE_EXPRESSION = `(() => {
   try { delete window.__agPrismSidebarBridge; } catch {}
   try { delete window.__agPrismSidebarResolve; } catch {}
   try { delete window.__agPrismSidebarMeta; } catch {}
+  for (const k of ['__agPrismSidebarHostOps', '__agPrismSidebarLastSendError', '__agPrismSidebarLastStartStage', '__agPrismSidebarLastStartFallback', '__agPrismSidebarLastSendFallback']) {
+    try { delete window[k]; } catch {}
+    try { delete globalThis[k]; } catch {}
+  }
   return { ok: true, status: 'off' };
 })()`;
 
@@ -189,6 +195,7 @@ const INLINE_DIFF_REMOVE_EXPRESSION = `(() => {
   try { delete window.__agPrismInlineDiffFactory; } catch {}
   try { delete globalThis.__agPrismInlineDiffFactory; } catch {}
   try { delete window.__agPrismInlineDiffResolve; } catch {}
+  try { delete window.__agPrismResolveInlineDiff; delete globalThis.__agPrismResolveInlineDiff; } catch {}
   return { ok: true, status: 'off' };
 })()`;
 
@@ -250,7 +257,7 @@ const PERIODIC_PICKER_REMOVE_EXPRESSION = `(() => {
       .querySelectorAll?.('#ag-prism-periodic-picker-css, #ag-prism-periodic-picker-root, .ag-pp-hold-ring, .ag-pp-mini-keycap')
       .forEach((n) => n.remove());
   } catch {}
-  for (const k of ['__agPrismPeriodicPicker', '__agPrismPeriodicPickerFactory', '__agPrismKeyboard3D', '__agPrismPeriodicKeyboard3D', '__agPrismOledScreen', '__agPrismGrainAssets', '__agPeriodicAudioFx', '__agPeriodicModelCatalog', '__agPeriodicHostBridge', '__agPeriodicBentoUi', '__agPeriodicPbrGrainAssets', '__agPeriodicOledScreen', '__agPeriodicKeyboard3D']) {
+  for (const k of ['__agPrismPeriodicPicker', '__agPrismPeriodicPickerFactory', '__agPrismKeyboard3D', '__agPrismPeriodicKeyboard3D', '__agPrismOledScreen', '__agPrismGrainAssets', '__agPeriodicAudioFx', '__agPeriodicModelCatalog', '__agPeriodicHostBridge', '__agPeriodicMockHost', '__agPeriodicBentoUi', '__agPeriodicPbrGrainAssets', '__agPeriodicOledScreen', '__agPeriodicKeyboard3D']) {
     try { delete window[k]; } catch {}
     try { delete globalThis[k]; } catch {}
   }
@@ -355,10 +362,17 @@ const TELEMETRY_REMOVE_EXPRESSION = `(() => {
       }
     });
   } catch {}
-  for (const k of ['__agPrismTelemetry','__agVialCore','__agCsPulseVialBridge','__agCsPulseBridgeInst']) {
+  for (const k of ['__agPrismTelemetry','__agVialCore','__agCsPulseVialBridge','__agCsPulseBridgeInst','__agPrismMetricsBridge','__agPulseExternalBridge']) {
     try { delete window[k]; } catch {}
     try { delete globalThis[k]; } catch {}
   }
+  try {
+    if (typeof window !== 'undefined' && window && !window.__agPulseDispose) {
+      try { window.__agPulseRuntimeBridge?.dispose?.(); } catch {}
+      try { delete window.__agPulseRuntimeBridge; delete globalThis.__agPulseRuntimeBridge; } catch {}
+      try { delete window.__agPulseRuntimeOwner; delete globalThis.__agPulseRuntimeOwner; } catch {}
+    }
+  } catch {}
   return { ok: true, status: 'off' };
 })()`;
 

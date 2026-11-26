@@ -5,8 +5,8 @@ import {
   recordChannelSuccess,
   recordChannelSkipped,
   recordChannelOff,
-  recordChannelFailure,
 } from './session-fsm.mjs';
+import { evalChannelExpressionSafe, recordChannelEvalFailure } from './channel-sync-engine.mjs';
 import { CHANNEL_STATIC_SPECS, extractTargetCodeHash } from './channel-coordinator.mjs';
 
 const require = createRequire(import.meta.url);
@@ -215,7 +215,7 @@ export async function healSecondaryChannels(orch, entry, cfg, probe, plan, { aft
                 if (hiId) entry.lastHostI18nScriptSig = hiSig;
               }
               if (!probe.hasHostI18n || hm.hashMismatch || (probe.hostI18nMode && probe.hostI18nMode !== hm.expectedMode)) {
-                const evalRes = await entry.session.evaluate(activeExpr, false, 4500).catch(() => null);
+                const evalRes = await evalChannelExpressionSafe(entry.session, activeExpr, 4500);
                 if (evalRes?.skippedByLiveCfg) {
                   entry.hostI18nMounted = false;
                   entry.hostI18nSkippedByLiveCfg = true;
@@ -228,7 +228,7 @@ export async function healSecondaryChannels(orch, entry, cfg, probe, plan, { aft
                   evaluatedFresh = !evalRes.reused;
                   recordChannelSuccess(entry, 'hostI18n', { codeHash: hiSig, scriptId: entry.hostI18nScriptId });
                 } else {
-                  recordChannelFailure(entry, 'hostI18n', { now });
+                  recordChannelEvalFailure(orch, entry, 'hostI18n', evalRes, { now, stage: 'heal' });
                 }
               }
             }

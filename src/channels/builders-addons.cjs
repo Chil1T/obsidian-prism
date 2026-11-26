@@ -89,6 +89,7 @@ function createAddonChannelBuilders({ rootDir, readConfig, bundleCache }) {
     const hashJson = serializeJsonForEval(codeHash);
 
     return `(() => {
+  try {
 ${CHANNEL_MAIN_FRAME_HOST_GUARD}
 
     const getSettingsSec = () => {
@@ -181,6 +182,9 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
       return { ok: true, status: 'deferred', codeHash: targetHash };
     }
     return mountOrReuse();
+  } catch (err) {
+    return { ok: false, status: 'error', channel: 'thought', error: String(err && err.message || err).slice(0, 300), stack: String(err && err.stack || '').slice(0, 600) };
+  }
   })()`;
   }
 
@@ -253,6 +257,7 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
     }
     const hashJson = serializeJsonForEval(codeHash);
     return `(() => {
+  try {
     try {
       if (window.self !== window.top) return { ok: false, status: 'skipped-subframe' };
     } catch {
@@ -293,6 +298,9 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
     try { document.getElementById('ag-cs-settings-sec')?.__prismMountWp?.(); } catch {}
     try { (document.getElementById('ag-cs-settings-sec') || document.getElementById('ag-prism-settings-sec'))?.__prismMountSg?.(); } catch {}
     return { ok: true, codeHash: targetHash };
+  } catch (err) {
+    return { ok: false, status: 'error', channel: 'settings', error: String(err && err.message || err).slice(0, 300), stack: String(err && err.stack || '').slice(0, 600) };
+  }
   })()`;
   }
 
@@ -349,6 +357,7 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
     }
     const hashJson = serializeJsonForEval(codeHash);
     return `(() => {
+  try {
     try {
       if (window.self !== window.top) return { ok: false, status: 'skipped-subframe' };
     } catch {
@@ -387,6 +396,9 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
     } catch {}
     try { (window.__agPrism || window.__agClaudeStyle)?.sync?.(); } catch {}
     return { ok: true, codeHash: targetHash };
+  } catch (err) {
+    return { ok: false, status: 'error', channel: 'mascot', error: String(err && err.message || err).slice(0, 300), stack: String(err && err.stack || '').slice(0, 600) };
+  }
   })()`;
   }
 
@@ -469,6 +481,7 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
     const hashJson = serializeJsonForEval(codeHash);
 
     return `(() => {
+  try {
 ${CHANNEL_MAIN_FRAME_HOST_GUARD}
 
     const mountSettingsSlot = () => {
@@ -569,6 +582,9 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
       return { ok: true, status: 'deferred', codeHash: targetHash };
     }
     return mountOrReuse();
+  } catch (err) {
+    return { ok: false, status: 'error', channel: 'suggester', error: String(err && err.message || err).slice(0, 300), stack: String(err && err.stack || '').slice(0, 600) };
+  }
   })()`;
   }
 

@@ -96,6 +96,7 @@ function createRuntimeChannelBuilders({ rootDir, readConfig, bundleCache }) {
     const hashJson = serializeJsonForEval(codeHash);
 
     return `(() => {
+  try {
 ${CHANNEL_MAIN_FRAME_HOST_GUARD}
 
     const cleanupTelemetry = () => {
@@ -169,6 +170,9 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
       return { ok: true, status: 'deferred', codeHash: targetHash };
     }
     return mountOrReuse();
+  } catch (err) {
+    return { ok: false, status: 'error', channel: 'telemetry', error: String(err && err.message || err).slice(0, 300), stack: String(err && err.stack || '').slice(0, 600) };
+  }
   })()`;
   }
 
@@ -238,6 +242,7 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
     const hashJson = serializeJsonForEval(codeHash);
 
     return `(() => {
+  try {
 ${CHANNEL_MAIN_FRAME_HOST_GUARD}
 
     const cleanupEffortSlider = () => {
@@ -301,6 +306,9 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
       return { ok: true, status: 'deferred', codeHash: targetHash };
     }
     return mountOrReuse();
+  } catch (err) {
+    return { ok: false, status: 'error', channel: 'effortSlider', error: String(err && err.message || err).slice(0, 300), stack: String(err && err.stack || '').slice(0, 600) };
+  }
   })()`;
   }
 
@@ -367,6 +375,7 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
     const hashJson = serializeJsonForEval(codeHash);
 
     return `(() => {
+  try {
 ${CHANNEL_MAIN_FRAME_HOST_GUARD}
 
     const cleanupEnhancer = () => {
@@ -427,6 +436,9 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
       return { ok: true, status: 'deferred', codeHash: targetHash };
     }
     return mountOrReuse();
+  } catch (err) {
+    return { ok: false, status: 'error', channel: 'workbenchEnhancer', error: String(err && err.message || err).slice(0, 300), stack: String(err && err.stack || '').slice(0, 600) };
+  }
   })()`;
   }
 
@@ -483,6 +495,7 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
     const hashJson = serializeJsonForEval(codeHash);
 
     return `(() => {
+  try {
 ${CHANNEL_MAIN_FRAME_HOST_GUARD}
 
     const cleanupCtx = () => {
@@ -541,6 +554,9 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
       return { ok: true, status: 'deferred', codeHash: targetHash };
     }
     return mountOrReuse();
+  } catch (err) {
+    return { ok: false, status: 'error', channel: 'contextMenu', error: String(err && err.message || err).slice(0, 300), stack: String(err && err.stack || '').slice(0, 600) };
+  }
   })()`;
   }
 
