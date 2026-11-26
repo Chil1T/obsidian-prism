@@ -1346,7 +1346,7 @@ test('Security & resilience regressions: opaque HTML sandbox, foreignObject/SMIL
   const styleCss = fs.readFileSync(path.resolve(__dirname, '../style.css'), 'utf8');
   assert.match(styleCss, /body:not\(\[data-has-browser-hole="true"\]\)/);
   assert.match(styleCss, /\.agy-shell[\s\S]{0,120}:not\(\[data-has-browser-hole="true"\]\)/);
-  assert.match(styleCss, /\.browser-hole-ancestor\[data-has-browser-hole="true"\][\s\S]{0,360}background-color:transparent !important/);
+  assert.match(styleCss, /\.browser-hole-ancestor\[data-has-browser-hole="true"\][\s\S]{0,360}background-color:transparent\s*!important/);
 });
 
 test('Compliance & copy hygiene: zero machine path leaks, zero secret patterns, zero hyperbolic copy', () => {
@@ -1590,7 +1590,7 @@ test('Battle 3: strict HTML sandbox="allow-scripts", srcdoc CSP meta, /sandbox-i
     ['es', 'Aislado en sandbox', 'Damero claro'],
     ['fr', 'Isolé en sandbox', 'Damier clair'],
     ['de', 'Sandbox-isoliert', 'Helles Raster'],
-    ['tr', 'Korumalı alan yalıtımlı', 'Açık dama'],
+    ['tr', 'Yalıtılmış sandbox', 'Açık dama'],
   ]) {
     const p = renderWorkbenchHtml({
       kind: 'svg',

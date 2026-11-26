@@ -6918,7 +6918,7 @@ test('v1.0.8-beta (d) data-ag-pp-open="1" desktop pet peek integration + window.
   const uiRuntimeSrc = fs.readFileSync(path.join(ROOT_DIR, 'ui-runtime.js'), 'utf8');
   assert.ok(uiRuntimeSrc.includes("ga(de(), 'data-ag-pp-open') === '1'"), 'ui-runtime.js must drive mascotShouldPeek from data-ag-pp-open="1"');
   assert.ok(uiRuntimeSrc.includes("m.attributeName === 'data-ag-pp-open'"), 'ui-runtime.js observer must react to data-ag-pp-open attribute mutations');
-  assert.ok(uiRuntimeSrc.includes("syncCrab(primaryCard, activeInfoForCrab, primaryModelInfo, mascotShouldPeek ? 'peek' : 'none')"));
+  assert.ok(uiRuntimeSrc.includes("syncCrab(primaryCard, activeInfoForCrab, primaryModelInfo, mascotShouldPeek ? 'peek' : 'none',"));
 
   const env = createPeriodicSandbox({ mock2d: true, mockWebGL2: false });
   const factory = loadPeriodicFactoryInSandbox(env);

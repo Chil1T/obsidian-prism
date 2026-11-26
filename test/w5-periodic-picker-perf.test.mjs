@@ -390,3 +390,264 @@ test('W5-Perf #6-OLED: oled-cyber-screen.js 16-entry text measurement LRU cache 
   assert.ok(warmMeasures < coldMeasures * 0.6, `text LRU cache must cut repeat measureText calls (cold=${coldMeasures}, warm=${warmMeasures})`);
   painter.dispose();
 });
+
+function createBatchBPickerEnv() {
+  let nowMs = 1000, nextTimerId = 1, nextRafId = 1, rectReads = 0;
+  const timers = new Map(), rafs = new Map(), resizeObservers = new Set();
+  const docListeners = new Map(), winListeners = new Map();
+  let stageRect = { left: 260, top: 220, width: 760, height: 340, right: 1020, bottom: 560 };
+  let overlayRect = { left: 0, top: 200, width: 1280, height: 360, right: 1280, bottom: 560 };
+
+  const addL = (m, t, fn) => { if (!m.has(t)) m.set(t, new Set()); m.get(t).add(fn); };
+  const remL = (m, t, fn) => { const s = m.get(t); if (s) { s.delete(fn); if (!s.size) m.delete(t); } };
+  const fireL = (m, ev) => { for (const fn of Array.from(m.get(ev.type) || [])) fn(ev); };
+
+  function makeEl(tag, id = '') {
+    const attrs = new Map(), styles = new Map(), cls = new Set(), evs = new Map(), kids = [];
+    let glCtx = null;
+    if (id) attrs.set('id', id);
+    const el = {
+      nodeType: 1, tagName: String(tag).toUpperCase(), id, parentNode: null, parentElement: null,
+      children: kids, childNodes: kids, textContent: '', hidden: false, isConnected: false,
+      get className() { return Array.from(cls).join(' '); },
+      set className(v) { cls.clear(); String(v || '').split(/\s+/).filter(Boolean).forEach((c) => cls.add(c)); attrs.set('class', this.className); },
+      classList: { add: (...a) => a.forEach((c) => cls.add(c)), remove: (...a) => a.forEach((c) => cls.delete(c)), contains: (c) => cls.has(c) },
+      style: {
+        setProperty(k, v) { styles.set(String(k), String(v)); },
+        removeProperty(k) { styles.delete(String(k)); },
+        getPropertyValue(k) { return styles.get(String(k)) || ''; },
+      },
+      setAttribute(k, v) { const sv = String(v); attrs.set(k, sv); if (k === 'id') el.id = sv; if (k === 'class') el.className = sv; },
+      getAttribute(k) { return attrs.has(k) ? attrs.get(k) : null; },
+      hasAttribute(k) { return attrs.has(k); },
+      removeAttribute(k) { attrs.delete(k); },
+      addEventListener(t, fn) { addL(evs, t, fn); },
+      removeEventListener(t, fn) { remL(evs, t, fn); },
+      dispatchEvent(ev) { const e = Object.assign({ target: el, currentTarget: el, preventDefault() {}, stopPropagation() {}, stopImmediatePropagation() {} }, ev); fireL(evs, e); return true; },
+      appendChild(c) { if (c.parentNode) c.parentNode.removeChild(c); c.parentNode = el; c.parentElement = el; kids.push(c); syncConn(c, el.isConnected); return c; },
+      insertBefore(c, ref) { if (c.parentNode) c.parentNode.removeChild(c); const idx = kids.indexOf(ref); c.parentNode = el; c.parentElement = el; if (idx >= 0) kids.splice(idx, 0, c); else kids.push(c); syncConn(c, el.isConnected); return c; },
+      removeChild(c) { const idx = kids.indexOf(c); if (idx >= 0) kids.splice(idx, 1); c.parentNode = null; c.parentElement = null; syncConn(c, false); return c; },
+      remove() { if (el.parentNode) el.parentNode.removeChild(el); },
+      contains(node) { let cur = node; while (cur) { if (cur === el) return true; cur = cur.parentNode; } return false; },
+      closest() { return null; },
+      blur() {},
+      getBoundingClientRect() {
+        rectReads += 1;
+        if (cls.has('ag-pp-stage') || el.tagName === 'CANVAS') return { ...stageRect };
+        if (el.id === 'ag-prism-periodic-picker-root' || cls.has('ag-pp-spatial-dock')) return { ...overlayRect };
+        return { left: 0, top: 0, width: 280, height: 320, right: 280, bottom: 320 };
+      },
+      getContext(type) {
+        if (el.tagName !== 'CANVAS') return null;
+        if (type === 'webgl2') { if (!glCtx) glCtx = createMockWebGL2(); return glCtx; }
+        return type === '2d' ? createMock2DCtx() : null;
+      },
+      querySelector(sel) { return queryAll(el, sel)[0] || null; },
+      querySelectorAll(sel) { return queryAll(el, sel); },
+    };
+    return el;
+  }
+  function syncConn(n, flag) { n.isConnected = flag; for (const c of n.children || []) syncConn(c, flag); }
+  function matchSimple(el, sel) {
+    if (!el || el.nodeType !== 1) return false;
+    const s = sel.trim();
+    if (s.startsWith('#')) return el.id === s.slice(1);
+    if (s.startsWith('.')) return el.classList.contains(s.slice(1));
+    const am = /^([a-z0-9_-]*)\[([a-z0-9_-]+)(?:="([^"]*)")?\]$/i.exec(s);
+    if (am) return (!am[1] || el.tagName === am[1].toUpperCase()) && (am[3] !== undefined ? el.getAttribute(am[2]) === am[3] : el.hasAttribute(am[2]));
+    return el.tagName === s.toUpperCase();
+  }
+  function queryAll(rootNode, sel) {
+    const out = [], parts = sel.split(',').map((p) => p.trim()).filter(Boolean);
+    const walk = (n) => { for (const c of n.children || []) { if (parts.some((p) => matchSimple(c, p))) out.push(c); walk(c); } };
+    walk(rootNode); return out;
+  }
+
+  const html = makeEl('html'), head = makeEl('head'), body = makeEl('body');
+  html.isConnected = true; html.appendChild(head); html.appendChild(body);
+  const doc = {
+    documentElement: html, head, body, hidden: false, visibilityState: 'visible', activeElement: null,
+    createElement: (t) => makeEl(t), createElementNS: (_ns, t) => makeEl(t),
+    createTextNode: (t) => ({ nodeType: 3, textContent: String(t), parentNode: null, remove() {} }),
+    getElementById: (id) => queryAll(html, `#${id}`)[0] || null,
+    querySelector: (s) => queryAll(html, s)[0] || null,
+    querySelectorAll: (s) => queryAll(html, s),
+    addEventListener: (t, fn) => addL(docListeners, t, fn),
+    removeEventListener: (t, fn) => remL(docListeners, t, fn),
+    dispatchEvent: (ev) => { fireL(docListeners, Object.assign({ preventDefault() {}, stopPropagation() {}, stopImmediatePropagation() {} }, ev)); return true; },
+  };
+  class MockResizeObserver {
+    constructor(cb) { this._cb = cb; this._obs = new Set(); }
+    observe(t) { if (t) this._obs.add(t); resizeObservers.add(this); }
+    unobserve(t) { this._obs.delete(t); if (!this._obs.size) resizeObservers.delete(this); }
+    disconnect() { this._obs.clear(); resizeObservers.delete(this); }
+  }
+  const win = {
+    document: doc, innerWidth: 1280, innerHeight: 800, devicePixelRatio: 1.5,
+    location: { href: 'http://127.0.0.1/chat' }, history: { pushState() {}, replaceState() {} },
+    navigator: { language: 'en' }, performance: { now: () => nowMs },
+    localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+    matchMedia: () => ({ matches: false }), getComputedStyle: () => ({ display: 'block', flexDirection: 'row' }),
+    atob: (b64) => Buffer.from(String(b64), 'base64').toString('binary'),
+    ResizeObserver: MockResizeObserver,
+    setTimeout(fn, ms) { const id = nextTimerId++; timers.set(id, { fn, due: nowMs + Math.max(0, Number(ms) || 0) }); return id; },
+    clearTimeout(id) { timers.delete(id); },
+    requestAnimationFrame(fn) { const id = nextRafId++; rafs.set(id, fn); return id; },
+    cancelAnimationFrame(id) { rafs.delete(id); },
+    addEventListener: (t, fn) => addL(winListeners, t, fn),
+    removeEventListener: (t, fn) => remL(winListeners, t, fn),
+    dispatchEvent: (ev) => { fireL(winListeners, Object.assign({ preventDefault() {}, stopPropagation() {}, stopImmediatePropagation() {} }, ev)); return true; },
+  };
+  const ctx = vm.createContext({
+    window: win, document: doc, globalThis: win, console, Math, Number, String, Boolean, Array, Object,
+    Map, Set, WeakMap, Uint8Array, Float32Array, Float64Array, Uint16Array, Date, RegExp, JSON,
+    atob: win.atob, ResizeObserver: MockResizeObserver,
+    setTimeout: win.setTimeout.bind(win), clearTimeout: win.clearTimeout.bind(win),
+    requestAnimationFrame: win.requestAnimationFrame.bind(win), cancelAnimationFrame: win.cancelAnimationFrame.bind(win),
+  });
+  for (const rel of ['pbr-grain-assets.js', 'oled-cyber-screen.js', 'keyboard-3d-gl.js', 'model-catalog.js', 'host-bridge.js', 'bento-ui.js', 'audio-fx.js', 'periodic-picker.js']) {
+    const fp = path.join(PP_DIR, rel);
+    vm.runInContext(fs.readFileSync(fp, 'utf8'), ctx, { filename: fp });
+  }
+  return {
+    win, doc, body, makeEl,
+    setOverlayRect: (r) => { overlayRect = { ...overlayRect, ...r }; },
+    setStageRect: (r) => { stageRect = { ...stageRect, ...r }; },
+    getRectReads: () => rectReads,
+    resetRectReads: () => { rectReads = 0; },
+    triggerResize(target, width, height) {
+      for (const obs of Array.from(resizeObservers)) {
+        if (obs._obs.has(target)) obs._cb([{ target, contentRect: { width, height, left: 0, top: 0, right: width, bottom: height } }], obs);
+      }
+    },
+    flushRaf(stepMs = 16) {
+      nowMs += stepMs;
+      const batch = Array.from(rafs.entries()); rafs.clear();
+      for (const [, fn] of batch) fn(nowMs);
+    },
+    advanceTime(ms) {
+      nowMs += ms;
+      for (const [id, t] of Array.from(timers.entries())) {
+        if (t.due <= nowMs) { timers.delete(id); t.fn(); }
+      }
+    },
+    getCounts: () => ({ activeTimers: timers.size, activeRafs: rafs.size, activeObservers: resizeObservers.size }),
+  };
+}
+
+test('W5-Perf Batch B #3/#8: syncSceneAndDom deferRender (0 double render), dockResizeObserver rAF batch & 300ms transition lock, data-gl-stage includeKeys:false + Tab/focusin/resize a11y recovery', () => {
+  const env = createBatchBPickerEnv();
+  const hwCalls = [], resizeCalls = [], projCalls = [];
+  const origCreate = env.win.__agPrismKeyboard3D.createKeyboard3DRenderer;
+  let activeSpyRenderer = null;
+  env.win.__agPrismKeyboard3D.createKeyboard3DRenderer = (opts) => {
+    const r = origCreate(opts);
+    const origHw = r.setHardwareState, origResize = r.resize, origProj = r.getInteractiveProjectedRects;
+    r.setHardwareState = (patch, setOpts) => {
+      const d0 = r.getPerfStats().frameDraws;
+      const res = origHw(patch, setOpts);
+      hwCalls.push({ deferRender: Boolean(setOpts && setOpts.deferRender === true), syncDraws: r.getPerfStats().frameDraws - d0 });
+      return res;
+    };
+    r.resize = (w, h, dpr, bRect, rOpts) => {
+      resizeCalls.push({ w, h, deferRender: Boolean(rOpts && rOpts.deferRender === true) });
+      return origResize(w, h, dpr, bRect, rOpts);
+    };
+    r.getInteractiveProjectedRects = (rectOpts) => {
+      projCalls.push({ includeKeys: !(rectOpts && rectOpts.includeKeys === false) });
+      return origProj(rectOpts);
+    };
+    activeSpyRenderer = r;
+    return r;
+  };
+
+  const triggerBtn = env.makeEl('button');
+  triggerBtn.setAttribute('data-testid', 'model-selector-trigger');
+  triggerBtn.textContent = 'Gemini 4 Carbon (High)';
+  env.body.appendChild(triggerBtn);
+  env.win.__agPeriodicMockHost = {
+    selectedModel: { label: 'Gemini 4 Carbon (High)', modelId: 'gemini-4-c-high' },
+    modelOptions: [
+      { label: 'Gemini 4 Hydrogen (High)', modelId: 'gemini-4-h-high' },
+      { label: 'Gemini 4 Carbon (High)', modelId: 'gemini-4-c-high' },
+      { label: 'Gemini 4 Neon (High)', modelId: 'gemini-4-ne-high' },
+    ],
+  };
+
+  const inst = env.win.__agPrismPeriodicPickerFactory.mountPeriodicPicker({ root: env.win, doc: env.doc, mode: 'on' });
+  assert.equal(inst.open(triggerBtn), true);
+  assert.ok(activeSpyRenderer && hwCalls.length >= 1, 'open() must invoke setHardwareState');
+  assert.ok(hwCalls.every((c) => c.deferRender === true && c.syncDraws === 0), 'syncSceneAndDom must pass deferRender:true to setHardwareState (0 sync double-render)');
+  assert.ok(resizeCalls.length === 1 && resizeCalls[0].deferRender === true, 'open() initial resize must pass deferRender:true');
+
+  const rootEl = env.doc.getElementById('ag-prism-periodic-picker-root');
+  const hitLayerEl = rootEl.querySelector('.ag-pp-hit-layer');
+  const canvasEl = rootEl.querySelector('.ag-pp-gl-canvas');
+  assert.equal(rootEl.getAttribute('data-gl-stage'), '1');
+
+  // 1) 进入 300ms 抽屉展开过渡期：openRafId 锁定画布不重建，随后 6 帧高度插值 RO 0 回流 / 0 画布重建
+  env.flushRaf();
+  assert.equal(rootEl.getAttribute('data-open'), '1');
+  const resizeAfterOpenRaf = resizeCalls.length;
+  const lockedCanvasW = canvasEl.width, lockedCanvasH = canvasEl.height;
+  env.resetRectReads();
+  for (const h of [90, 150, 210, 270, 310, 336]) {
+    env.setOverlayRect({ width: 1280, height: h });
+    env.setStageRect({ width: 760, height: Math.max(80, h - 20) });
+    env.triggerResize(rootEl, 1280, h);
+    env.flushRaf();
+  }
+  assert.equal(resizeCalls.length, resizeAfterOpenRaf, '300ms drawer height transition must NOT call resize() per frame');
+  assert.equal(canvasEl.width, lockedCanvasW);
+  assert.equal(canvasEl.height, lockedCanvasH);
+  assert.equal(env.getRectReads(), 0, '300ms drawer height transition must trigger 0 getBoundingClientRect() reflows');
+
+  // 180ms opacity transitionend 不提前解锁；300ms height transitionend 仅执行 1 次稳态同步
+  env.setOverlayRect({ width: 1280, height: 360 });
+  env.setStageRect({ width: 760, height: 356 });
+  rootEl.dispatchEvent({ type: 'transitionend', target: rootEl, propertyName: 'opacity' });
+  assert.equal(resizeCalls.length, resizeAfterOpenRaf, 'opacity transitionend must not unlock height transition early');
+  rootEl.dispatchEvent({ type: 'transitionend', target: rootEl, propertyName: 'height' });
+  assert.equal(resizeCalls.length, resizeAfterOpenRaf + 1, 'height transitionend must perform exactly 1 steady-state resize');
+  assert.equal(resizeCalls[resizeCalls.length - 1].h, 356);
+
+  // 2) 稳态 dockResizeObserver rAF 合批防抖：同帧 8 次爆发合并为 1 次
+  const resizeBeforeBurst = resizeCalls.length;
+  for (let i = 0; i < 8; i += 1) {
+    env.setOverlayRect({ width: 1120 + i * 8, height: 360 });
+    env.setStageRect({ width: 680 + i * 8, height: 356 });
+    env.triggerResize(rootEl, 1120 + i * 8, 360);
+  }
+  assert.equal(resizeCalls.length, resizeBeforeBurst, 'steady dockResizeObserver burst must coalesce into rAF (0 sync calls)');
+  env.flushRaf();
+  assert.equal(resizeCalls.length, resizeBeforeBurst + 1, 'steady dockResizeObserver burst must execute exactly once on rAF flush');
+
+  // 3) #8 data-gl-stage="1" 默认 includeKeys:false 跳过 96 键投影；Tab 首次补算 1 次，连续 Tab 不重复风暴
+  assert.ok(projCalls.length > 0 && projCalls.every((p) => p.includeKeys === false), 'GL stage default syncHitLayerRects must pass { includeKeys: false }');
+  const fullProjBeforeTab = projCalls.filter((p) => p.includeKeys).length;
+  assert.equal(fullProjBeforeTab, 0);
+  env.doc.dispatchEvent({ type: 'keydown', key: 'Tab' });
+  assert.equal(projCalls.filter((p) => p.includeKeys).length, 1, 'first Tab must compute full 96-key projection once');
+  const carbonKeyBtn = rootEl.querySelector('button[data-z="6"]');
+  assert.ok(carbonKeyBtn && carbonKeyBtn.style.getPropertyValue('width'), 'Tab recovery must populate a11y hit button geometry');
+  env.doc.dispatchEvent({ type: 'keydown', key: 'Tab' });
+  env.doc.dispatchEvent({ type: 'keydown', key: 'Tab' });
+  assert.equal(projCalls.filter((p) => p.includeKeys).length, 1, 'subsequent Tab presses must not storm 96-key projection');
+
+  // 4) close() 干净重置状态，热重开后再由 hitLayer focusin 补算 1 次，window resize 补算 1 次
+  inst.close();
+  projCalls.length = 0;
+  assert.equal(inst.open(triggerBtn), true);
+  env.flushRaf();
+  assert.equal(projCalls.filter((p) => p.includeKeys).length, 0, 'warm reopen after close() must reset a11yKeyRectsSynced & keep includeKeys:false');
+  hitLayerEl.dispatchEvent({ type: 'focusin', target: carbonKeyBtn });
+  assert.equal(projCalls.filter((p) => p.includeKeys).length, 1, 'hitLayer focusin must recover full 96-key projection once');
+  env.win.dispatchEvent({ type: 'resize' });
+  assert.equal(projCalls.filter((p) => p.includeKeys).length, 2, 'window resize must refresh full 96-key projection once');
+
+  inst.destroy();
+  const c = env.getCounts();
+  assert.equal(c.activeTimers, 0);
+  assert.equal(c.activeRafs, 0);
+  assert.equal(c.activeObservers, 0);
+});
