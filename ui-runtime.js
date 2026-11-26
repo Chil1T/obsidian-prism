@@ -25,7 +25,7 @@
     delete W[k];
   }
 
-  const usageCore = GT.__agCsUsageCore;
+  const getUsageCore = () => GT.__agCsUsageCore || W.__agCsUsageCore || null;
   const rippleCore = GT.__agCsRippleCore;
   const i18nCore = GT.__agCsI18nCore;
   const getLocalesMod = () => GT.__agCsLocales || W.__agCsLocales || null;
@@ -622,7 +622,7 @@
     if (activeHomeStudioInst) disposeActiveHomeStudio();
     if (destroyed) return homeStudioFallback;
     activeHomeStudioMod = mod;
-    activeHomeStudioInst = mod.createHomeStudioPanelController({ usageCore, storageUsageCacheKey: STORAGE_USAGE_CACHE_KEY, isDestroyed: () => destroyed, getHomeLayout: () => cfg.homeLayout, getLang, uiText, getDisplayName, ensureHooks, canMountRealCanvas, setAttrIfChanged, runGuardedMut });
+    activeHomeStudioInst = mod.createHomeStudioPanelController({ usageCore: getUsageCore(), storageUsageCacheKey: STORAGE_USAGE_CACHE_KEY, isDestroyed: () => destroyed, getHomeLayout: () => cfg.homeLayout, getLang, uiText, getDisplayName, ensureHooks, canMountRealCanvas, setAttrIfChanged, runGuardedMut });
     return activeHomeStudioInst;
   };
   const homeStudioCtl = new Proxy({}, { get: (_, k) => (...a) => { const c = resolveHomeStudioCtl(); return isFn(c[k]) ? c[k].apply(c, a) : null; } });

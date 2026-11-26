@@ -278,7 +278,7 @@ const CHANNEL_STATIC_SPECS = Object.freeze([
   }),
   defineSpec({
     id: 'homeStudio', channelNumber: 12, order: 120, tier: 'studio',
-    label: 'Home Studio Dashboard', configKeys: ['homeLayout'], files: ['home-studio-panel.js'],
+    label: 'Home Studio Dashboard', configKeys: ['homeLayout'], files: ['usage-core.js', 'home-studio-panel.js'],
     mountGlobal: '__agPrismHomeStudioPanel', probeExtraKeys: ['needsHomeStudioChannel'],
     respectSkippedByLiveCfg: true, budgetBytes: 56 * 1024,
     probeLines: [
