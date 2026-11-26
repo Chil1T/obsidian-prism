@@ -600,10 +600,11 @@
   });
   let activeHomeStudioMod = null;
   let activeHomeStudioInst = null;
+  let activeHomeStudioUsageCore = null;
   let lastHomeStudioChannelReqAt = 0;
 
   const disposeActiveHomeStudio = () => {
-    const p = activeHomeStudioInst; activeHomeStudioInst = activeHomeStudioMod = null;
+    const p = activeHomeStudioInst; activeHomeStudioInst = activeHomeStudioMod = activeHomeStudioUsageCore = null;
     if (!p) return;
     if (isFn(p.dispose)) { try { p.dispose(); } catch {} return; }
     for (const k of ['flushUsageCacheNow', 'unmountPanelSeat', 'restoreGreetings']) try { p[k]?.(); } catch {}
@@ -618,11 +619,13 @@
   const resolveHomeStudioCtl = () => {
     const mod = getHomeStudioMod();
     if (!mod || !isFn(mod.createHomeStudioPanelController)) { if (activeHomeStudioInst) disposeActiveHomeStudio(); return homeStudioFallback; }
-    if (activeHomeStudioInst && activeHomeStudioMod === mod) return activeHomeStudioInst;
+    const uc = getUsageCore() || null;
+    if (activeHomeStudioInst && activeHomeStudioMod === mod && (activeHomeStudioUsageCore === uc || (activeHomeStudioUsageCore && !uc))) return activeHomeStudioInst;
     if (activeHomeStudioInst) disposeActiveHomeStudio();
     if (destroyed) return homeStudioFallback;
     activeHomeStudioMod = mod;
-    activeHomeStudioInst = mod.createHomeStudioPanelController({ usageCore: getUsageCore(), storageUsageCacheKey: STORAGE_USAGE_CACHE_KEY, isDestroyed: () => destroyed, getHomeLayout: () => cfg.homeLayout, getLang, uiText, getDisplayName, ensureHooks, canMountRealCanvas, setAttrIfChanged, runGuardedMut });
+    activeHomeStudioUsageCore = uc;
+    activeHomeStudioInst = mod.createHomeStudioPanelController({ usageCore: uc, storageUsageCacheKey: STORAGE_USAGE_CACHE_KEY, isDestroyed: () => destroyed, getHomeLayout: () => cfg.homeLayout, getLang, uiText, getDisplayName, ensureHooks, canMountRealCanvas, setAttrIfChanged, runGuardedMut });
     return activeHomeStudioInst;
   };
   const homeStudioCtl = new Proxy({}, { get: (_, k) => (...a) => { const c = resolveHomeStudioCtl(); return isFn(c[k]) ? c[k].apply(c, a) : null; } });

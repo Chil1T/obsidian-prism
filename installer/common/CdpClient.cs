@@ -963,6 +963,11 @@ namespace AgyClaudeStyle
                 }
                 return true;
             }
+            if (ruleStr == "string")
+            {
+                string sv = value as string;
+                return sv != null && sv.Length <= 160 && sv.IndexOf('\0') < 0 && sv.IndexOf('\r') < 0 && sv.IndexOf('\n') < 0;
+            }
             if (rule is List<object>)
             {
                 string strVal = value as string;
@@ -970,10 +975,7 @@ namespace AgyClaudeStyle
                 List<object> allowed = (List<object>)rule;
                 for (int i = 0; i < allowed.Count; i++)
                 {
-                    if (string.Equals(allowed[i] as string, strVal, StringComparison.Ordinal))
-                    {
-                        return true;
-                    }
+                    if (string.Equals(allowed[i] as string, strVal, StringComparison.Ordinal)) return true;
                 }
             }
             return false;
@@ -3530,22 +3532,25 @@ namespace AgyClaudeStyle
                 clientSource = File.ReadAllText(clientPath, Encoding.UTF8);
                 settingsUiSource = File.ReadAllText(settingsUiPath, Encoding.UTF8);
             }
-            catch
-            {
-                return "";
-            }
+            catch { return ""; }
             if (string.IsNullOrEmpty(clientSource) || string.IsNullOrEmpty(settingsUiSource)) return "";
+            string verbsPath = ResolveSafePluginFile(pluginDir, "vendor/thought-translator/tool-step-verbs.js");
+            if (!string.IsNullOrEmpty(verbsPath))
+            {
+                try
+                {
+                    string verbsSource = File.ReadAllText(verbsPath, Encoding.UTF8);
+                    if (!string.IsNullOrEmpty(verbsSource)) clientSource = verbsSource + ";\n" + clientSource;
+                }
+                catch { }
+            }
 
             Dictionary<string, object> reconciled = ReconcileConfigAliases(cfg);
             Dictionary<string, object> bootCfg = new Dictionary<string, object>(StringComparer.Ordinal);
-            foreach (KeyValuePair<string, object> kv in reconciled)
-            {
-                bootCfg[kv.Key] = kv.Value;
-            }
+            foreach (KeyValuePair<string, object> kv in reconciled) bootCfg[kv.Key] = kv.Value;
             object rawModeObj;
             string rawMode = (reconciled.TryGetValue("thoughtTranslate", out rawModeObj) && rawModeObj is string)
-                ? ((string)rawModeObj).Trim().ToLowerInvariant()
-                : "";
+                ? ((string)rawModeObj).Trim().ToLowerInvariant() : "";
             bootCfg["thoughtTranslate"] = (rawMode == "machine") ? "machine" : "ai";
 
             string bootCfgJson = MiniJson.Stringify(bootCfg, false);
@@ -3553,154 +3558,91 @@ namespace AgyClaudeStyle
             string hashJson = MiniJson.StringifyString(codeHash);
 
             StringBuilder sb = new StringBuilder(clientSource.Length + settingsUiSource.Length + bootCfgJson.Length + 3072);
-            sb.Append("(() => {\n");
-            sb.Append("  try {\n");
-            sb.Append("    if (window.self !== window.top) return { ok: false, status: 'skipped-subframe' };\n");
-            sb.Append("  } catch {\n");
-            sb.Append("    return { ok: false, status: 'skipped-subframe' };\n");
-            sb.Append("  }\n");
-            sb.Append("  const hasDomMarker = () => {\n");
-            sb.Append("    try {\n");
-            sb.Append("      if (\n");
-            sb.Append("        document.body &&\n");
-            sb.Append("        document.body.classList &&\n");
-            sb.Append("        (document.body.classList.contains('theme-standalone') || document.body.classList.contains('monaco-workbench'))\n");
-            sb.Append("      ) {\n");
-            sb.Append("        return true;\n");
-            sb.Append("      }\n");
-            sb.Append("      return Boolean(\n");
-            sb.Append("        typeof document.querySelector === 'function' &&\n");
-            sb.Append("          document.querySelector(\n");
-            sb.Append("            '.agy-shell, .agy-home, [data-testid=\"aux-pane-split\"], [data-testid=\"conversation-view\"], [data-testid=\"agent-input-box\"], [data-testid=\"model-selector-trigger\"], .monaco-workbench'\n");
-            sb.Append("          )\n");
-            sb.Append("      );\n");
-            sb.Append("    } catch {\n");
-            sb.Append("      return false;\n");
-            sb.Append("    }\n");
-            sb.Append("  };\n");
-            sb.Append("  let needDomMarkerOnReady = false;\n");
-            sb.Append("  let isPlainHttpLocalhost = false;\n");
-            sb.Append("  try {\n");
-            sb.Append("    const loc = typeof window !== 'undefined' && window.location;\n");
-            sb.Append("    const href = loc && typeof loc.href === 'string' ? loc.href : '';\n");
-            sb.Append("    if (href) {\n");
-            sb.Append("      const low = href.toLowerCase();\n");
-            sb.Append("      if (low.startsWith('devtools://') || low.startsWith('data:') || low.startsWith('chrome:') || low.startsWith('chrome-extension:') || low.startsWith('edge:') || low.startsWith('blob:') || low.startsWith('plugin:')) {\n");
-            sb.Append("        return { ok: false, status: 'skipped-non-host' };\n");
-            sb.Append("      }\n");
-            sb.Append("      if (low.startsWith('vscode-file://') || low.startsWith('app://') || low.startsWith('about:')) {\n");
-            sb.Append("        const ttl = String(document.title || '').trim();\n");
-            sb.Append("        if (/^(?:untitled|launchpad)$/i.test(ttl) || /\\/launchpad(?:\\.html)?(?:[?#]|$)/i.test(low)) {\n");
-            sb.Append("          return { ok: false, status: 'skipped-non-host' };\n");
-            sb.Append("        }\n");
-            sb.Append("      }\n");
-            sb.Append("      if (low.startsWith('http:') || low.startsWith('https:')) {\n");
-            sb.Append("        const m = /^(https?):\\/\\/(127\\.0\\.0\\.1|localhost|\\[::1\\])(?::\\d+)?(\\/[^?#]*)?(?:[?#]|$)/i.exec(href);\n");
-            sb.Append("        if (!m) return { ok: false, status: 'skipped-non-host' };\n");
-            sb.Append("        const pathname = (m[3] || '/').toLowerCase();\n");
-            sb.Append("        if (/^\\/(?:viewer(?:\\/|$)|sandbox(?:\\/|$)|stream(?:\\/|$)|api(?:\\/|$))/.test(pathname)) {\n");
-            sb.Append("          return { ok: false, status: 'skipped-non-host' };\n");
-            sb.Append("        }\n");
-            sb.Append("        if (!hasDomMarker()) {\n");
-            sb.Append("          isPlainHttpLocalhost = m[1].toLowerCase() === 'http';\n");
-            sb.Append("          const rs = String(document.readyState || '');\n");
-            sb.Append("          if (isPlainHttpLocalhost) {\n");
-            sb.Append("            if (rs === 'loading') needDomMarkerOnReady = true;\n");
-            sb.Append("            else return { ok: false, status: 'skipped-non-host' };\n");
-            sb.Append("          } else if (!/\\bantigravity\\b/i.test(String(document.title || ''))) {\n");
-            sb.Append("            if (rs === 'loading') needDomMarkerOnReady = true;\n");
-            sb.Append("            else return { ok: false, status: 'skipped-non-host' };\n");
-            sb.Append("          }\n");
-            sb.Append("        }\n");
-            sb.Append("      }\n");
-            sb.Append("    }\n");
-            sb.Append("  } catch {}\n");
-            sb.Append("  const getSettingsSec = () => {\n");
-            sb.Append("    try {\n");
-            sb.Append("      return document.getElementById?.('ag-cs-settings-sec') || document.getElementById?.('ag-prism-settings-sec') || null;\n");
-            sb.Append("    } catch {\n");
-            sb.Append("      return null;\n");
-            sb.Append("    }\n");
-            sb.Append("  };\n");
-            sb.Append("  const cleanupThought = () => {\n");
-            sb.Append("    try { window.__agPrismThought?.destroy?.(); } catch {}\n");
-            sb.Append("    try { document.querySelectorAll?.('[data-testid=\"prism-thought-ai-config\"]')?.forEach?.((el) => el.remove()); } catch {}\n");
-            sb.Append("    try { delete window.__agPrismThought; } catch {}\n");
-            sb.Append("    try { delete globalThis.__agPrismThought; } catch {}\n");
-            sb.Append("    try { delete window.__agPrismThoughtSettingsUi; } catch {}\n");
-            sb.Append("    try { delete globalThis.__agPrismThoughtSettingsUi; } catch {}\n");
-            sb.Append("    try {\n");
-            sb.Append("      const sec = getSettingsSec();\n");
-            sb.Append("      if (sec) {\n");
-            sb.Append("        sec.__prismThoughtUiHandle = null;\n");
-            sb.Append("        sec.__prismMountThoughtUi?.();\n");
-            sb.Append("      }\n");
-            sb.Append("    } catch {}\n");
-            sb.Append("  };\n");
-            sb.Append("  const getLiveCfg = () => {\n");
-            sb.Append("    try {\n");
-            sb.Append("      const st = window.__agPrism?.getState?.();\n");
-            sb.Append("      return st && st.cfg && typeof st.cfg === 'object' ? st.cfg : null;\n");
-            sb.Append("    } catch {\n");
-            sb.Append("      return null;\n");
-            sb.Append("    }\n");
-            sb.Append("  };\n");
-            sb.Append("  const bootCfg = ").Append(bootCfgJson).Append(";\n");
-            sb.Append("  const initialLiveCfg = getLiveCfg();\n");
-            sb.Append("  if (initialLiveCfg && initialLiveCfg.thoughtTranslate === 'off') {\n");
-            sb.Append("    cleanupThought();\n");
-            sb.Append("    return { ok: true, status: 'off', skippedByLiveCfg: true };\n");
-            sb.Append("  }\n");
-            sb.Append("  const targetHash = ").Append(hashJson).Append(";\n");
-            sb.Append("  const mountOrReuse = () => {\n");
-            sb.Append("    if (needDomMarkerOnReady && !hasDomMarker() && (isPlainHttpLocalhost || !/\\bantigravity\\b/i.test(String(document.title || '')))) {\n");
-            sb.Append("      return { ok: false, status: 'skipped-non-host' };\n");
-            sb.Append("    }\n");
-            sb.Append("    const liveCfg = getLiveCfg();\n");
-            sb.Append("    if (liveCfg && liveCfg.thoughtTranslate === 'off') {\n");
-            sb.Append("      cleanupThought();\n");
-            sb.Append("      return { ok: true, status: 'off', skippedByLiveCfg: true };\n");
-            sb.Append("    }\n");
-            sb.Append("    const effectiveCfg = liveCfg || bootCfg;\n");
-            sb.Append("    const existingThought = window.__agPrismThought;\n");
-            sb.Append("    const existingUi = window.__agPrismThoughtSettingsUi || globalThis.__agPrismThoughtSettingsUi;\n");
-            sb.Append("    if (\n");
-            sb.Append("      existingThought &&\n");
-            sb.Append("      existingThought.__prismCodeHash === targetHash &&\n");
-            sb.Append("      existingUi &&\n");
-            sb.Append("      existingUi.__prismCodeHash === targetHash\n");
-            sb.Append("    ) {\n");
-            sb.Append("      try { existingThought.sync?.(effectiveCfg); } catch {}\n");
-            sb.Append("      try { window.__agPrism?.syncAbsorbed?.(); } catch {}\n");
-            sb.Append("      try { getSettingsSec()?.__prismMountThoughtUi?.(); } catch {}\n");
-            sb.Append("      return { ok: true, reused: true, codeHash: targetHash };\n");
-            sb.Append("    }\n");
-            sb.Append("    cleanupThought();\n");
-            sb.Append("    ;").Append(clientSource).Append(";\n");
-            sb.Append("    ;").Append(settingsUiSource).Append(";\n");
-            sb.Append("    const mountedThought = window.__agPrismThought || globalThis.__agPrismThought;\n");
-            sb.Append("    const mountedUi = window.__agPrismThoughtSettingsUi || globalThis.__agPrismThoughtSettingsUi;\n");
-            sb.Append("    if (mountedThought && typeof mountedThought === 'object') {\n");
-            sb.Append("      mountedThought.__prismCodeHash = targetHash;\n");
-            sb.Append("      try { window.__agPrismThought = mountedThought; } catch {}\n");
-            sb.Append("      try { globalThis.__agPrismThought = mountedThought; } catch {}\n");
-            sb.Append("    }\n");
-            sb.Append("    if (mountedUi && typeof mountedUi === 'object') {\n");
-            sb.Append("      mountedUi.__prismCodeHash = targetHash;\n");
-            sb.Append("      try { window.__agPrismThoughtSettingsUi = mountedUi; } catch {}\n");
-            sb.Append("      try { globalThis.__agPrismThoughtSettingsUi = mountedUi; } catch {}\n");
-            sb.Append("    }\n");
-            sb.Append("    try { mountedThought?.sync?.(effectiveCfg); } catch {}\n");
-            sb.Append("    try { window.__agPrism?.syncAbsorbed?.(); } catch {}\n");
-            sb.Append("    try { getSettingsSec()?.__prismMountThoughtUi?.(); } catch {}\n");
-            sb.Append("    return { ok: true, status: 'mounted', codeHash: targetHash };\n");
-            sb.Append("  };\n");
-            sb.Append("  if ((needDomMarkerOnReady || !document.documentElement) && typeof document.addEventListener === 'function') {\n");
-            sb.Append("    document.addEventListener('DOMContentLoaded', () => { try { mountOrReuse(); } catch {} }, { once: true });\n");
-            sb.Append("    return { ok: true, status: 'deferred', codeHash: targetHash };\n");
-            sb.Append("  }\n");
-            sb.Append("  return mountOrReuse();\n");
-            sb.Append("})()");
+            sb.Append(
+                "(() => {\n" +
+                "  try {\n" +
+                "    if (window.self !== window.top) return { ok: false, status: 'skipped-subframe' };\n" +
+                "  } catch {\n" +
+                "    return { ok: false, status: 'skipped-subframe' };\n" +
+                "  }\n" +
+                "  const hasDomMarker = () => {\n" +
+                "    try {\n" +
+                "      if (document.body && document.body.classList && (document.body.classList.contains('theme-standalone') || document.body.classList.contains('monaco-workbench'))) return true;\n" +
+                "      return Boolean(typeof document.querySelector === 'function' && document.querySelector('.agy-shell, .agy-home, [data-testid=\"aux-pane-split\"], [data-testid=\"conversation-view\"], [data-testid=\"agent-input-box\"], [data-testid=\"model-selector-trigger\"], .monaco-workbench'));\n" +
+                "    } catch { return false; }\n" +
+                "  };\n" +
+                "  let needDomMarkerOnReady = false;\n" +
+                "  let isPlainHttpLocalhost = false;\n" +
+                "  try {\n" +
+                "    const loc = typeof window !== 'undefined' && window.location;\n" +
+                "    const href = loc && typeof loc.href === 'string' ? loc.href : '';\n" +
+                "    if (href) {\n" +
+                "      const low = href.toLowerCase();\n" +
+                "      if (low.startsWith('devtools://') || low.startsWith('data:') || low.startsWith('chrome:') || low.startsWith('chrome-extension:') || low.startsWith('edge:') || low.startsWith('blob:') || low.startsWith('plugin:')) return { ok: false, status: 'skipped-non-host' };\n" +
+                "      if (low.startsWith('vscode-file://') || low.startsWith('app://') || low.startsWith('about:')) {\n" +
+                "        const ttl = String(document.title || '').trim();\n" +
+                "        if (/^(?:untitled|launchpad)$/i.test(ttl) || /\\/launchpad(?:\\.html)?(?:[?#]|$)/i.test(low)) return { ok: false, status: 'skipped-non-host' };\n" +
+                "      }\n" +
+                "      if (low.startsWith('http:') || low.startsWith('https:')) {\n" +
+                "        const m = /^(https?):\\/\\/(127\\.0\\.0\\.1|localhost|\\[::1\\])(?::\\d+)?(\\/[^?#]*)?(?:[?#]|$)/i.exec(href);\n" +
+                "        if (!m) return { ok: false, status: 'skipped-non-host' };\n" +
+                "        const pathname = (m[3] || '/').toLowerCase();\n" +
+                "        if (/^\\/(?:viewer(?:\\/|$)|sandbox(?:\\/|$)|stream(?:\\/|$)|api(?:\\/|$))/.test(pathname)) return { ok: false, status: 'skipped-non-host' };\n" +
+                "        if (!hasDomMarker()) {\n" +
+                "          isPlainHttpLocalhost = m[1].toLowerCase() === 'http';\n" +
+                "          const rs = String(document.readyState || '');\n" +
+                "          if (isPlainHttpLocalhost) { if (rs === 'loading') needDomMarkerOnReady = true; else return { ok: false, status: 'skipped-non-host' }; }\n" +
+                "          else if (!/\\bantigravity\\b/i.test(String(document.title || ''))) { if (rs === 'loading') needDomMarkerOnReady = true; else return { ok: false, status: 'skipped-non-host' }; }\n" +
+                "        }\n" +
+                "      }\n" +
+                "    }\n" +
+                "  } catch {}\n" +
+                "  const getSettingsSec = () => { try { return document.getElementById?.('ag-cs-settings-sec') || document.getElementById?.('ag-prism-settings-sec') || null; } catch { return null; } };\n" +
+                "  const cleanupThought = () => {\n" +
+                "    try { window.__agPrismThought?.destroy?.(); } catch {}\n" +
+                "    try { document.querySelectorAll?.('[data-testid=\"prism-thought-ai-config\"]')?.forEach?.((el) => el.remove()); } catch {}\n" +
+                "    try { delete window.__agPrismThought; } catch {}\n" +
+                "    try { delete globalThis.__agPrismThought; } catch {}\n" +
+                "    try { delete window.__agPrismThoughtSettingsUi; } catch {}\n" +
+                "    try { delete globalThis.__agPrismThoughtSettingsUi; } catch {}\n" +
+                "    try { const sec = getSettingsSec(); if (sec) { sec.__prismThoughtUiHandle = null; sec.__prismMountThoughtUi?.(); } } catch {}\n" +
+                "  };\n" +
+                "  const getLiveCfg = () => { try { const st = window.__agPrism?.getState?.(); return st && st.cfg && typeof st.cfg === 'object' ? st.cfg : null; } catch { return null; } };\n" +
+                "  const bootCfg = ").Append(bootCfgJson).Append(";\n" +
+                "  const initialLiveCfg = getLiveCfg();\n" +
+                "  if (initialLiveCfg && initialLiveCfg.thoughtTranslate === 'off') { cleanupThought(); return { ok: true, status: 'off', skippedByLiveCfg: true }; }\n" +
+                "  const targetHash = ").Append(hashJson).Append(";\n" +
+                "  const mountOrReuse = () => {\n" +
+                "    if (needDomMarkerOnReady && !hasDomMarker() && (isPlainHttpLocalhost || !/\\bantigravity\\b/i.test(String(document.title || '')))) return { ok: false, status: 'skipped-non-host' };\n" +
+                "    const liveCfg = getLiveCfg();\n" +
+                "    if (liveCfg && liveCfg.thoughtTranslate === 'off') { cleanupThought(); return { ok: true, status: 'off', skippedByLiveCfg: true }; }\n" +
+                "    const effectiveCfg = liveCfg || bootCfg;\n" +
+                "    const existingThought = window.__agPrismThought;\n" +
+                "    const existingUi = window.__agPrismThoughtSettingsUi || globalThis.__agPrismThoughtSettingsUi;\n" +
+                "    if (existingThought && existingThought.__prismCodeHash === targetHash && existingUi && existingUi.__prismCodeHash === targetHash) {\n" +
+                "      try { existingThought.sync?.(effectiveCfg); } catch {}\n" +
+                "      try { window.__agPrism?.syncAbsorbed?.(); } catch {}\n" +
+                "      try { getSettingsSec()?.__prismMountThoughtUi?.(); } catch {}\n" +
+                "      return { ok: true, reused: true, codeHash: targetHash };\n" +
+                "    }\n" +
+                "    cleanupThought();\n" +
+                "    ;").Append(clientSource).Append(";\n" +
+                "    ;").Append(settingsUiSource).Append(";\n" +
+                "    const mountedThought = window.__agPrismThought || globalThis.__agPrismThought;\n" +
+                "    const mountedUi = window.__agPrismThoughtSettingsUi || globalThis.__agPrismThoughtSettingsUi;\n" +
+                "    if (mountedThought && typeof mountedThought === 'object') { mountedThought.__prismCodeHash = targetHash; try { window.__agPrismThought = mountedThought; } catch {} try { globalThis.__agPrismThought = mountedThought; } catch {} }\n" +
+                "    if (mountedUi && typeof mountedUi === 'object') { mountedUi.__prismCodeHash = targetHash; try { window.__agPrismThoughtSettingsUi = mountedUi; } catch {} try { globalThis.__agPrismThoughtSettingsUi = mountedUi; } catch {} }\n" +
+                "    try { mountedThought?.sync?.(effectiveCfg); } catch {}\n" +
+                "    try { window.__agPrism?.syncAbsorbed?.(); } catch {}\n" +
+                "    try { getSettingsSec()?.__prismMountThoughtUi?.(); } catch {}\n" +
+                "    return { ok: true, status: 'mounted', codeHash: targetHash };\n" +
+                "  };\n" +
+                "  if ((needDomMarkerOnReady || !document.documentElement) && typeof document.addEventListener === 'function') {\n" +
+                "    document.addEventListener('DOMContentLoaded', () => { try { mountOrReuse(); } catch {} }, { once: true });\n" +
+                "    return { ok: true, status: 'deferred', codeHash: targetHash };\n" +
+                "  }\n" +
+                "  return mountOrReuse();\n" +
+                "})()");
             return sb.ToString();
         }
 

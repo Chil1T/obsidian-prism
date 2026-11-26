@@ -1268,4 +1268,20 @@ test('macOS Cold-start event-driven Launch Guard (default-on with opt-out): Laun
   // 6) build-macos.mjs compiles LaunchGuard.swift into watcher & setup and links AppKit for Universal Watcher binary
   assert.ok(buildMacosSrc.includes('LaunchGuard.swift'), 'build-macos.mjs compiles LaunchGuard.swift into watcher & setup');
   assert.ok(buildMacosSrc.includes("frameworks: ['AppKit']"), 'build-macos.mjs links AppKit for watcher binary');
+
+  // 7) CdpClient.swift string validator (custom fonts) & optional Ch5 tool-step-verbs.js prepend parity
+  assert.ok(
+    cdpSwift.includes('if ruleStr == "string"') &&
+      cdpSwift.includes('sv.utf16.count <= 160') &&
+      cdpSwift.includes('unicodeScalars.contains') &&
+      cdpSwift.includes('"\\0"') &&
+      cdpSwift.includes('"\\r"') &&
+      cdpSwift.includes('"\\n"'),
+    'CdpClient.swift validateConfigEntry must validate string rule (<=160 chars, no NUL/CR/LF via unicodeScalars)'
+  );
+  assert.ok(
+    cdpSwift.includes('vendor/thought-translator/tool-step-verbs.js') &&
+      cdpSwift.includes('verbsSource + ";\\n" + rawClientSource'),
+    'CdpClient.swift buildThoughtExpression must safely prepend optional tool-step-verbs.js before thought-client.js'
+  );
 });

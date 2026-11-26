@@ -782,3 +782,106 @@ test('6) End-to-end ui-runtime + Ch10 mascot wiring, complete dispose/teardown &
   assert.equal(sb.__agPrismMascotHop, undefined, 'REMOVE_EXPRESSION must delete __agPrismMascotHop');
   assert.equal(env.timers.size, 0);
 });
+
+test('7) Real Antigravity Split View DOM ([data-main-content-body] > [data-split-panes] > [data-tiling-pane] x2): pane 2 non-input never steals mascot, composer triggers hop', () => {
+  const env = createMockEnv({ reducedMatches: false });
+  const mainBody = env.mkEl('div', { 'data-main-content-body': 'true' });
+  const splitPanes = env.mkEl('div', { 'data-split-panes': 'true' });
+  mainBody.appendChild(splitPanes);
+  env.body.appendChild(mainBody);
+
+  const pane1 = buildConversationPane(env.mkEl, splitPanes, {
+    cid: '11111111-aaaa-1111-1111-111111111111',
+    tilingPane: 1,
+    rect: { left: 40, top: 520, width: 540, height: 96, right: 580, bottom: 616 },
+  });
+  const pane2 = buildConversationPane(env.mkEl, splitPanes, {
+    cid: '22222222-bbbb-2222-2222-222222222222',
+    tilingPane: 2,
+    rect: { left: 620, top: 520, width: 540, height: 96, right: 1160, bottom: 616 },
+  });
+  const cards = [pane1.card, pane2.card];
+
+  // Both panes sit under [data-main-content-body], yet ONLY pane 1 is primary
+  assert.equal(hopMod.isMainPrimaryCard(pane1.card, cards), true, 'First tiling pane under [data-main-content-body] is primary');
+  assert.equal(hopMod.isMainPrimaryCard(pane2.card, cards), false, 'Second tiling pane under [data-main-content-body] must NOT be treated as primary');
+
+  // Clicking pane 1 body keeps/focuses mascot
+  for (const el of [pane1.msgPara, pane1.viewport, pane1.thinkingBtn, pane1.header]) {
+    const dec = hopMod.shouldTransferMascotFocus({ target: el, targetCard: pane1.card, currentCard: pane1.card, cards, doc: env.doc });
+    assert.equal(dec.allow, true, `Primary split pane 1 body (${el.tagName}) must keep mascot`);
+  }
+
+  // Clicking pane 2 body / code copy button / scrollbar viewport / thinking trigger / header MUST NOT steal mascot
+  for (const el of [pane2.msgPara, pane2.codeCopyBtn, pane2.viewport, pane2.thinkingBtn, pane2.header]) {
+    const dec = hopMod.shouldTransferMascotFocus({ target: el, targetCard: pane2.card, currentCard: pane1.card, cards, doc: env.doc });
+    assert.equal(dec.allow, false, `Split pane 2 non-input (${el.tagName}) must NOT steal mascot`);
+    assert.equal(dec.transfer, false);
+    assert.equal(dec.reason, 'split-non-input');
+  }
+
+  // Clicking pane 2 composer input triggers hop transfer
+  for (const el of [pane2.editor, pane2.textarea, pane2.card, pane2.sendBtn]) {
+    const dec = hopMod.shouldTransferMascotFocus({ target: el, targetCard: pane2.card, currentCard: pane1.card, cards, doc: env.doc });
+    assert.equal(dec.allow, true, `Split pane 2 composer (${el.tagName}) must trigger hop`);
+    assert.equal(dec.transfer, true);
+    assert.equal(dec.reason, 'split-composer-input');
+  }
+
+  // Clicking pane 1 body while mascot is on pane 2 recalls mascot to primary pane 1
+  const recallDec = hopMod.shouldTransferMascotFocus({ target: pane1.msgPara, targetCard: pane1.card, currentCard: pane2.card, cards, doc: env.doc });
+  assert.equal(recallDec.allow, true);
+  assert.equal(recallDec.transfer, true);
+  assert.equal(recallDec.reason, 'primary-main-body');
+
+  // End-to-end ui-runtime check on the real nested Split View DOM
+  const uiMainFactory = require(path.join(ROOT, 'ui-runtime.js'));
+  const i18nCore = require(path.join(ROOT, 'i18n-core.js'));
+  const i18nLocales = require(path.join(ROOT, 'i18n-locales.js'));
+  const hopSrc = fs.readFileSync(path.join(ROOT, 'src', 'runtime', 'mascot-hop-transition.js'), 'utf8');
+
+  const sb = env.win;
+  sb.__agPrismI18nCore = i18nCore;
+  sb.__agPrismI18nLocales = i18nLocales;
+  sb.__agDualMascotRig = {
+    mountDualMascotStage(rootEl) {
+      const a = env.mkEl('div', { class: 'ag-v2-mascot-actor' });
+      a.appendChild(env.mkEl('canvas', { class: 'ag-v2-mascot-canvas' }));
+      rootEl.appendChild(a);
+      return { setState() {}, syncPowerState() {}, notify() {}, dispose() {} };
+    },
+  };
+  vm.runInNewContext(hopSrc, sb);
+  vm.runInNewContext(
+    `(${uiMainFactory.toString()})(${JSON.stringify({ ...cdp.DEFAULT_CONFIG, mascot: 'crab', motionLevel: 'ultra', smoothCaret: false })}, { version: '1.0.8-beta.4', codeHash: 'split-view-e2e' });`,
+    sb
+  );
+  const api = sb.__agPrism;
+
+  assert.ok(pane1.card.querySelector('.ag-cs-crab'), 'Mascot mounts on Split View pane 1 initially');
+  assert.equal(pane2.card.querySelector('.ag-cs-crab'), null);
+
+  // Clicking pane 2 body, code copy button & scrollbar viewport must NOT steal mascot
+  for (const el of [pane2.msgPara, pane2.codeCopyBtn, pane2.viewport]) {
+    env.doc.dispatch('pointerdown', { target: el });
+    api.sync();
+    assert.ok(pane1.card.querySelector('.ag-cs-crab'), `Pane 2 ${el.tagName} click must keep mascot on pane 1`);
+    assert.equal(pane2.card.querySelector('.ag-cs-crab'), null);
+  }
+
+  // Clicking pane 2 composer input triggers flip-dive hop transition to pane 2
+  env.doc.dispatch('pointerdown', { target: pane2.editor });
+  api.sync();
+  const stageEl = env.doc.querySelector('.ag-cs-crab');
+  assert.equal(stageEl.parentElement, pane1.card, 'During dive-out, stage stays anchored on pane 1');
+  assert.equal(stageEl.getAttribute('data-ag-mascot-hop'), 'dive-out');
+
+  env.advanceTimers(260);
+  assert.equal(stageEl.parentElement, pane2.card, 'After dive-out, stage commits to pane 2 composer');
+  assert.equal(stageEl.getAttribute('data-ag-mascot-hop'), 'pop-in');
+
+  env.advanceTimers(320);
+  assert.equal(stageEl.hasAttribute('data-ag-mascot-hop'), false);
+  vm.runInNewContext(cdp.REMOVE_EXPRESSION, sb);
+  assert.equal(env.timers.size, 0);
+});
