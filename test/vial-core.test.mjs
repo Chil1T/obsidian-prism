@@ -790,17 +790,17 @@ test('Issue #2/#4/#5 high-Hz & win-blur guards: pulse-vial-bridge (<31,000B) 33m
     rimRaf(2006);
     assert.equal(rimGradCalls, 2, 'flushPrismPointer must render 180Hz +6ms tick once gap >= 4.8ms');
 
-    // At +20ms, micro-movement < 1.5px from (180,140) -> (181.1, 140.8) skips redundant canvas redraw
-    rimCtl.onPointerMove({ clientX: 181.1, clientY: 140.8 });
+    // At +20ms, sub-0.5px micro-jitter from (180,140) -> (180.3, 140.2) skips redundant canvas redraw
+    rimCtl.onPointerMove({ clientX: 180.3, clientY: 140.2 });
     nowT = 2020;
     rimRaf(2020);
-    assert.equal(rimGradCalls, 2, '<1.5px pointer micro-jitter with unchanged signature must skip redraw');
+    assert.equal(rimGradCalls, 2, '<0.5px pointer micro-jitter with unchanged signature must skip redraw');
 
-    // Real pointer move >= 1.5px redraws cleanly
-    rimCtl.onPointerMove({ clientX: 170, clientY: 145 });
+    // Fine pointer move >= 0.5px (e.g. 1.0px) triggers crisp high-DPI redraw cleanly
+    rimCtl.onPointerMove({ clientX: 181.3, clientY: 140.2 });
     nowT = 2040;
     rimRaf(2040);
-    assert.equal(rimGradCalls, 3);
+    assert.equal(rimGradCalls, 3, '1.0px fine pointer move must redraw smoothly without 1.5px sticky deadzone');
 
     // data-ag-cs-win-blur="1" skips scheduling rAF on pointermove
     rimRaf = null;

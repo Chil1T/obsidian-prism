@@ -629,6 +629,24 @@ test('W5-Perf Batch B #3/#8: syncSceneAndDom deferRender (0 double render), dock
   rootEl.dispatchEvent({ type: 'transitionend', target: rootEl, propertyName: 'height' });
   assert.equal(resizeCalls.length, resizeAfterOpenRaf + 1, 'height transitionend must perform exactly 1 steady-state resize');
   assert.equal(resizeCalls[resizeCalls.length - 1].h, 356);
+  assert.equal(canvasEl.style.getPropertyValue('height'), '', 'height transitionend must clear locked inline canvas height');
+
+  // 1b) P2-2: 抽屉初始折叠态 (stageHeight=120 < 稳态高度) 展开时，canvas 预估目标稳态高度并锁住内联 height 防止 300ms 过渡期间纵向拉伸
+  inst.close();
+  resizeCalls.length = 0;
+  env.setOverlayRect({ width: 1280, height: 0 });
+  env.setStageRect({ width: 760, height: 120 });
+  assert.equal(inst.open(triggerBtn), true);
+  const rootElStretch = env.doc.getElementById('ag-prism-periodic-picker-root');
+  const canvasStretch = rootElStretch.querySelector('.ag-pp-gl-canvas');
+  assert.ok(resizeCalls.length === 1 && resizeCalls[0].h >= 300, `drawer open from collapsed stage must pre-size canvas to steady height (>=300), got ${resizeCalls[0]?.h}`);
+  assert.equal(canvasStretch.style.getPropertyValue('height'), `${resizeCalls[0].h}px`, 'drawer transition must lock canvas inline height to prevent vertical stretching');
+  env.flushRaf();
+  env.setOverlayRect({ width: 1280, height: 360 });
+  env.setStageRect({ width: 760, height: 356 });
+  rootElStretch.dispatchEvent({ type: 'transitionend', target: rootElStretch, propertyName: 'height' });
+  assert.equal(canvasStretch.style.getPropertyValue('height'), '', 'transitionend must release inline canvas height lock cleanly');
+  assert.equal(resizeCalls[resizeCalls.length - 1].h, 356);
 
   // 2) 稳态 dockResizeObserver rAF 合批防抖：同帧 8 次爆发合并为 1 次
   const resizeBeforeBurst = resizeCalls.length;

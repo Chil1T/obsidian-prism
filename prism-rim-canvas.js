@@ -6,12 +6,12 @@
 
   const RIM_PALETTES = Object.fromEntries(
     (
-      'default|0=rgba(255,255,255,0.96)/.24=#4285F4/.5=#9B72CB/.74=#EA4335/.92=#FBBC04/1=rgba(251,188,4,0)|0=#2563EB/.32=#7C3AED/.64=#EA4335/.88=#D97706/1=rgba(217,119,6,0);' +
-      'warm|0=rgba(255,246,238,0.95)/.26=#F6BD60/.54=#F0A37E/.82=#D97757/1=rgba(217,119,87,0)|0=#9A3412/.34=#C25934/.68=#D97757/.9=#D97706/1=rgba(217,119,6,0);' +
-      'cobalt|0=rgba(240,249,255,0.96)/.26=#7CE2FF/.56=#4285F4/.86=#1B49B2/1=rgba(27,73,178,0)|0=#1D4ED8/.35=#2563EB/.7=#0284C7/.92=#38BDF8/1=rgba(56,189,248,0);' +
-      'iris|0=rgba(245,243,255,0.95)/.26=#DDD6FE/.56=#A58AF8/.86=#6D28D9/1=rgba(109,40,217,0)|0=#5B21B6/.36=#7C3AED/.7=#8B5CF6/.92=#A855F7/1=rgba(168,85,247,0);' +
-      'amber|0=rgba(255,251,235,0.95)/.26=#FDE68A/.56=#F2B84B/.86=#D97706/1=rgba(217,119,6,0)|0=#92400E/.36=#B45309/.7=#D97706/.92=#F59E0B/1=rgba(245,158,11,0);' +
-      'mono|0=rgba(248,250,252,0.92)/.28=#E2E8F0/.6=#94A3B8/.88=#64748B/1=rgba(100,116,139,0)|0=#1E293B/.36=#334155/.7=#64748B/.92=#94A3B8/1=rgba(148,163,184,0)'
+      'default|0=rgba(255,255,255,.96)/.24=#4285F4/.5=#9B72CB/.74=#EA4335/.92=#FBBC04/1=rgba(251,188,4,0)|0=#2563EB/.32=#7C3AED/.64=#EA4335/.88=#D97706/1=rgba(217,119,6,0);' +
+      'warm|0=rgba(255,246,238,.95)/.26=#F6BD60/.54=#F0A37E/.82=#D97757/1=rgba(217,119,87,0)|0=#9A3412/.34=#C25934/.68=#D97757/.9=#D97706/1=rgba(217,119,6,0);' +
+      'cobalt|0=rgba(240,249,255,.96)/.26=#7CE2FF/.56=#4285F4/.86=#1B49B2/1=rgba(27,73,178,0)|0=#1D4ED8/.35=#2563EB/.7=#0284C7/.92=#38BDF8/1=rgba(56,189,248,0);' +
+      'iris|0=rgba(245,243,255,.95)/.26=#DDD6FE/.56=#A58AF8/.86=#6D28D9/1=rgba(109,40,217,0)|0=#5B21B6/.36=#7C3AED/.7=#8B5CF6/.92=#A855F7/1=rgba(168,85,247,0);' +
+      'amber|0=rgba(255,251,235,.95)/.26=#FDE68A/.56=#F2B84B/.86=#D97706/1=rgba(217,119,6,0)|0=#92400E/.36=#B45309/.7=#D97706/.92=#F59E0B/1=rgba(245,158,11,0);' +
+      'mono|0=rgba(248,250,252,.92)/.28=#E2E8F0/.6=#94A3B8/.88=#64748B/1=rgba(100,116,139,0)|0=#1E293B/.36=#334155/.7=#64748B/.92=#94A3B8/1=rgba(148,163,184,0)'
     )
       .split(';')
       .map((b) => {
@@ -39,12 +39,12 @@
   const CAP = { capture: true, passive: true };
   const ANIM_SEL = '[data-ag-cs-prism-box="1"],[data-ag-cs-overview-shell="1"],.agy-overlay,[data-testid="step-plan"]';
 
-  const parseAmbientScale = (raw) =>
+  const parseAmbientScale = (r) =>
     G.__agPrismRipple?.parseAmbientScale
-      ? G.__agPrismRipple.parseAmbientScale(raw)
-      : raw == null || raw === ''
+      ? G.__agPrismRipple.parseAmbientScale(r)
+      : r == null || r === ''
       ? 1
-      : Math.max(0, Math.min(1, Number(raw) > 1 ? Number(raw) / 100 : Number.isFinite(Number(raw)) ? Number(raw) : 1));
+      : Math.max(0, Math.min(1, +r > 1 ? +r / 100 : Number.isFinite(+r) ? +r : 1));
 
   function createPrismRimCanvasController({
     isDestroyed, isDarkTheme, motionReduced, getMinFrameGapMs, getAmbientIntensity, getAccentTone,
@@ -68,7 +68,7 @@
       const sig = on ? `1|${Math.round(v.localX / 6)}|${Math.round(v.strength * 12)}|${v.toneKey}|${v.dark ? 1 : 0}` : '0';
       if (sig === cSig) return;
       cSig = sig;
-      try { onComposerRimUpdate(on ? { active: true, localX: v.localX, strength: v.strength, toneKey: v.toneKey, dark: v.dark } : { active: false, localX: -9999, strength: 0, toneKey: 'default', dark: true }); } catch {}
+      try { onComposerRimUpdate(on ? { active: true, ...v } : { active: false, localX: -9999, strength: 0, toneKey: 'default', dark: true }); } catch {}
     };
 
     const readAmb = () => parseAmbientScale(getAmbientIntensity ? getAmbientIntensity() : ga(getHtml(), 'data-ag-cs-ambient'));
@@ -167,7 +167,7 @@
       for (const box of Array.from(obsSet)) if (dis(box) || (ga(box, PB) !== '1' && box !== trk)) unobs(boxRo, obsSet, box);
     };
 
-    const pruneOrp = (fullScan = true) => {
+    const prOrp = (fullScan = true) => {
       const trk = getActiveCrystalTrack?.() || null;
       pruneDet(trk);
       const d = getDoc();
@@ -192,9 +192,10 @@
         cv.width = cv.height = 0;
         cv.setAttribute('aria-hidden', 'true');
         cv.setAttribute('data-ag-no-i18n', '');
-        if (cv.style?.setProperty) {
-          for (const [k, v] of [['position', 'absolute'], ['inset', '0'], ['width', '100%'], ['height', '100%'], ['pointer-events', 'none']]) cv.style.setProperty(k, v);
-          for (const k of ['margin', 'padding', 'border']) cv.style.setProperty(k, '0', 'important');
+        const st = cv.style;
+        if (st?.setProperty) {
+          for (const p of 'position:absolute|inset:0|width:100%|height:100%|pointer-events:none'.split('|')) { const [k, v] = p.split(':'); st.setProperty(k, v); }
+          for (const k of ['margin', 'padding', 'border']) st.setProperty(k, '0', 'important');
         }
         hostEl.appendChild(cv);
       }
@@ -275,7 +276,7 @@
         ctx.lineWidth = 1.35 * dpr;
         ctx.strokeStyle = addS(
           ctx.createRadialGradient(gx, gy, 0, gx, gy, gr),
-          dark ? [0, 'rgba(255,255,255,0.95)', 0.24, 'rgba(232,240,252,0.56)', 0.54, 'rgba(186,202,228,0.18)', 0.85, 'rgba(148,168,198,0.03)', 1, 'rgba(148,168,198,0)'] : [0, 'rgba(30,64,175,0.52)', 0.42, 'rgba(59,130,246,0.2)', 1, 'rgba(59,130,246,0)']
+          dark ? [0, 'rgba(255,255,255,.95)', .24, 'rgba(232,240,252,0.56)', .54, 'rgba(186,202,228,.18)', .85, 'rgba(148,168,198,.03)', 1, 'rgba(148,168,198,0)'] : [0, 'rgba(30,64,175,.52)', .42, 'rgba(59,130,246,.2)', 1, 'rgba(59,130,246,0)']
         );
         ctx.stroke();
         ctx.globalAlpha = prevA !== undefined ? prevA : 1;
@@ -301,7 +302,7 @@
           }
           if (isFn(ctx.createLinearGradient) && isFn(ctx.save)) {
             ctx.save(); ctx.globalCompositeOperation = 'destination-in'; ctx.globalAlpha = 1;
-            ctx.fillStyle = addS(ctx.createLinearGradient(0, h, 0, 0), [0, 'rgba(0,0,0,1)', 0.22, 'rgba(0,0,0,0.68)', 0.48, 'rgba(0,0,0,0)', 1, 'rgba(0,0,0,0)']);
+            ctx.fillStyle = addS(ctx.createLinearGradient(0, h, 0, 0), [0, 'rgba(0,0,0,1)', .22, 'rgba(0,0,0,.68)', .48, 'rgba(0,0,0,0)', 1, 'rgba(0,0,0,0)']);
             ctx.fillRect(0, 0, w, h); ctx.restore();
           }
         }
@@ -325,14 +326,14 @@
       return true;
     };
 
-    const getDomBus = () => G.__agDomBus || G.__agPrismDomBus || (typeof window !== 'undefined' && (window.__agDomBus || window.__agPrismDomBus)) || null;
+    const busOf = () => G.__agDomBus || G.__agPrismDomBus || (typeof window !== 'undefined' && (window.__agDomBus || window.__agPrismDomBus)) || null;
     const szOffs = new Map(), visOffs = new Map();
     const onResize = () => {
       pDirty = true; rectAt = 0;
       if (!isDestroyed() && !prismRaf && isFn(G.requestAnimationFrame) && hasLitRim()) wake();
     };
     const ensureRo = () => {
-      if (getDomBus()?.observeSize) return null;
+      if (busOf()?.observeSize) return null;
       if (boxRo || typeof ResizeObserver !== 'function') return boxRo;
       boxRo = new ResizeObserver(onResize);
       return boxRo;
@@ -343,10 +344,10 @@
       try { const v = parseFloat(getComputedStyle(el).borderTopLeftRadius || ''); return Number.isFinite(v) && v >= 0 ? v : fb; } catch { return fb; }
     };
 
-    const spOk = (e) => !dis(e) && !getDomBus()?.isSkipped?.(e) && !e.hidden && ga(e, 'aria-hidden') !== 'true' && ga(e, 'data-state') !== 'closed' && ga(e, 'aria-expanded') !== 'false' && e.style?.display !== 'none' && e.style?.visibility !== 'hidden' && !/(?:^|\s)(?:hidden|sr-only|grid-rows-\[0fr\]|h-0|max-h-0)(?:\s|$)/.test(e.className || '');
+    const spOk = (e) => !dis(e) && !busOf()?.isSkipped?.(e) && !e.hidden && ga(e, 'aria-hidden') !== 'true' && ga(e, 'data-state') !== 'closed' && ga(e, 'aria-expanded') !== 'false' && e.style?.display !== 'none' && e.style?.visibility !== 'hidden' && !/(?:^|\s)(?:hidden|sr-only|grid-rows-\[0fr\]|h-0|max-h-0)(?:\s|$)/.test(e.className || '');
     const inVp = (r) => !!(r && r.width >= 4 && r.height >= 4 && r.bottom > 0 && r.right > 0 && r.top < (G.innerHeight || 900) && r.left < (G.innerWidth || 1440));
     const spIo = () => {
-      if (getDomBus()?.observeVisibility) return null;
+      if (busOf()?.observeVisibility) return null;
       if (spIoI || typeof IntersectionObserver !== 'function') return spIoI;
       try {
         spIoI = new IntersectionObserver((es) => {
@@ -365,7 +366,7 @@
     };
     const scanSp = (rd) => {
       const ps = Array.from(getDoc()?.querySelectorAll?.('[data-testid="step-plan"]') || []), des = new Set(), rcs = new Map();
-      const bus = getDomBus();
+      const bus = busOf();
       if (isRimOn() && !isWB()) {
         for (let i = ps.length - 1; i >= 0 && des.size < 2; i--) {
           const e = ps[i];
@@ -380,7 +381,7 @@
       return { ps, des, rcs };
     };
     const applySp = (ps, des) => {
-      const bus = getDomBus(), pSet = new Set(ps);
+      const bus = busOf(), pSet = new Set(ps);
       if (bus?.observeVisibility) {
         for (const p of ps) if (!visOffs.has(p)) {
           visOffs.set(p, bus.observeVisibility(p, (st) => {
@@ -415,11 +416,11 @@
       if (isDestroyed()) return;
       const { ps, des } = scanSp(rd);
       if (!ps.length && !spOn.size && !spObs.size && !visOffs.size) return;
-      runGuardedMut(() => { applySp(ps, des); pruneOrp(false); });
+      runGuardedMut(() => { applySp(ps, des); prOrp(false); });
     };
 
-    const refreshBoxes = (now, allowRd) => {
-      const bus = getDomBus();
+    const rfBox = (now, allowRd) => {
+      const bus = busOf();
       const sp = scanSp(allowRd), ro = ensureRo(), prevM = new Map(), nextObs = new Set(), next = [], bSet = new Set(), bList = [];
       for (const e of pBoxes) prevM.set(e.box, e);
       for (const b of document.querySelectorAll(`[${PB}="1"]`) || []) if ((!spOn.has(b) || sp.des.has(b)) && !bSet.has(b)) { bSet.add(b); bList.push(b); }
@@ -455,13 +456,13 @@
         if (trk) nextO = mkEntry(trk, oRect, orchE?.box === trk ? orchE : null, 0, 999, false, false);
         for (const [oldEl, off] of Array.from(szOffs.entries())) if (!nextObs.has(oldEl)) { try { off(); } catch {} szOffs.delete(oldEl); }
         if (ro) for (const oldEl of Array.from(obsSet)) if (!nextObs.has(oldEl)) unobs(ro, obsSet, oldEl);
-        pruneOrp();
+        prOrp();
       });
       pBoxes = next; orchE = nextO; pDirty = false; cacheAt = now;
     };
 
-    const readRects = (t) => {
-      const b = getDomBus();
+    const rdRec = (t) => {
+      const b = busOf();
       for (const e of pBoxes) if (e.box?.getBoundingClientRect && !b?.isSkipped?.(e.box)) e.rect = e.box.getBoundingClientRect();
       if (orchE?.box?.getBoundingClientRect && !b?.isSkipped?.(orchE.box)) orchE.rect = orchE.box.getBoundingClientRect();
       rectAt = t || performance.now() || 1;
@@ -475,14 +476,14 @@
       if (dragOff()) { pDirty = true; return; }
       const amb = readAmb();
       if (rimOff() || amb <= 0.001) {
-        runGuardedMut(() => { pruneOrp(); clrAll(true); });
+        runGuardedMut(() => { prOrp(); clrAll(true); });
         return;
       }
       const now = typeof rafNow === 'number' && rafNow > 0 ? rafNow : performance.now();
       const minGap = Math.max(0, Number(getMinFrameGapMs?.() ?? 0) || 0);
       if (minGap > 0 && drawAt > 0 && now - drawAt < minGap) { schedRaf(); return; }
       drawAt = now;
-      const { x, y } = ptr, allowRd = ptrIn(), bus = getDomBus();
+      const { x, y } = ptr, allowRd = ptrIn(), bus = busOf();
       const hasRo = Boolean(boxRo || szOffs.size > 0);
       const trk = getActiveCrystalTrack ? getActiveCrystalTrack() : null;
       if (
@@ -490,10 +491,10 @@
         trk !== (orchE ? orchE.box : null) ||
         pBoxes.some((e) => dis(e.box) || (e.cv && e.cv.isConnected === false) || e.br < 0 || (allowRd && !e.rect && !bus?.isSkipped?.(e.box)))
       ) {
-        refreshBoxes(now, allowRd);
+        rfBox(now, allowRd);
         rectAt = allowRd ? now : 0;
       } else if (allowRd && (!rectAt || now - rectAt >= 64)) {
-        readRects(now);
+        rdRec(now);
       }
       const dark = isDarkTheme(), tk = toneKeyOf(dark);
       let compRim = null;
@@ -562,12 +563,12 @@
       else if (!isWB() && isRimOn() && ptrIn()) { drawAt = 0; schedRaf(); }
     };
     const onWinBlur = () => { if (!isDestroyed()) { clrRaf(); clrAll(); } };
-    const syncBusRects = () => { if (!isDestroyed() && canDraw() && !rectAt) readRects(); };
+    const syncBusRects = () => { if (!isDestroyed() && canDraw() && !rectAt) rdRec(); };
     const onScroll = () => {
       if (isDestroyed()) return;
       rectAt = 0;
       if (canDraw()) {
-        const bus = getDomBus();
+        const bus = busOf();
         if ((pBoxes.length || orchE) && bus?.measure) bus.measure('rim:rects', syncBusRects);
         schedRaf();
       }
@@ -579,15 +580,17 @@
       rectAt = 0; pDirty = true; wake();
     };
     const bindEv = (m) => {
-      const d = getDoc();
+      const d = getDoc(), w = typeof window !== 'undefined' ? window : d?.defaultView;
       if (d?.[m]) {
         d[m]('visibilitychange', onVis);
-        d[m]('scroll', onScroll, CAP);
         d[m]('transitionend', onAnimEnd, CAP);
         d[m]('animationend', onAnimEnd, CAP);
       }
       d?.documentElement?.[m]?.('pointerleave', onLeave);
-      typeof window !== 'undefined' && window?.[m]?.('blur', onWinBlur);
+      if (w?.[m]) {
+        w[m]('blur', onWinBlur);
+        w[m]('scroll', onScroll, CAP);
+      }
     };
     bindEv('addEventListener');
 
@@ -596,7 +599,7 @@
       for (const e of pBoxes) e.br = -1;
       if (isDestroyed()) return;
       runGuardedMut(() => {
-        pruneOrp();
+        prOrp();
         if (isH()) { clrRaf(); shrinkRims(1); }
         else if (!isRimOn()) { clrRaf(); clrAll(true); }
         else wake();
@@ -620,9 +623,9 @@
       pDirty = true; rectAt = 0; sbT = null; sbAt = 0;
       if (isDestroyed()) return;
       if (isH()) { clrRaf(); shrinkRims(1); return; }
-      if (!isRimOn()) { runGuardedMut(() => { pruneOrp(false); clrRaf(); clrAll(true); }); return; }
+      if (!isRimOn()) { runGuardedMut(() => { prOrp(false); clrRaf(); clrAll(true); }); return; }
       const now = performance.now();
-      refreshBoxes(now, ptrIn());
+      rfBox(now, ptrIn());
       rectAt = ptrIn() ? now : 0;
       wake();
     };
@@ -632,7 +635,7 @@
       if (isDestroyed()) return;
       syncSp(0);
       runGuardedMut(() => {
-        pruneOrp(false);
+        prOrp(false);
         if (!isRimOn()) { clrRaf(); clrAll(true); }
       });
     };

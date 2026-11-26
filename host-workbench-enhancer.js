@@ -1935,7 +1935,7 @@ if (isFull || flags.c || flags.l || flags.b || flags.r || flags.t || langChanged
 syncCodeBlocks();
 syncNavRails();
 }
-if (isFull || flags.o || flags.c || flags.l || flags.b || flags.r || flags.t || langChanged) syncSubagentRunningAmbient(isFull);
+if (isFull || flags.o || flags.c || flags.l || flags.b || flags.r || flags.t || langChanged) syncSubagentRunningAmbient(Boolean(isFull || flags.o));
 if (isFull || flags.s || flags.r || flags.t || langChanged) syncSidebarOverflowTools();
 if (isFull || flags.o || flags.c || flags.b || flags.r) syncPermissionsMenuState();
 if (isFull || flags.g || flags.o || flags.r) syncSettingsDialogChrome(doc, mut, setA);

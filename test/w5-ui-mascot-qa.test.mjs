@@ -362,13 +362,20 @@ test('1) CSS bucket classifier: 0 mixed-rule misrouting, step-plan/overview rim-
   const darkChatActive = ['core', 'viewSidebar', 'motionFull'].reduce((s, k) => s + Buffer.byteLength(buckets[k] || '', 'utf8'), 0);
   assert.ok(darkChatActive < 180 * 1024, `Dark-chat active CSS (${darkChatActive} B) must stay strictly < 180 KB`);
 
-  // Sidebar selected & selected-running ambient glow distinction + strict 0 content-visibility on conversation-row-sidebar
+  // Sidebar selected & selected-running restrained obsidian-glass optics + strict 0 content-visibility on conversation-row-sidebar
+  const sbDarkLine =
+    rawCss.split('\n').find((l) => l.includes('[data-testid="conversation-row-sidebar"],.agy-sidebar-row') && l.includes('[data-ag-cs-row-running="1"]')) || '';
+  const sbLightLine =
+    rawCss.split('\n').find((l) => l.includes('[data-testid="conversation-row-sidebar"],.agy-sidebar-row)[data-selected="true"]')) || '';
   assert.ok(
-    rawCss.includes('[data-testid="conversation-row-sidebar"],.agy-sidebar-row') &&
-      rawCss.includes('radial-gradient(92% 130% at 14% 50%') &&
-      rawCss.includes('&[data-ag-cs-row-running="1"]') &&
-      rawCss.includes('&[data-selected="true"]{background-image:radial-gradient(96% 140% at 12% 50%'),
-    'style.css must provide distinct ambient glow + optical ring for selected and selected-running sidebar rows'
+    rawCss.includes('--_ss:rgba(255,255,255,.068);') &&
+      rawCss.includes('--_sy:inset 0 1px 0 rgba(255,255,255,.15),inset 0 0 0 1px rgba(255,255,255,.085),0 2px 10px -4px rgba(0,0,0,.52);') &&
+      sbDarkLine.includes('radial-gradient(58% 130% at 0% 50%,color-mix(in srgb,var(--ag-cs-accent) 13%,transparent),transparent 68%)') &&
+      sbDarkLine.includes('&[data-selected="true"]{background-image:radial-gradient(58% 130% at 0% 50%,color-mix(in srgb,var(--ag-cs-accent) 13%,transparent),transparent 68%),var(--ag-cs-run-wash)!important;box-shadow:inset 0 1px 0 rgba(255,255,255,.18),inset 0 0 0 1px rgba(255,255,255,.11),0 4px 12px -4px rgba(0,0,0,.58)!important}') &&
+      !sbDarkLine.includes('var(--_s1)') &&
+      sbLightLine.includes('radial-gradient(54% 130% at 0% 50%') &&
+      !sbLightLine.includes('var(--_s1)'),
+    'style.css must use restrained obsidian-glass card + subtle left-edge diffusion for selected and selected-running sidebar rows without harsh --_s1 outline'
   );
   const sbRowRules = coreRules.concat(cssPack.splitTopLevelCssRules(buckets.viewSidebar)).filter((r) => r.includes('conversation-row-sidebar'));
   assert.equal(
@@ -602,6 +609,9 @@ test('5) prism-rim-canvas: 0-lag scroll/transitionend/animationend & 64ms rect s
     const rec = winCaps.find((r) => r.active && r.t === t && r.fn === fn && r.cap === cap);
     if (rec) rec.active = false;
   };
+  env.win.dispatchCapture = (ev) => {
+    for (const r of [...winCaps]) if (r.active && r.t === ev.type) r.fn(ev);
+  };
   env.html.addEventListener = (t, fn, o) => { htmlCaps.push({ t, fn, cap: normCap(o), o, active: true }); };
   env.html.removeEventListener = (t, fn, o) => {
     const cap = normCap(o);
@@ -687,7 +697,13 @@ test('5) prism-rim-canvas: 0-lag scroll/transitionend/animationend & 64ms rect s
   });
 
   const rimDocListeners = docCaps.slice(beforeDocCount);
-  for (const evName of ['scroll', 'transitionend', 'animationend']) {
+  const rimWinListeners = winCaps.slice(beforeWinCount);
+  assert.equal(rimDocListeners.filter((r) => r.t === 'scroll' && r.active).length, 0, 'prism-rim-canvas must NOT attach scroll listener on document (keeps smoothCaret=false document scroll count at 0)');
+  const scrollRec = rimWinListeners.find((r) => r.t === 'scroll' && r.active);
+  assert.ok(scrollRec, 'prism-rim-canvas must register window capture scroll listener');
+  assert.equal(scrollRec.cap, true, 'window scroll listener must use capture:true');
+  assert.equal(Boolean(scrollRec.o && scrollRec.o.passive), true, 'window scroll listener must use passive:true');
+  for (const evName of ['transitionend', 'animationend']) {
     const rec = rimDocListeners.find((r) => r.t === evName && r.active);
     assert.ok(rec, `prism-rim-canvas must register document ${evName} listener`);
     assert.equal(rec.cap, true, `${evName} listener must use capture:true`);
@@ -713,7 +729,7 @@ test('5) prism-rim-canvas: 0-lag scroll/transitionend/animationend & 64ms rect s
     log.radials.length = 0;
     log.fills.length = 0;
     mirrorPanel._rect = { left: 100, top: 320, right: 1000, bottom: 920, width: 900, height: 600 };
-    env.doc.dispatchCapture({ type: 'scroll', target: env.body });
+    env.win.dispatchCapture({ type: 'scroll', target: env.body });
     env.flushRaf(16);
     const glowScroll = log.radials.find((r) => r.r1 === 210);
     assert.ok(glowScroll, 'Scroll must trigger immediate first-frame redraw while pointer is inside');
@@ -776,7 +792,7 @@ test('5) prism-rim-canvas: 0-lag scroll/transitionend/animationend & 64ms rect s
     env.html.dispatchEl({ type: 'pointerleave' });
     env.flushRaf(16);
     const rafBeforeIdle = env.rafs.length;
-    env.doc.dispatchCapture({ type: 'scroll', target: env.body });
+    env.win.dispatchCapture({ type: 'scroll', target: env.body });
     env.doc.dispatchCapture({ type: 'transitionend', target: mirrorPanel });
     env.doc.dispatchCapture({ type: 'animationend', target: outerWrap });
     assert.equal(env.rafs.length, rafBeforeIdle, 'Off-screen pointer must schedule 0 rAF on scroll/transitionend/animationend');

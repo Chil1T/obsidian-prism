@@ -464,8 +464,15 @@ test('perf guard 11: style.css enables offscreen content-visibility, sidebar con
 
   // Verify flattenMainStyleSheet logic in ui-runtime.js expands nested & and :is(...) idempotently
   const uiSrc = fs.readFileSync(path.join(ROOT, 'ui-runtime.js'), 'utf8');
-  const fnMatch = uiSrc.match(/function flattenMainStyleSheet\(\)[\s\S]*?\n  \}/);
-  assert.ok(fnMatch, 'flattenMainStyleSheet must exist in ui-runtime.js');
+  const fnStart = uiSrc.indexOf('function flattenMainStyleSheet()');
+  assert.ok(fnStart >= 0, 'flattenMainStyleSheet must exist in ui-runtime.js');
+  let fnDepth = 0, fnEnd = -1;
+  for (let i = uiSrc.indexOf('{', fnStart); i < uiSrc.length; i++) {
+    if (uiSrc[i] === '{') fnDepth++;
+    else if (uiSrc[i] === '}' && --fnDepth === 0) { fnEnd = i + 1; break; }
+  }
+  const fnMatch = fnEnd > fnStart ? [uiSrc.slice(fnStart, fnEnd)] : null;
+  assert.ok(fnMatch, 'flattenMainStyleSheet must have balanced braces in ui-runtime.js');
   const attrs = new Map([['data-ag-cs-css-hash', 'h1']]);
   const fakeStyle = {
     textContent: 'orig',
@@ -661,8 +668,15 @@ test('perf guard 13: thought-client skips checkVisibility on unchanged translate
 
 test('perf guard 14: flattenMainStyleSheet preserves :not(:is(...)), prefix &, and minifyCss keeps quoted strings/URLs/IDs intact', () => {
   const uiSrc = fs.readFileSync(path.join(ROOT, 'ui-runtime.js'), 'utf8');
-  const fnMatch = uiSrc.match(/function flattenMainStyleSheet\(\)[\s\S]*?\n  \}/);
-  assert.ok(fnMatch, 'flattenMainStyleSheet must exist in ui-runtime.js');
+  const fnStart = uiSrc.indexOf('function flattenMainStyleSheet()');
+  assert.ok(fnStart >= 0, 'flattenMainStyleSheet must exist in ui-runtime.js');
+  let fnDepth = 0, fnEnd = -1;
+  for (let i = uiSrc.indexOf('{', fnStart); i < uiSrc.length; i++) {
+    if (uiSrc[i] === '{') fnDepth++;
+    else if (uiSrc[i] === '}' && --fnDepth === 0) { fnEnd = i + 1; break; }
+  }
+  const fnMatch = fnEnd > fnStart ? [uiSrc.slice(fnStart, fnEnd)] : null;
+  assert.ok(fnMatch, 'flattenMainStyleSheet must have balanced braces in ui-runtime.js');
   const attrs = new Map([['data-ag-cs-css-hash', 'h2']]);
   const fakeStyle = {
     textContent: 'orig',
@@ -1210,8 +1224,9 @@ test('perf guard 20: Host Turbo alert.css dedup+restore, async img, hidden sidec
     'Hidden status spinner dots must clear native animation'
   );
   assert.ok(css.includes('iframe[src^="plugin://"]{contain:strict;'), 'plugin:// sidecar iframes must have contain:strict');
-  assert.ok(
-    css.includes('pre:not([data-ag-cs-rich-pre="1"]),pre>div:is(.border,.bg-muted)>div:nth-child(2),.agy-md-table.md-table-frame,table:not(.md-table-el)){contain:layout style;}'),
+  assert.match(
+    css,
+    /pre:not\(\[data-ag-cs-rich-pre="1"\]\),pre>div:is\(\.border,\.bg-muted\)>div:nth-child\(2\),\.agy-md-table\.md-table-frame,table:not\(\.md-table-el\)\)\{contain:layout style;?\}/,
     'Read-only code bodies and Markdown tables must have safe contain:layout style without contain:paint'
   );
   const blurRuleMatch = css.match(/html\[data-ag-cs-style\](?:\[data-ag-cs-win-blur="1"\]|:is\(\[data-ag-cs-win-blur="1"\],\[data-ag-pp-open="1"\]\))\{[^\n]+\}/);
@@ -1622,12 +1637,11 @@ test('perf guard 21: Issues #2/#3/#5/#7/#8 + PR #6 + #35 queued-message 3-gears 
   assert.ok(css.includes('ag-cs-orbit-spin 2.4s steps(36) infinite'), 'PR #6: spinner orbit must use discrete steps(36)');
   assert.ok(css.includes('ag-cs-comet-tip 1.1s steps(18) infinite'), 'PR #6: streaming comet tip must use discrete steps(18)');
   assert.ok(
-    css.includes('html[data-ag-cs-style]:is([data-ag-cs-win-blur="1"],[data-ag-cs-motion="off"])') &&
-      css.includes('backdrop-filter:none !important;'),
+    /html\[data-ag-cs-style\]:is\(\[data-ag-cs-win-blur="1"\],\[data-ag-cs-motion="off"\][^\n]*backdrop-filter:none\s*!important/.test(css),
     'Issue #2: win-blur & motion=off must disable backdrop-filter on transient overlays'
   );
   assert.ok(
-    css.includes('& .ag-cs-settings-fold-body{display:none;') && css.includes('contain:layout style;}'),
+    css.includes('& .ag-cs-settings-fold-body{display:none;') && /contain:layout style;?\}/.test(css),
     'Issue #3: .ag-cs-settings-fold-body must use display:none + contain:layout style instead of max-height transition'
   );
   assert.ok(

@@ -989,12 +989,14 @@ test('style.css hygiene & PR #10 / P0-1 / P0-2 CSS contracts (0 :has(), 0 non-AS
   const css = fs.readFileSync(path.join(ROOT, 'style.css'), 'utf8');
   assert.equal((css.match(/:has\(/g) || []).length, 0, 'style.css must have 0 :has() selectors');
   assert.equal(/[^\x00-\x7F]/.test(css), false, 'style.css must have 0 non-ASCII characters');
-  assert.ok(
-    css.includes('.ag-cs-sidebar-glide-pill[data-ag-cs-glide-running="1"]::after{background:var(--_rb);box-shadow:0 0 6px rgba(49,134,255,.35);}'),
+  assert.match(
+    css,
+    /\.ag-cs-sidebar-glide-pill\[data-ag-cs-glide-running="1"\]::after\{background:var\(--_rb\);box-shadow:0 0 6px rgba\(49,134,255,\.35\);?\}/,
     'style.css must style running glide pill accent bar with var(--_rb)'
   );
-  assert.ok(
-    css.includes('.ag-cs-sidebar-glide-pill[data-ag-cs-glide-running="1"]{background-image:var(--ag-cs-run-wash);}'),
+  assert.match(
+    css,
+    /\.ag-cs-sidebar-glide-pill\[data-ag-cs-glide-running="1"\]\{background-image:var\(--ag-cs-run-wash\);?\}/,
     'style.css must blend running wash on running glide pill'
   );
   assert.ok(

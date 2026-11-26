@@ -1,4 +1,4 @@
-// Channel 7 Wallpaper Settings UI (9-Locale, 0 innerHTML)
+// Obsidian Prism - Channel 7 Wallpaper Settings UI (9-Locale, 0 innerHTML)
 (function (root) {
   'use strict';
   const G = root || (typeof globalThis !== 'undefined' ? globalThis : typeof window !== 'undefined' ? window : null);
