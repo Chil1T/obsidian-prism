@@ -284,18 +284,16 @@ test('Issue #105: clicking thought stylePreset immediately persists via api.save
   assert.equal(conciseBtn.getAttribute('aria-pressed'), 'true');
   assert.deepEqual(JSON.parse(JSON.stringify(savedPayloads)), [{ stylePreset: 'concise' }]);
 
-  // 2) Re-entrancy guard: clicking while previous save is still in-flight must not fire duplicate saveConfig
+  // 2) Re-entrancy guard: clicking while previous save is still in-flight must not fire overlapping saveConfig
   customBtn.click();
   assert.equal(customBtn.getAttribute('aria-pressed'), 'true');
   assert.equal(savedPayloads.length, 1, 'Re-entrant click while styleSaving=true must not invoke overlapping saveConfig');
 
-  // 3) Resolve in-flight promise -> lock releases, subsequent click persists cleanly
+  // 3) Resolve in-flight promise -> coalescing queue drains queued 'custom' preset automatically & releases lock
+  mode = 'ok';
   pendingResolve({ ok: true, stylePreset: 'concise' });
   await new Promise((r) => setTimeout(r, 15));
-  mode = 'ok';
-  customBtn.click();
   assert.deepEqual(JSON.parse(JSON.stringify(savedPayloads)), [{ stylePreset: 'concise' }, { stylePreset: 'custom' }]);
-  await new Promise((r) => setTimeout(r, 15));
 
   // 4) Error resilience (async reject & sync throw never crash or leave lock stuck)
   mode = 'reject';

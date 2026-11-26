@@ -387,6 +387,7 @@
       translateTitles: false,
       dirtyToolSum: false,
       dirtyTitles: false,
+      dirtyStyle: false,
       diagnosing: false,
       lastDiag: null,
       cacheCount: 0,
@@ -406,6 +407,8 @@
       fetchedModels: [],
     };
     let loadConfigPromise = null;
+    let styleSaving = false, pendingStyle = null, styleSynced = false, styleEpoch = 0;
+    const normStyle = (r) => { const m = r === 'tech' ? 'technical' : r; return ['technical', 'concise', 'custom'].includes(m) ? m : null; };
 
     // -1) Usage Hint, Background Bridge Status Banner & One-Click Diagnostics Strip
     const usageBanner = mkEl('div', 'ag-cs-thought-hint');
@@ -1135,17 +1138,34 @@
         if (customTa.value !== state.customPrompt) customTa.value = state.customPrompt;
       });
     };
-    let styleSaving = false;
+    const flushStyle = (sid) => {
+      const api = resolveThoughtApi();
+      if (state.busy || typeof api?.saveConfig !== 'function') return;
+      if (styleSaving) { pendingStyle = sid; return; }
+      styleSaving = true;
+      const ep = styleEpoch;
+      const drain = () => {
+        const next = pendingStyle; pendingStyle = null; styleSaving = false;
+        if (next !== null && !state.busy) flushStyle(next);
+      };
+      let resOrProm;
+      try { resOrProm = api.saveConfig({ stylePreset: sid }); } catch { drain(); return; }
+      Promise.resolve(resOrProm).then((res) => {
+        if (ep === styleEpoch && pendingStyle === null && res && res.ok) {
+          const sv = normStyle(res.stylePreset);
+          if (sv && state.stylePreset !== sv) { state.stylePreset = sv; syncStyleUi(); }
+          styleSynced = true;
+          if (!loadConfigPromise) state.dirtyStyle = false;
+        }
+      }, () => {}).finally(drain);
+    };
     for (const sid of ['technical', 'concise', 'custom']) {
       const sb = doc.createElement('button');
       sb.type = 'button'; sb.className = btnClass; sb.textContent = getStyleLabel(sid, initialPack); sb.setAttribute('data-thought-style', sid);
       sb.addEventListener('click', (ev) => {
         ev?.stopPropagation?.();
-        state.stylePreset = sid; syncStyleUi();
-        const api = resolveThoughtApi();
-        if (styleSaving || state.busy || typeof api?.saveConfig !== 'function') return;
-        styleSaving = true;
-        try { Promise.resolve(api.saveConfig({ stylePreset: sid })).catch(() => {}).finally(() => { styleSaving = false; }); } catch { styleSaving = false; }
+        state.stylePreset = sid; state.dirtyStyle = true; styleSynced = false; syncStyleUi();
+        flushStyle(sid);
       });
       styleBtns.set(sid, sb); styleGrp.appendChild(sb);
     }
@@ -1564,8 +1584,12 @@
       if (!res || !res.ok) return;
       const fromSave = Boolean(opts && opts.fromSave);
       state.loaded = true;
-      const mappedPreset = res.stylePreset === 'tech' ? 'technical' : res.stylePreset;
-      state.stylePreset = ['technical', 'concise', 'custom'].includes(mappedPreset) ? mappedPreset : 'technical';
+      if (fromSave || !state.dirtyStyle) {
+        state.stylePreset = normStyle(res.stylePreset) || 'technical';
+        if (fromSave) state.dirtyStyle = false;
+      } else if (styleSynced && !styleSaving && !pendingStyle) {
+        state.dirtyStyle = false;
+      }
       const hostView = resolveHostPrism()?.getState?.()?.cfg?.thoughtView;
       const api = resolveThoughtApi();
       const clientView = api && typeof api.getViewMode === 'function' ? api.getViewMode() : null;
@@ -1675,6 +1699,7 @@
       loadConfigPromise = null;
       state.dirtyToolSum = false;
       state.dirtyTitles = false;
+      state.dirtyStyle = false; pendingStyle = null; styleSynced = false; styleEpoch += 1;
       syncUsageBanner();
       syncActionButtons();
       const hostView = resolveHostPrism()?.getState?.()?.cfg?.thoughtView;
@@ -1782,7 +1807,7 @@
         setStatus('err', pack.proxyHintInvalid);
         return;
       }
-      state.busy = true;
+      state.busy = true; pendingStyle = null; styleEpoch += 1;
       syncActionButtons();
       setStatus('idle', pack.savingCfg);
       void api
@@ -1817,7 +1842,7 @@
         setStatus('err', pack.proxyHintInvalid);
         return;
       }
-      state.busy = true;
+      state.busy = true; pendingStyle = null; styleEpoch += 1;
       syncActionButtons();
       setStatus('idle', pack.testingConn);
       const payload = buildSavePayload();
