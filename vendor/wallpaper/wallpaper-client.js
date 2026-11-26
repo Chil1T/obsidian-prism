@@ -265,7 +265,10 @@
       if (html && typeof html.getAttribute === 'function') {
         if (html.getAttribute('data-ag-prism-mode') === 'chat') return true;
         if (html.getAttribute('data-ag-cs-motion') === 'off') return true;
-        if (html.getAttribute('data-ag-pp-open') === '1') return true;
+        if (html.getAttribute('data-ag-pp-open') === '1') {
+          const pm = String(html.dataset?.agCsPerfMode || html.getAttribute('data-ag-cs-perf-mode') || '').trim().toLowerCase();
+          if (pm === 'performance' || pm === 'eco') return true;
+        }
         if (state.pauseOnBlur !== false && html.getAttribute('data-ag-cs-win-blur') === '1') return true;
       }
       if (state.pauseOnBlur !== false && winBlurred) return true;
@@ -566,7 +569,7 @@
           try {
             htmlObserver.observe(doc.documentElement, {
               attributes: true,
-              attributeFilter: ['data-ag-cs-win-blur', 'data-ag-prism-mode', 'data-ag-cs-motion', 'data-ag-cs-theme', 'data-ag-pp-open'],
+              attributeFilter: ['data-ag-cs-win-blur', 'data-ag-prism-mode', 'data-ag-cs-motion', 'data-ag-cs-theme', 'data-ag-pp-open', 'data-ag-cs-perf-mode'],
             });
           } catch {}
         }

@@ -1287,10 +1287,13 @@
     const WB = 'data-ag-cs-win-blur';
     const PM = 'data-ag-prism-mode';
     const PP_OPEN = 'data-ag-pp-open';
+    const PERF_M = 'data-ag-cs-perf-mode';
     const isDocHidden = () => !!(doc?.hidden);
     const isPpOpen = () => {
       const root = doc?.documentElement;
-      return Boolean(root && isFn(root.getAttribute) && root.getAttribute(PP_OPEN) === '1');
+      if (!root || !isFn(root.getAttribute) || root.getAttribute(PP_OPEN) !== '1') return false;
+      const pm = String(root.dataset?.agCsPerfMode || root.getAttribute(PERF_M) || '').trim().toLowerCase();
+      return pm === 'performance' || pm === 'eco';
     };
     const isAttrB = () => {
       const root = doc?.documentElement;
@@ -4366,7 +4369,7 @@
       win.addEventListener('focus', onWFocus);
       cleanups.push(() => { win.removeEventListener?.('blur', onWBlur); win.removeEventListener?.('focus', onWFocus); });
     }
-    const rootAttrs = [WB, PM, PP_OPEN, RESIZE_ATTR, IGN_RM, MOT_A];
+    const rootAttrs = [WB, PM, PP_OPEN, PERF_M, RESIZE_ATTR, IGN_RM, MOT_A];
     if (doc?.documentElement) {
       let wasResizingAttr = Boolean(doc.documentElement.getAttribute?.(RESIZE_ATTR) === '1');
       const onRootMut = (records) => {
@@ -4376,7 +4379,7 @@
         wasResizingAttr = nowResizingAttr;
         if (resizeEnded) onStageResizeReleased();
         if (Array.isArray(records) && records.some((r) => r && (r.attributeName === IGN_RM || r.attributeName === MOT_A))) onReducedChange(reducedMq);
-        if (!Array.isArray(records) || records.some((r) => !r || !r.attributeName || r.attributeName === WB || r.attributeName === PM || r.attributeName === PP_OPEN)) syncPwr();
+        if (!Array.isArray(records) || records.some((r) => !r || !r.attributeName || r.attributeName === WB || r.attributeName === PM || r.attributeName === PP_OPEN || r.attributeName === PERF_M)) syncPwr();
       };
       const dBus = win && (win.__agDomBus || win.__agPrismDomBus);
       let unBus = null;
