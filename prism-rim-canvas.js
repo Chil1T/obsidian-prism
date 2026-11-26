@@ -180,7 +180,10 @@
         cv.width = cv.height = 0;
         cv.setAttribute('aria-hidden', 'true');
         cv.setAttribute('data-ag-no-i18n', '');
-        if (cv.style?.setProperty) for (const k of ['margin', 'padding', 'border']) cv.style.setProperty(k, '0', 'important');
+        if (cv.style?.setProperty) {
+          for (const [k, v] of [['position', 'absolute'], ['inset', '0'], ['width', '100%'], ['height', '100%'], ['pointer-events', 'none']]) cv.style.setProperty(k, v);
+          for (const k of ['margin', 'padding', 'border']) cv.style.setProperty(k, '0', 'important');
+        }
         hostEl.appendChild(cv);
       }
       trkCvs.add(cv);
@@ -579,6 +582,37 @@
       });
     };
 
+    // 0-reflow 立即挂载新出现的棱镜宿主 Canvas（不读取布局，确保阶段 2 零 W->R 回流）
+    const mountNewBoxes = () => {
+      pDirty = true;
+      lastPrismRectReadAt = 0;
+      if (isDestroyed()) return;
+      if (isH()) { cancelPendingRaf(); shrinkRims(1); return; }
+      if (!isRimOn()) { runGuardedMut(() => { cancelPendingRaf(); clearAllRimCanvases(true); }); return; }
+      const d = getDoc();
+      if (!d || !isFn(d.querySelectorAll)) return;
+      runGuardedMut(() => {
+        for (const box of d.querySelectorAll(`[${PB}="1"]`) || []) {
+          if (!dis(box) && ga(box, CV_A) !== '1') ensurePrismRimCanvas(box);
+        }
+        if (!isWB() && !isDragSuspended()) { lastPrismDrawAt = 0; schedRaf(); }
+      });
+    };
+
+    // 异步问答/接管卡挂入时同步刷新宿主列表、挂齐棱镜 Canvas 并触发首帧环境光重绘
+    const rescanNow = () => {
+      pDirty = true;
+      lastPrismRectReadAt = 0;
+      lastSbTarget = null; lastSbAt = 0;
+      if (isDestroyed()) return;
+      if (isH()) { cancelPendingRaf(); shrinkRims(1); return; }
+      if (!isRimOn()) { runGuardedMut(() => { pruneOrphanRimCanvases(false); cancelPendingRaf(); clearAllRimCanvases(true); }); return; }
+      const now = performance.now();
+      refreshPrismBoxRectCache(now, lastPointerPos.x >= -1000);
+      lastPrismRectReadAt = lastPointerPos.x >= -1000 ? now : 0;
+      if (!isWB() && !isDragSuspended() && lastPointerPos.x >= -1000) { lastPrismDrawAt = 0; schedRaf(); }
+    };
+
     const markDirty = () => {
       pDirty = true;
       lastSbTarget = null; lastSbAt = 0;
@@ -615,7 +649,7 @@
     return {
       onPointerMove, cancelPendingRaf,
       pauseForOverlay: () => { if (!isDestroyed() && isWB()) { cancelPendingRaf(); clearAllRimCanvases(isH()); } },
-      teardown, markDirty, invalidateMetrics, getLastPointerPos: () => lastPointerPos,
+      teardown, markDirty, invalidateMetrics, mountNewBoxes, rescanNow, getLastPointerPos: () => lastPointerPos,
     };
   }
 

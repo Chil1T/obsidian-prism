@@ -23,6 +23,8 @@
     '--background,--content,--shell,--body-background,--sidebar,--sidebar-muted,--sidebar-secondary,--card,--card-border,--border,--secondary,--secondary-foreground,--muted,--muted-foreground,--foreground,--placeholder,--primary,--primary-foreground,--accent,--link,--error,--warning,--success,--scrim,--ag-cs-tonal-0,--ag-cs-tonal-1,--ag-cs-tonal-2,--ag-cs-tonal-3,--ag-cs-tonal-4,--font-sans'.split(',');
   const S_VP = '[data-testid="autoscroll-viewport"]';
   const S_CV = '[data-testid="conversation-view"]';
+  const S_PANE_STOP = '[data-testid="aux-pane-split"],[data-tiling-pane],[data-split-panes],[data-testid="sidebar-split"]';
+  const S_PANE_SCOPE = `${S_CV},[data-testid="subagent-tab-conversation"],[data-testid="side-question-panel"],[data-side-panel-body]`;
   const S_NT = '[data-testid="conversation-navigator-turn"]';
   const S_NG = '[data-testid="conversation-navigator-group"]';
   const S_TRIG = '.ag-cs-nav-outline-trigger';
@@ -93,6 +95,7 @@
   const qs = (e, s) => e?.querySelector?.(s) || null;
   const qa = (e, s) => e?.querySelectorAll?.(s) || [];
   const cl = (e, s) => e?.closest?.(s) || null;
+  const isM = (e, s) => Boolean(e && (typeof e.matches === 'function' ? e.matches(s) : cl(e, s) === e));
   const tagU = (e) => String(e?.tagName || '').toUpperCase();
 
   const A_DLG = 'data-ag-cs-settings-dlg',
@@ -1608,18 +1611,9 @@ else if (ha(ovShell, 'data-ag-overview-running')) ra(ovShell, 'data-ag-overview-
 });
 }
 function cancelScrollGlide() {
-if (scrollGlideRaf && win?.cancelAnimationFrame) {
-try {
-win.cancelAnimationFrame(scrollGlideRaf);
-} catch {}
-}
+if (scrollGlideRaf && win?.cancelAnimationFrame) { try { win.cancelAnimationFrame(scrollGlideRaf); } catch {} }
 scrollGlideRaf = 0;
-if (typeof scrollGlideCleanup === 'function') {
-try {
-scrollGlideCleanup();
-} catch {}
-scrollGlideCleanup = null;
-}
+if (typeof scrollGlideCleanup === 'function') { try { scrollGlideCleanup(); } catch {} scrollGlideCleanup = null; }
 }
 const isReducedMotionNow = () => {
 if ((getConfig() || {}).motionLevel === 'off' || ga(doc?.documentElement, 'data-ag-cs-motion') === 'off') return true;
@@ -1627,21 +1621,27 @@ if (typeof win?.__agPrismReducedMotion === 'function') return Boolean(win.__agPr
 if (ga(doc?.documentElement, 'data-ag-cs-ignore-rm') === '1') return false;
 return Boolean(win?.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches);
 };
+function findLocalScrollViewport(btnEl) {
+for (let cur = btnEl?.parentElement; cur && cur !== doc.body && cur !== doc.documentElement; cur = cur.parentElement) {
+if (isM(cur, S_PANE_STOP)) break;
+if (isM(cur, S_VP) || ga(cur, 'data-testid') === 'autoscroll-viewport') return cur;
+for (const cand of qa(cur, S_VP)) {
+let crossed = false;
+for (let p = cand.parentElement; p && p !== cur; p = p.parentElement) { if (isM(p, S_PANE_STOP) || (isM(cur, S_CV) && isM(p, '[data-testid="subagent-tab-conversation"],[data-testid="side-question-panel"]'))) { crossed = true; break; } }
+if (!crossed) return cand;
+}
+if (isM(cur, S_PANE_SCOPE)) break;
+}
+return null;
+}
 function runFastScrollToBottom(btnEl) {
 if (isDead() || !doc || !win) return false;
 const cfg = getConfig() || {};
-if (cfg.scrollBottomMotion === 'instant' || isReducedMotionNow()) {
-return false;
-}
-const vp = qs(cl(btnEl, S_CV) || doc, S_VP) || qs(doc, S_VP);
+if (cfg.scrollBottomMotion === 'instant' || isReducedMotionNow()) return false;
+const vp = findLocalScrollViewport(btnEl);
 if (!vp) return false;
-const maxS = Math.max(0, (vp.scrollHeight || 0) - (vp.clientHeight || 0)),
-start = vp.scrollTop || 0,
-dist = maxS - start;
-if (dist <= 24 || !win.requestAnimationFrame) {
-vp.scrollTop = maxS;
-return true;
-}
+const maxS = Math.max(0, (vp.scrollHeight || 0) - (vp.clientHeight || 0)), start = vp.scrollTop || 0, dist = maxS - start;
+if (dist <= 24 || !win.requestAnimationFrame) { vp.scrollTop = maxS; return true; }
 cancelScrollGlide();
 const dur = Math.max(340, Math.min(540, Math.round(250 + Math.sqrt(dist) * 6.5)));
 const nowFn = typeof win.performance?.now === 'function' ? () => win.performance.now() : () => Date.now();
@@ -1969,12 +1969,14 @@ if (jumpUserTurn(ev.key === 'ArrowUp' ? -1 : 1, ev.target)) ev.preventDefault?.(
 function onWinScrollPassive(ev) {
 if (isDead()) return;
 const t = ev?.target;
-if (!t || (!t.matches?.(S_VP) && ga(t, 'data-testid') !== 'autoscroll-viewport')) return;
-const cv = cl(t, S_CV);
-if (!cv || !qs(cv, '.agy-scroll-bottom, [data-ag-cs-overview-shell="1"]')) return;
-if (scrollBlurCv && scrollBlurCv !== cv && ha(scrollBlurCv, 'data-ag-scrolling')) { const oldCv = scrollBlurCv; mut(() => ra(oldCv, 'data-ag-scrolling')); }
-if (scrollBlurCv !== cv || ga(cv, 'data-ag-scrolling') !== '1') mut(() => setA(cv, 'data-ag-scrolling', '1'));
-scrollBlurCv = cv;
+if (!t || t === doc || t === win || t === doc.body || t === doc.documentElement) return;
+if (!isM(t, S_VP) && ga(t, 'data-testid') !== 'autoscroll-viewport' && !((t.scrollHeight || 0) > (t.clientHeight || 0) + 1 || (t.scrollTop || 0) > 0)) return;
+let scope = cl(t, S_PANE_SCOPE);
+if (!scope) for (let cur = t.parentElement; cur && cur !== doc.body && cur !== doc.documentElement; cur = cur.parentElement) { if (isM(cur, S_PANE_STOP)) break; if (qs(cur, '.agy-scroll-bottom, [data-ag-cs-overview-shell="1"]')) { scope = cur; break; } }
+if (!scope || !qs(scope, '.agy-scroll-bottom, [data-ag-cs-overview-shell="1"]')) return;
+if (scrollBlurCv && scrollBlurCv !== scope && ha(scrollBlurCv, 'data-ag-scrolling')) { const oldCv = scrollBlurCv; mut(() => ra(oldCv, 'data-ag-scrolling')); }
+if (scrollBlurCv !== scope || ga(scope, 'data-ag-scrolling') !== '1') mut(() => setA(scope, 'data-ag-scrolling', '1'));
+scrollBlurCv = scope;
 if (scrollBlurTimer) { clearTimeout(scrollBlurTimer); nonDiffAnimTimers.delete(scrollBlurTimer); }
 scrollBlurTimer = setTimeout(() => { nonDiffAnimTimers.delete(scrollBlurTimer); scrollBlurTimer = 0; const targetCv = scrollBlurCv; scrollBlurCv = null; if (targetCv && !isDead() && ha(targetCv, 'data-ag-scrolling')) mut(() => ra(targetCv, 'data-ag-scrolling')); }, 150);
 nonDiffAnimTimers.add(scrollBlurTimer);
