@@ -815,7 +815,7 @@ enum CdpHelper {
                     continue
                 }
                 if k == "autoPromptCdpRelaunch" || k == "autoRelaunchOnBareLaunch" {
-                    if v.boolValue != nil || v.stringValue != nil { cfg[k] = v }
+                    if v.boolValue != nil { cfg[k] = v }
                     continue
                 }
                 let isKnown = builtinValidators[k] != nil || manifest.validators[k] != nil
@@ -875,14 +875,8 @@ enum CdpHelper {
         }
         next = reconcileConfigAliases(next)
         let cfgPath = (baseDir as NSString).appendingPathComponent("config.json")
-        let tmpPath = cfgPath + ".tmp"
-        let content = MiniJson.stringify(.object(next), pretty: true) + "\n"
         do {
-            try content.write(toFile: tmpPath, atomically: false, encoding: .utf8)
-            if rename(tmpPath, cfgPath) != 0 {
-                try content.write(toFile: cfgPath, atomically: true, encoding: .utf8)
-                try? FileManager.default.removeItem(atPath: tmpPath)
-            }
+            try atomicWriteJsonObject(next, toFile: cfgPath)
             return true
         } catch {
             return false

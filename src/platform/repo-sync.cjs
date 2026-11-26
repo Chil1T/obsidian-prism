@@ -344,7 +344,9 @@ function copyUpdatedRuntimeFromRepo(repoDir, pluginDir, syncFilesList, opts = nu
   const stagedMap = new Map();
   const files =
     resolvedFiles ||
-    (Array.isArray(syncFilesList) && syncFilesList.length > 0 ? syncFilesList : ['cdp.js', 'style.css', 'ui-runtime.js']);
+    (Array.isArray(syncFilesList) && syncFilesList.length > 0
+      ? syncFilesList
+      : ['cdp.js', 'style.css', 'ui-runtime.js', 'tools/install-plugin.cjs']);
   for (const rel of files) {
     collectSafeFileIntoStage({
       rel,

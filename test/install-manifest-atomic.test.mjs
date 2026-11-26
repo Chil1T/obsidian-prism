@@ -561,6 +561,7 @@ test(
       assert.equal(res.ok, true);
       assert.equal(fs.existsSync(path.join(installDir, INSTALL_MANIFEST_FILENAME)), true);
       assert.equal(fs.existsSync(path.join(pluginDir, INSTALL_MANIFEST_FILENAME)), true);
+      assert.equal(fs.existsSync(path.join(pluginDir, 'tools', 'install-plugin.cjs')), true);
       assert.equal(fs.readFileSync(path.join(pluginDir, 'custom.css'), 'utf8'), '/* win user css */\n');
       assert.equal(fs.readFileSync(path.join(pluginDir, 'wallpapers', 'user.png'), 'utf8'), 'WIN-USER-WP');
 
@@ -846,6 +847,104 @@ test('DEFAULT_OBSOLETE_PATHS covers retired dead files safely and copyDirRecursi
       fs.readdirSync(dstDir).some((n) => n.startsWith('.staging-') || n.startsWith('.rollback-')),
       false,
       'No .staging-* or .rollback-* temp directories may remain'
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('tools/install-plugin.cjs is managed by SYNC_ROOT_FILES and atomic manifest sync without touching unrelated tools/* files', async () => {
+  const cdpMod = require(path.join(ROOT, 'cdp.js'));
+
+  // 1) Path safety & SSOT inclusion
+  assert.equal(isSafeManagedRelPath('tools/install-plugin.cjs'), true);
+  assert.equal(isProtectedUserPath('tools/install-plugin.cjs', PROTECTED_USER_PATHS), false);
+  assert.equal(shouldExcludeSyncRelPath('tools/install-plugin.cjs'), false);
+  assert.ok(
+    Array.isArray(cdpMod.SYNC_ROOT_FILES) && cdpMod.SYNC_ROOT_FILES.includes('tools/install-plugin.cjs'),
+    'SYNC_ROOT_FILES must include tools/install-plugin.cjs'
+  );
+
+  // 2) Native plugin bundle & install-manifest.json include tools/install-plugin.cjs exclusively under tools/
+  const nativeEntries = collectNativePluginEntries();
+  const nativeToolEntries = nativeEntries.filter((e) => e.name.startsWith('native-plugin/tools/'));
+  assert.deepEqual(
+    nativeToolEntries.map((e) => e.name),
+    ['native-plugin/tools/install-plugin.cjs'],
+    'collectNativePluginEntries must include only tools/install-plugin.cjs under tools/'
+  );
+  const manifestPayload = createInstallManifestPayload({
+    version: cdpMod.PLUGIN_VERSION,
+    installEntries: [],
+    pluginEntries: nativeEntries,
+  });
+  const toolManifestEntry = manifestPayload.manifest.files.find((f) => f.path === 'tools/install-plugin.cjs');
+  assert.ok(toolManifestEntry, 'install-manifest.json must track tools/install-plugin.cjs');
+  assert.equal(toolManifestEntry.scope, 'plugin');
+  assert.equal(
+    toolManifestEntry.sha256,
+    computeFileSha256(path.join(ROOT, 'tools', 'install-plugin.cjs')),
+    'install-manifest.json SHA-256 for tools/install-plugin.cjs must match repo file'
+  );
+
+  // 3) copyUpdatedRuntimeFromRepo & installPlugin atomically upgrade tools/install-plugin.cjs without syncing or deleting unrelated tools/* files
+  const tmpDir = mkTmp('prism-sync-tool-');
+  try {
+    const fakeRepo = path.join(tmpDir, 'repo');
+    const fakePlugin = path.join(tmpDir, 'plugin');
+    fs.mkdirSync(path.join(fakeRepo, 'tools'), { recursive: true });
+    fs.mkdirSync(path.join(fakePlugin, 'tools'), { recursive: true });
+
+    const newInstallerSrc = '// v2 tools/install-plugin.cjs\nmodule.exports = { v: 2 };\n';
+    fs.writeFileSync(path.join(fakeRepo, 'style.css'), '/* v2 */\n', 'utf8');
+    fs.writeFileSync(path.join(fakeRepo, 'tools', 'install-plugin.cjs'), newInstallerSrc, 'utf8');
+    fs.writeFileSync(path.join(fakeRepo, 'tools', 'other-unmanaged.cjs'), '// must not sync\n', 'utf8');
+
+    fs.writeFileSync(path.join(fakePlugin, 'style.css'), '/* v1 */\n', 'utf8');
+    fs.writeFileSync(path.join(fakePlugin, 'tools', 'install-plugin.cjs'), '// stale v1\n', 'utf8');
+    fs.writeFileSync(path.join(fakePlugin, 'tools', 'keep-unrelated.cjs'), '// keep me\n', 'utf8');
+    fs.writeFileSync(path.join(fakePlugin, 'tools', 'patch-asar.cjs'), '// retired obsolete\n', 'utf8');
+
+    const synced = copyUpdatedRuntimeFromRepo(fakeRepo, fakePlugin, cdpMod.SYNC_ROOT_FILES);
+    assert.ok(synced >= 2);
+    assert.equal(
+      fs.readFileSync(path.join(fakePlugin, 'tools', 'install-plugin.cjs'), 'utf8'),
+      newInstallerSrc,
+      'copyUpdatedRuntimeFromRepo must atomically update tools/install-plugin.cjs'
+    );
+    assert.equal(
+      fs.existsSync(path.join(fakePlugin, 'tools', 'other-unmanaged.cjs')),
+      false,
+      'copyUpdatedRuntimeFromRepo must NOT sync unrelated tools/* files'
+    );
+    assert.equal(
+      fs.readFileSync(path.join(fakePlugin, 'tools', 'keep-unrelated.cjs'), 'utf8'),
+      '// keep me\n',
+      'copyUpdatedRuntimeFromRepo must NOT delete unrelated files in target tools/'
+    );
+    assert.equal(
+      fs.existsSync(path.join(fakePlugin, 'tools', 'patch-asar.cjs')),
+      false,
+      'Retired tools/patch-asar.cjs must still be purged safely'
+    );
+
+    // 4) installPlugin deploys tools/install-plugin.cjs into target pluginDir with exact SHA-256 parity
+    const hostCfgDir = path.join(tmpDir, '.gemini', 'config');
+    const pluginTarget = path.join(hostCfgDir, 'plugins', 'obsidian-prism');
+    fs.mkdirSync(hostCfgDir, { recursive: true });
+    await installPluginMod.installPlugin({
+      sourceDir: ROOT,
+      targetDir: pluginTarget,
+      hostConfigDir: hostCfgDir,
+      startDaemon: false,
+      syncShortcuts: false,
+    });
+    const deployedToolPath = path.join(pluginTarget, 'tools', 'install-plugin.cjs');
+    assert.equal(fs.existsSync(deployedToolPath), true, 'installPlugin must deploy tools/install-plugin.cjs');
+    assert.equal(
+      computeFileSha256(deployedToolPath),
+      computeFileSha256(path.join(ROOT, 'tools', 'install-plugin.cjs')),
+      'Deployed tools/install-plugin.cjs SHA-256 must match source repo'
     );
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });

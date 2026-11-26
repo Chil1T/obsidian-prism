@@ -246,7 +246,7 @@ function collectNativePluginEntries(activeConfigFile) {
   };
 
   for (const rel of cdp.SYNC_ROOT_FILES || []) {
-    const abs = path.join(ROOT_DIR, rel);
+    const abs = path.join(ROOT_DIR, ...String(rel).split('/'));
     try {
       if (fs.existsSync(abs) && fs.statSync(abs).isFile()) {
         pushEntry(`native-plugin/${rel}`, fs.readFileSync(abs));

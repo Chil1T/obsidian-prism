@@ -2463,6 +2463,7 @@ test(
           telemetryQuotaMode: null,
           targetFps: '999',
           pollIntervalMs: 'not-a-number',
+          autoPromptCdpRelaunch: 'on',
           autoRelaunchOnBareLaunch: false,
           customFutureKey: 'preserve-me',
         }),
@@ -2578,6 +2579,7 @@ test(
       assert.equal(res.readBefore.telemetryQuotaMode, 'compact');
       assert.equal(res.readBefore.targetFps, '180');
       assert.equal(res.readBefore.pollIntervalMs, 2500);
+      assert.equal(Object.prototype.hasOwnProperty.call(res.readBefore, 'autoPromptCdpRelaunch'), false, 'C# ReadConfig must reject string value for strictBoolean autoPromptCdpRelaunch');
       assert.equal(res.readBefore.autoRelaunchOnBareLaunch, false);
       assert.equal(res.readBefore.customFutureKey, 'preserve-me');
 
