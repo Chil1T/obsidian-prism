@@ -89,6 +89,7 @@ const CHANNEL_STATIC_SPECS = Object.freeze([
     ],
     fieldOverrides: {
       hashField: '', hashSrcField: '', mountedField: '', sigField: 'lastOmniExpr', scriptSigField: 'lastOmniExpr',
+      bindingAddedField: 'omniBindingAdded',
       probeHashField: '', cdpShouldFn: '', cdpBuildFn: 'buildOmniClientExpression', cdpRemoveConst: 'OMNI_REMOVE_EXPRESSION',
     },
     defaultShouldEnable: (cfg) => cfg?.omniModule !== 'off' && cfg?.omniModule !== false,
@@ -157,6 +158,7 @@ const CHANNEL_STATIC_SPECS = Object.freeze([
       'hasThoughtSettingsUi: Boolean(window.__agPrismThoughtSettingsUi)',
     ],
     fieldOverrides: {
+      bindingAddedField: 'thoughtBindingAdded',
       probeHashField: '', cdpShouldFn: 'shouldEnableThought',
       cdpBuildFn: 'buildThoughtExpression', cdpRemoveConst: 'THOUGHT_REMOVE_EXPRESSION',
     },
@@ -205,14 +207,19 @@ const CHANNEL_STATIC_SPECS = Object.freeze([
   defineSpec({
     id: 'periodicPicker', channelNumber: 8, order: 80, tier: 'studio',
     label: 'Periodic 3D Model Picker', configKeys: ['periodicModelPicker'],
-    files: PERIODIC_PICKER_MODULE_FILES.map((name) => `vendor/periodic-picker/${name}`),
+    files: [
+      'vendor/periodic-picker/periodic-picker-stub.js',
+      ...PERIODIC_PICKER_MODULE_FILES.map((name) => `vendor/periodic-picker/${name}`),
+    ],
     mountGlobal: '__agPrismPeriodicPicker', budgetBytes: 820 * 1024,
     probeLines: [
-      "hasPeriodicPicker: Boolean(window.__agPrismPeriodicPicker && window.__agPrismPeriodicPicker.getStatus?.()?.status !== 'destroyed' && window.__agPrismPeriodicPicker.getStatus?.()?.status !== 'off')",
-      "periodicPickerCodeHash: String(window.__agPrismPeriodicPicker?.__prismCodeHash || '')",
+      "hasPeriodicPicker: Boolean((window.__agPrismPeriodicPicker && window.__agPrismPeriodicPicker.getStatus?.()?.status !== 'destroyed' && window.__agPrismPeriodicPicker.getStatus?.()?.status !== 'off') || (window.__agPrismPeriodicStub && window.__agPrismPeriodicStub.getStatus?.()?.status !== 'destroyed' && window.__agPrismPeriodicStub.getStatus?.()?.status !== 'off'))",
+      "periodicPickerCodeHash: String((window.__agPeriodicFullLoaded && window.__agPeriodicStubHash) || window.__agPrismPeriodicPicker?.__prismCodeHash || window.__agPrismPeriodicStub?.__prismCodeHash || '')",
     ],
     fieldOverrides: {
-      cdpShouldFn: 'shouldEnablePeriodicPicker', cdpBuildFn: 'buildPeriodicPickerExpression',
+      cdpShouldFn: 'shouldEnablePeriodicPicker',
+      cdpBuildFn: 'buildPeriodicPickerStubExpression',
+      cdpFullBuildFn: 'buildPeriodicPickerExpression',
       cdpRemoveConst: 'PERIODIC_PICKER_REMOVE_EXPRESSION',
     },
     defaultShouldEnable: (cfg) => cfg?.periodicModelPicker !== 'off' && cfg?.periodicModelPicker !== false,

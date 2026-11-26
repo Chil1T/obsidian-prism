@@ -442,9 +442,13 @@ function applyModulePoolReplacements(tokens, selectedEntries, headerBuilder) {
   return headerBuilder(activeItems, bodyCode);
 }
 
-function internAndPackModuleStrings(tokens) {
+function internAndPackModuleStrings(tokens, opts = null) {
+  const allowMemberProps =
+    opts && typeof opts === 'object' && Object.prototype.hasOwnProperty.call(opts, 'allowMemberProps')
+      ? Boolean(opts.allowMemberProps)
+      : true;
   const SEP = '\x7f';
-  const occurrences = scanModulePoolCandidates(tokens, true);
+  const occurrences = scanModulePoolCandidates(tokens, allowMemberProps);
   const selected = [];
   for (const [strVal, list] of occurrences.entries()) {
     const valBytes = Buffer.byteLength(strVal, 'utf8');
@@ -470,10 +474,10 @@ function minifyJs(src) {
   return serializeTokens(mangleSafeLocals(tokenizeJs(src)));
 }
 
-function minifySingleSource(src) {
+function minifySingleSource(src, opts = null) {
   const tokens = mangleSafeLocals(tokenizeJs(src));
   const plainMin = serializeTokens(tokens);
-  const packedMin = internAndPackModuleStrings(tokens);
+  const packedMin = internAndPackModuleStrings(tokens, opts);
   if (packedMin && Buffer.byteLength(packedMin, 'utf8') + 40 < Buffer.byteLength(plainMin, 'utf8')) {
     return packedMin;
   }

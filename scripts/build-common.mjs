@@ -212,6 +212,17 @@ function collectOptionalOffloadedRuntimeTopEntries() {
   return entries;
 }
 
+function collectOptionalPeriodicPickerStubTopEntries() {
+  const rel = 'vendor/periodic-picker/periodic-picker-stub.js';
+  const abs = path.join(ROOT_DIR, ...rel.split('/'));
+  if (!fs.existsSync(abs)) return [];
+  try {
+    return [{ name: rel, data: Buffer.from(cdp.minifyJs(fs.readFileSync(abs, 'utf8')), 'utf8') }];
+  } catch {
+    return [];
+  }
+}
+
 function collectOptionalOmniTopEntries() {
   const entries = [];
   for (const ch of cdp.CHANNEL_REGISTRY || []) {
@@ -219,6 +230,7 @@ function collectOptionalOmniTopEntries() {
       entries.push(...collectRegistryChannelFiles(ch.id));
     }
   }
+  entries.push(...collectOptionalPeriodicPickerStubTopEntries());
   entries.push(...collectOptionalOffloadedRuntimeTopEntries());
   return entries;
 }

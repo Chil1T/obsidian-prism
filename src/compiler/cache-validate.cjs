@@ -7,6 +7,7 @@ const { CHANNEL_CACHE_NAMES, CHANNEL_CACHE_FORMAT_MAP } = require('../channels/r
 
 const BUNDLE_CACHE_SCHEMA_VERSION = 2;
 const BUNDLE_CACHE_FILENAME = '.bundle-cache.json';
+const BUNDLE_CACHE_SHARD_DIRNAME = '.bundle-cache';
 const BUNDLE_CACHE_MAX_ENTRIES = 4;
 const BUNDLE_CACHE_MAX_FILE_BYTES = 6 * 1024 * 1024;
 const BUNDLE_CACHE_MAX_EXPR_BYTES = 2 * 1024 * 1024;
@@ -15,6 +16,64 @@ const CHANNEL_CACHE_MAX_PAYLOAD_BYTES = 2 * 1024 * 1024;
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 const CODE_HASH_RE = /^[0-9a-z]{1,16}$/;
 const BUNDLE_CACHE_ROOT_MEM_TTL_MS = 500;
+
+// 通道附属分片槽位（如 Ch8 轻桩），不污染 CHANNEL_CACHE_NAMES 唯一 16 通道清单
+const CHANNEL_SUB_SLOTS = Object.freeze({
+  periodicPickerStub: Object.freeze({
+    parentChannel: 'periodicPicker',
+    format: 'minRuntime',
+    shardFile: 'ch-periodicPicker-stub.json',
+  }),
+});
+
+function isShardedCachePath(cachePath, opts = null) {
+  if (!cachePath || typeof cachePath !== 'string') return false;
+  if (opts && opts.sharded === true) return true;
+  if (opts && opts.sharded === false) return false;
+  const base = path.basename(path.resolve(cachePath)).toLowerCase();
+  return base === BUNDLE_CACHE_SHARD_DIRNAME || base === 'bundle-cache';
+}
+
+function resolveChannelCacheFormat(channelName) {
+  if (Object.prototype.hasOwnProperty.call(CHANNEL_CACHE_FORMAT_MAP, channelName)) {
+    return CHANNEL_CACHE_FORMAT_MAP[channelName];
+  }
+  if (Object.prototype.hasOwnProperty.call(CHANNEL_SUB_SLOTS, channelName)) {
+    return CHANNEL_SUB_SLOTS[channelName].format;
+  }
+  return null;
+}
+
+function resolveChannelShardFilename(channelName) {
+  if (Object.prototype.hasOwnProperty.call(CHANNEL_SUB_SLOTS, channelName)) {
+    return CHANNEL_SUB_SLOTS[channelName].shardFile;
+  }
+  if (!CHANNEL_CACHE_NAMES.includes(channelName)) return '';
+  return `ch-${channelName}.json`;
+}
+
+function resolveChannelStatsKey(channelName) {
+  if (Object.prototype.hasOwnProperty.call(CHANNEL_SUB_SLOTS, channelName)) {
+    return CHANNEL_SUB_SLOTS[channelName].parentChannel;
+  }
+  return channelName;
+}
+
+function computeSourceStatsBinding(pluginVersion, scopeKey, sourceHash, sourceStats) {
+  return sha256Text(
+    `${BUNDLE_CACHE_SCHEMA_VERSION}\0${String(pluginVersion || '')}\0${String(scopeKey || '')}\0${String(sourceHash || '')}\0${JSON.stringify(sourceStats || [])}`
+  );
+}
+
+function isValidSourceStatsArray(stats) {
+  if (!Array.isArray(stats) || stats.length === 0 || stats.length > 256) return false;
+  for (const item of stats) {
+    if (!Array.isArray(item) || item.length !== 4) return false;
+    if (typeof item[0] !== 'string' || !item[0]) return false;
+    if (!Number.isFinite(item[1]) || !Number.isFinite(item[2]) || !Number.isFinite(item[3])) return false;
+  }
+  return true;
+}
 
 function resolveBundleCachePathOption(opts) {
   if (opts && (opts.cachePath === false || opts.cachePath === null || opts.noDiskCache === true)) {
@@ -54,7 +113,7 @@ function freezeBundleCacheRoot(parsed) {
   return parsed;
 }
 
-function isValidBundleBaseTemplate(parsed) {
+function isValidBundleBaseTemplate(parsed, { skipSha256 = false } = {}) {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
   const hasOwn = (k) => Object.prototype.hasOwnProperty.call(parsed, k);
   if (!hasOwn('codeHash') || typeof parsed.codeHash !== 'string' || !CODE_HASH_RE.test(parsed.codeHash)) {
@@ -72,7 +131,7 @@ function isValidBundleBaseTemplate(parsed) {
   const totalBytes = Buffer.byteLength(parsed.basePrefix, 'utf8') + Buffer.byteLength(parsed.baseSuffix, 'utf8');
   if (totalBytes <= 0 || totalBytes > BUNDLE_CACHE_MAX_EXPR_BYTES) return false;
   if (!parsed.baseSuffix.includes(JSON.stringify(parsed.codeHash))) return false;
-  if (sha256Text(`${parsed.basePrefix}\0${parsed.baseSuffix}`) !== parsed.baseSha256) return false;
+  if (!skipSha256 && sha256Text(`${parsed.basePrefix}\0${parsed.baseSuffix}`) !== parsed.baseSha256) return false;
   return true;
 }
 
@@ -119,7 +178,7 @@ function isValidChannelCacheEntry(channelName, entry) {
   if (!hasOwn('payloadSha256') || typeof entry.payloadSha256 !== 'string' || !SHA256_HEX_RE.test(entry.payloadSha256)) {
     return false;
   }
-  const format = CHANNEL_CACHE_FORMAT_MAP[channelName];
+  const format = resolveChannelCacheFormat(channelName);
   if (format === 'minCode') {
     if (!hasOwn('minCode') || typeof entry.minCode !== 'string' || entry.minCode.length === 0) return false;
     if (Buffer.byteLength(entry.minCode, 'utf8') > CHANNEL_CACHE_MAX_PAYLOAD_BYTES) return false;
@@ -157,7 +216,8 @@ function extractValidChannelsMap(rawChannels) {
   if (!rawChannels || typeof rawChannels !== 'object' || Array.isArray(rawChannels)) {
     return out;
   }
-  for (const name of CHANNEL_CACHE_NAMES) {
+  const validNames = [...CHANNEL_CACHE_NAMES, ...Object.keys(CHANNEL_SUB_SLOTS)];
+  for (const name of validNames) {
     if (!Object.prototype.hasOwnProperty.call(rawChannels, name)) continue;
     const ent = rawChannels[name];
     if (isValidChannelCacheEntry(name, ent)) {
@@ -170,16 +230,24 @@ function extractValidChannelsMap(rawChannels) {
 module.exports = {
   BUNDLE_CACHE_SCHEMA_VERSION,
   BUNDLE_CACHE_FILENAME,
+  BUNDLE_CACHE_SHARD_DIRNAME,
   BUNDLE_CACHE_MAX_ENTRIES,
   BUNDLE_CACHE_MAX_FILE_BYTES,
   BUNDLE_CACHE_MAX_EXPR_BYTES,
   BUNDLE_CACHE_MAX_BOOTCFG_BYTES,
   CHANNEL_CACHE_MAX_PAYLOAD_BYTES,
   CHANNEL_CACHE_NAMES,
+  CHANNEL_SUB_SLOTS,
   SHA256_HEX_RE,
   CODE_HASH_RE,
   BUNDLE_CACHE_ROOT_MEM_TTL_MS,
   resolveBundleCachePathOption,
+  isShardedCachePath,
+  resolveChannelCacheFormat,
+  resolveChannelShardFilename,
+  resolveChannelStatsKey,
+  computeSourceStatsBinding,
+  isValidSourceStatsArray,
   freezeBundleCacheRoot,
   isValidBundleBaseTemplate,
   isValidBundleCacheEntry,

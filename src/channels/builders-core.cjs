@@ -41,14 +41,13 @@ function createCoreChannelBuilders({ rootDir, pluginVersion, readConfig, bundleC
     if (!cachePath && curMem && curMem.sig === sig && curMem.codeHash) {
       return curMem;
     }
-    const rawBuf = fs.readFileSync(omniPath);
     return bundleCache.resolveChannelAssetsWithDiskCache({
       channelName: 'omni',
       sig,
-      fileEntries: [{ rel: 'vendor/omni-viewer/omni-client.js', content: rawBuf }],
+      fileEntries: [{ rel: 'vendor/omni-viewer/omni-client.js', fullPath: omniPath }],
       opts,
       compileFn: () => {
-        const minCode = minifySingleSource(rawBuf.toString('utf8'));
+        const minCode = minifySingleSource(fs.readFileSync(omniPath, 'utf8'), { allowMemberProps: false });
         const codeHash = computeHash(minCode);
         return { minCode, codeHash };
       },
@@ -72,7 +71,7 @@ function createCoreChannelBuilders({ rootDir, pluginVersion, readConfig, bundleC
     let minCode = '';
     let codeHash = '';
     if (typeof customClientSource === 'string') {
-      minCode = customClientSource ? minifySingleSource(customClientSource) : '';
+      minCode = customClientSource ? minifySingleSource(customClientSource, { allowMemberProps: false }) : '';
       codeHash = minCode ? computeHash(minCode) : '';
     } else {
       const compiled = readCompiledOmniClient(resolvedOpts);
@@ -204,19 +203,18 @@ ${CHANNEL_OMNI_SIDEBAR_HOST_GUARD}
     if (!cachePath && curMem && curMem.sig === sig && curMem.codeHash) {
       return curMem;
     }
-    const rawBuf = fs.readFileSync(sidebarPath);
-    const rawText = rawBuf.toString('utf8');
-    if (!isSafeV2SidebarClientSource(rawText)) {
-      return { minCode: '', codeHash: '' };
-    }
     return bundleCache.resolveChannelAssetsWithDiskCache({
       channelName: 'sidebar',
       sig,
-      fileEntries: [{ rel: 'vendor/sidebar-studio/sidebar-client.js', content: rawBuf }],
+      fileEntries: [{ rel: 'vendor/sidebar-studio/sidebar-client.js', fullPath: sidebarPath }],
       extraTag: 'v2safe',
       opts,
       compileFn: () => {
-        const minCode = minifySingleSource(rawText);
+        const rawText = fs.readFileSync(sidebarPath, 'utf8');
+        if (!isSafeV2SidebarClientSource(rawText)) {
+          return { minCode: '', codeHash: '' };
+        }
+        const minCode = minifySingleSource(rawText, { allowMemberProps: false });
         const codeHash = computeHash(minCode);
         return { minCode, codeHash };
       },
@@ -241,7 +239,7 @@ ${CHANNEL_OMNI_SIDEBAR_HOST_GUARD}
     let codeHash = '';
     if (typeof customClientSource === 'string') {
       minCode = customClientSource && isSafeV2SidebarClientSource(customClientSource)
-        ? minifySingleSource(customClientSource)
+        ? minifySingleSource(customClientSource, { allowMemberProps: false })
         : '';
       codeHash = minCode ? computeHash(minCode) : '';
     } else {
@@ -395,14 +393,13 @@ ${CHANNEL_OMNI_SIDEBAR_HOST_GUARD}
     if (!cachePath && curMem && curMem.sig === sig && curMem.codeHash) {
       return curMem;
     }
-    const rawBuf = fs.readFileSync(clientPath);
     return bundleCache.resolveChannelAssetsWithDiskCache({
       channelName: 'inlineDiff',
       sig,
-      fileEntries: [{ rel: 'vendor/inline-diff/inline-diff-client.js', content: rawBuf }],
+      fileEntries: [{ rel: 'vendor/inline-diff/inline-diff-client.js', fullPath: clientPath }],
       opts,
       compileFn: () => {
-        const minCode = minifySingleSource(rawBuf.toString('utf8'));
+        const minCode = minifySingleSource(fs.readFileSync(clientPath, 'utf8'), { allowMemberProps: false });
         const codeHash = computeHash(minCode);
         return { minCode, codeHash };
       },
@@ -426,7 +423,7 @@ ${CHANNEL_OMNI_SIDEBAR_HOST_GUARD}
     let minCode = '';
     let codeHash = '';
     if (opts && typeof opts.customClientSource === 'string') {
-      minCode = opts.customClientSource ? minifySingleSource(opts.customClientSource) : '';
+      minCode = opts.customClientSource ? minifySingleSource(opts.customClientSource, { allowMemberProps: false }) : '';
       codeHash = minCode ? computeHash(minCode) : '';
     } else {
       const compiled = readCompiledInlineDiffClient(opts);

@@ -266,6 +266,25 @@ export function getUsageDiskCacheScope(tel, scopeKey = 'local', create = false) 
   return bucket || new Map();
 }
 
+function isUsageCacheEntryEqual(a, b) {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  if (
+    (a.stepCount || 0) !== (b.stepCount || 0) ||
+    (a.lastModifiedSec || 0) !== (b.lastModifiedSec || 0) ||
+    (a.dbMtimeSec || 0) !== (b.dbMtimeSec || 0) ||
+    (a.dbSize || 0) !== (b.dbSize || 0)
+  ) {
+    return false;
+  }
+  if (a.record === b.record) return true;
+  try {
+    return JSON.stringify(a.record) === JSON.stringify(b.record);
+  } catch {
+    return false;
+  }
+}
+
 export function putUsageDiskCache(tel, id, stepCount, lastModifiedSec, record, scopeKey = 'local', diskMeta = null) {
   if (!id || !GUID_RE.test(id) || !record?.days) return;
   const cleanRec = sanitizeUsageRecord(id, record);
@@ -280,17 +299,14 @@ export function putUsageDiskCache(tel, id, stepCount, lastModifiedSec, record, s
   const existing = bucket.get(key);
   if (existing && hasRealUsageRecord(existing.record) && !hasRealUsageRecord(cleanRec)) {
     const cleanExisting = sanitizeUsageRecord(id, existing.record);
-    if (
-      cleanExisting !== existing.record ||
-      (dbMtimeSec > 0 && existing.dbMtimeSec !== dbMtimeSec) ||
-      (dbSize > 0 && existing.dbSize !== dbSize)
-    ) {
-      bucket.set(key, {
-        ...existing,
-        ...(dbMtimeSec > 0 ? { dbMtimeSec } : {}),
-        ...(dbSize > 0 ? { dbSize } : {}),
-        record: cleanExisting,
-      });
+    const nextReal = {
+      ...existing,
+      ...(dbMtimeSec > 0 ? { dbMtimeSec } : {}),
+      ...(dbSize > 0 ? { dbSize } : {}),
+      record: cleanExisting,
+    };
+    if (!isUsageCacheEntryEqual(existing, nextReal)) {
+      bucket.set(key, nextReal);
       tel._usageCacheDirty = true;
     }
     return;
@@ -299,13 +315,18 @@ export function putUsageDiskCache(tel, id, stepCount, lastModifiedSec, record, s
     dbMtimeSec > 0 || dbSize > 0
       ? { ...cleanRec, ...(dbMtimeSec > 0 ? { dbMtimeSec } : {}), ...(dbSize > 0 ? { dbSize } : {}) }
       : cleanRec;
-  bucket.set(key, {
+  const nextEntry = {
     stepCount: sc,
     lastModifiedSec: lm,
     ...(dbMtimeSec > 0 ? { dbMtimeSec } : existing?.dbMtimeSec > 0 ? { dbMtimeSec: existing.dbMtimeSec } : {}),
     ...(dbSize > 0 ? { dbSize } : existing?.dbSize > 0 ? { dbSize: existing.dbSize } : {}),
     record: nextRecord,
-  });
+  };
+  // 字段等值 dirty diff 守卫：无变化严禁设 _usageCacheDirty 与触发 fsync 写盘
+  if (existing && isUsageCacheEntryEqual(existing, nextEntry)) {
+    return;
+  }
+  bucket.set(key, nextEntry);
   tel._usageCacheDirty = true;
   if (!tel._usageCacheTimer) {
     tel._usageCacheTimer = setTimeout(() => {
@@ -407,7 +428,11 @@ export function flushUsageDiskCache(tel) {
       serialized = buildPayload();
     }
     if (Buffer.byteLength(serialized, 'utf8') <= USAGE_CACHE_MAX_BYTES) {
+      if (tel._lastFlushedUsageJson === serialized && fs.existsSync(cacheFile)) {
+        return;
+      }
       writeFileAtomicSync(cacheFile, serialized, { mode: 0o600 });
+      tel._lastFlushedUsageJson = serialized;
     }
   } catch {}
 }

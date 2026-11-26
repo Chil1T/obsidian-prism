@@ -1,8 +1,34 @@
-// Obsidian Prism 守护进程日志子组件（0o600 权限、双文件安全滚动轮转与路径/凭据脱敏，Tier 0，无原型 Mixin）
+// Obsidian Prism 守护进程日志子组件（0o600 权限、高频突发合并缓冲、错误级同步直写、双文件安全轮转与脱敏，Tier 0）
 import fs from 'node:fs';
 import { sanitizeSecretText, sanitizeLogLine } from '../../sidecars/daemon/redact.mjs';
 
 export const DAEMON_LOG_MAX_BYTES = 512 * 1024;
+const LOG_BURST_WINDOW_MS = 50;
+const LOG_FLUSH_DELAY_MS = 120;
+const LOG_BUFFER_MAX_BYTES = 4096;
+
+function isImmediateLogMessage(msg) {
+  const text = String(msg || '');
+  return (
+    text.includes('[!]') ||
+    text.includes('[boot]') ||
+    /\b(?:error|fatal|failed|uncaughtException|unhandledRejection)\b/i.test(text)
+  );
+}
+
+const activeLoggers = new Set();
+let exitHookRegistered = false;
+function registerProcessExitFlush(logger) {
+  activeLoggers.add(new WeakRef(logger));
+  if (exitHookRegistered) return;
+  exitHookRegistered = true;
+  process.once('exit', () => {
+    for (const ref of activeLoggers) {
+      try { ref.deref()?.flush(); } catch {}
+    }
+    activeLoggers.clear();
+  });
+}
 
 export class DaemonLogger {
   constructor({ logFile = '', silent = false, getCdp = () => null, maxBytes = DAEMON_LOG_MAX_BYTES } = {}) {
@@ -11,6 +37,11 @@ export class DaemonLogger {
     this._getCdp = getCdp;
     this.maxBytes = Number.isFinite(maxBytes) && maxBytes > 0 ? Math.floor(maxBytes) : DAEMON_LOG_MAX_BYTES;
     this._logBytes = -1;
+    this._pendingLines = [];
+    this._pendingBytes = 0;
+    this._flushTimer = null;
+    this._lastLogAt = 0;
+    registerProcessExitFlush(this);
   }
 
   _rotateLogFile() {
@@ -51,7 +82,34 @@ export class DaemonLogger {
     this._logBytes = 0;
   }
 
-  log(msg) {
+  flush() {
+    if (this._flushTimer) {
+      clearTimeout(this._flushTimer);
+      this._flushTimer = null;
+    }
+    if (this._pendingLines.length === 0 || !this.logFile) {
+      this._pendingLines = [];
+      this._pendingBytes = 0;
+      return;
+    }
+    const chunk = this._pendingLines.join('');
+    this._pendingLines = [];
+    this._pendingBytes = 0;
+    try {
+      fs.appendFileSync(this.logFile, chunk, { encoding: 'utf8', mode: 0o600 });
+    } catch {}
+  }
+
+  _scheduleFlush() {
+    if (this._flushTimer) return;
+    this._flushTimer = setTimeout(() => {
+      this._flushTimer = null;
+      this.flush();
+    }, LOG_FLUSH_DELAY_MS);
+    if (typeof this._flushTimer.unref === 'function') this._flushTimer.unref();
+  }
+
+  log(msg, opts = null) {
     if (!this.silent && this.logFile) {
       try {
         if (this._logBytes < 0) {
@@ -61,13 +119,33 @@ export class DaemonLogger {
             this._logBytes = 0;
           }
         }
-        const line = `[${new Date().toISOString()}] ${sanitizeLogLine(msg)}\n`;
+        const now = Date.now();
+        const line = `[${new Date(now).toISOString()}] ${sanitizeLogLine(msg)}\n`;
         const lineBytes = Buffer.byteLength(line, 'utf8');
-        if (this._logBytes > 0 && (this._logBytes >= this.maxBytes || this._logBytes + lineBytes > this.maxBytes)) {
+        const needsRotate =
+          this._logBytes > 0 && (this._logBytes >= this.maxBytes || this._logBytes + lineBytes > this.maxBytes);
+        if (needsRotate) {
+          this.flush();
           this._rotateLogFile();
         }
-        fs.appendFileSync(this.logFile, line, { encoding: 'utf8', mode: 0o600 });
+        const inBurst = this._lastLogAt > 0 && now - this._lastLogAt <= LOG_BURST_WINDOW_MS;
+        const syncNow =
+          needsRotate ||
+          opts?.sync === true ||
+          isImmediateLogMessage(msg) ||
+          (!inBurst && opts?.buffered !== true);
+        this._lastLogAt = now;
         this._logBytes += lineBytes;
+        if (syncNow) {
+          this._pendingLines.push(line);
+          this._pendingBytes += lineBytes;
+          this.flush();
+        } else {
+          this._pendingLines.push(line);
+          this._pendingBytes += lineBytes;
+          if (this._pendingBytes >= LOG_BUFFER_MAX_BYTES) this.flush();
+          else this._scheduleFlush();
+        }
       } catch {}
     }
   }

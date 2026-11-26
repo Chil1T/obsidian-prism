@@ -485,15 +485,31 @@ namespace AgyClaudeStyle.Watcher
                     selfPid
                 ));
 
-                Dictionary<string, object> initialCfg = CdpHelper.ReadConfig(_baseDir, manifest);
-                string currentExpr = CdpHelper.BuildInjectExpression(_baseDir, manifest);
-                string currentOmniExpr = CdpHelper.BuildOmniClientExpression(_baseDir, manifest);
-                string currentThoughtExpr = CdpHelper.ShouldEnableThought(initialCfg)
-                    ? CdpHelper.BuildThoughtExpression(_baseDir, initialCfg)
-                    : "";
-                string currentInlineDiffExpr = CdpHelper.BuildInlineDiffExpression(_baseDir, initialCfg);
-                Dictionary<string, string> currentRuntimeChannels = RuntimeChannelFallback.LoadEnabledExpressions(_baseDir, initialCfg);
+                // 懒加载兜底脚本：仅在确认原生 Daemon 离线、需由 Watcher 接管时才读取拼接，避免热备态无谓 I/O 与内存占用
+                string currentExpr = "";
+                string currentOmniExpr = "";
+                string currentThoughtExpr = "";
+                string currentInlineDiffExpr = "";
+                Dictionary<string, string> currentRuntimeChannels = new Dictionary<string, string>(StringComparer.Ordinal);
+                bool fallbackScriptsLoaded = false;
                 object exprLock = new object();
+                Action ensureFallbackScriptsLoaded = () =>
+                {
+                    lock (exprLock)
+                    {
+                        if (fallbackScriptsLoaded) return;
+                        manifest = PluginManifest.Load(_baseDir);
+                        Dictionary<string, object> cfg = CdpHelper.ReadConfig(_baseDir, manifest);
+                        currentExpr = CdpHelper.BuildInjectExpression(_baseDir, manifest);
+                        currentOmniExpr = CdpHelper.BuildOmniClientExpression(_baseDir, manifest);
+                        currentThoughtExpr = CdpHelper.ShouldEnableThought(cfg)
+                            ? CdpHelper.BuildThoughtExpression(_baseDir, cfg)
+                            : "";
+                        currentInlineDiffExpr = CdpHelper.BuildInlineDiffExpression(_baseDir, cfg);
+                        currentRuntimeChannels = RuntimeChannelFallback.LoadEnabledExpressions(_baseDir, cfg);
+                        fallbackScriptsLoaded = true;
+                    }
+                };
                 ConcurrentDictionary<string, AttachedEntry> attached = new ConcurrentDictionary<string, AttachedEntry>(StringComparer.Ordinal);
                 ManualResetEventSlim exitEvent = new ManualResetEventSlim(false);
                 EventWaitHandle stopSignal = new EventWaitHandle(false, EventResetMode.ManualReset, "Local\\ObsidianPrismStop_" + dirHash);
@@ -764,6 +780,7 @@ namespace AgyClaudeStyle.Watcher
                             catch { }
                         }
 
+                        ensureFallbackScriptsLoaded();
                         string exprSnapshot;
                         string omniSnapshot;
                         string thoughtSnapshot;
@@ -823,6 +840,9 @@ namespace AgyClaudeStyle.Watcher
                         {
                             return;
                         }
+                        bool skipStandbyReload;
+                        lock (exprLock) { skipStandbyReload = !fallbackScriptsLoaded && attached.IsEmpty; }
+                        if (skipStandbyReload) return;
                         lock (timerLock)
                         {
                             pendingFilename = name;
@@ -859,6 +879,7 @@ namespace AgyClaudeStyle.Watcher
                                             currentThoughtExpr = nextThoughtExpr;
                                             currentInlineDiffExpr = nextInlineDiffExpr;
                                             currentRuntimeChannels = nextRuntimeChannels;
+                                            fallbackScriptsLoaded = true;
                                         }
 
                                         int n = 0;
@@ -1031,6 +1052,12 @@ namespace AgyClaudeStyle.Watcher
                                         lastDaemonBootTick = nowTick;
                                         if (CdpHelper.EnsureNativeDaemonRunning(_pluginDir, overridePort, null, Log))
                                         {
+                                            // 给足 1.5s 避让窗口等待原生 Daemon 写锁并接管，防止未压缩 codeHash 抢注引发二次全量重注
+                                            for (int waitIdx = 0; waitIdx < 10 && !exitEvent.IsSet; waitIdx++)
+                                            {
+                                                if (CdpHelper.IsNativeDaemonAlive(_pluginDir)) break;
+                                                exitEvent.Wait(150);
+                                            }
                                             nativeAlive = true;
                                         }
                                     }
@@ -1240,6 +1267,7 @@ namespace AgyClaudeStyle.Watcher
                             }
                             if (livePort.HasValue && portProbe.Pages != null)
                             {
+                                ensureFallbackScriptsLoaded();
                                 hadLiveHost = true;
                                 List<CdpPageInfo> pages = portProbe.Pages;
                                 if (!lastPort.HasValue || lastPort.Value != livePort.Value)
