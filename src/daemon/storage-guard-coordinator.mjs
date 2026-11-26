@@ -19,6 +19,7 @@ import {
   flushCatalogIndexFromMemory,
   checkActiveHostIdleState,
   resolveCdpQuitTarget,
+  scheduleOfflineArchiveTask,
   handleStorageAction,
 } from './storage-guard-actions.mjs';
 
@@ -92,13 +93,15 @@ export async function handleRestoreArchiveAction(upd, rawInput = {}, _testOverri
         try { host = await cdp.detectRunningAntigravityHost(); } catch {}
       }
       const cdpTarget = resolveCdpQuitTarget(upd, _testOverrides);
-      const scriptPath = path.join(upd.rootDir, 'sidecars', 'daemon', 'conversation-archive.mjs');
-      const spawnRes = arch.spawnDetachedArchiveTask(
+      const spawnRes = scheduleOfflineArchiveTask(
+        upd,
+        arch,
         {
           action: 'restore-and-restart',
           convDir,
           archiveDir,
           hostPid: host?.pid || 0,
+          ownDaemonPid: process.pid,
           cdpPort: cdpTarget.cdpPort,
           cdpBrowserWsPath: cdpTarget.cdpBrowserWsPath,
           exePath: host?.exePath || '',
@@ -107,11 +110,7 @@ export async function handleRestoreArchiveAction(upd, rawInput = {}, _testOverri
           batchName: resolvedBatchName,
           settleMs: 4000,
         },
-        {
-          scriptPath,
-          spawnHook: _testOverrides?.spawnHook,
-          disableWmiBreakaway: Boolean(_testOverrides?.disableWmiBreakaway),
-        }
+        _testOverrides
       );
       if (spawnRes?.spawned) {
         upd._autoArchiveExitRan = true;

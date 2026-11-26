@@ -1,5 +1,6 @@
 // Obsidian Prism 存储健康体检、目录索引信号融合与离线归档调度引擎（Tier 1，无原型 Mixin，由 UpdateStorageSubsystem 组合调用）
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import {
   buildRendererRpcExpression,
@@ -239,6 +240,93 @@ export async function snapshotUsageBeforeArchive(upd, candidateItems = [], { max
   }
   tel.flushUsageDiskCache();
   return { fetched, flushed: true };
+}
+
+export function resolveWatcherPidFilePath({ platform = process.platform, env = process.env, homeDir = os.homedir() } = {}) {
+  if (platform === 'win32') {
+    const localAppData =
+      typeof env?.LOCALAPPDATA === 'string' && env.LOCALAPPDATA.trim()
+        ? env.LOCALAPPDATA.trim()
+        : path.join(homeDir, 'AppData', 'Local');
+    return path.join(localAppData, 'obsidian-prism', '.watch.pid');
+  }
+  if (platform === 'darwin') {
+    return path.join(homeDir, 'Library', 'Application Support', 'obsidian-prism', '.watch.pid');
+  }
+  return '';
+}
+
+export function isLocalWatcherAlive(_testOverrides = null) {
+  if (typeof _testOverrides?.watcherAlive === 'boolean') return _testOverrides.watcherAlive;
+  if (typeof _testOverrides?.watcherAlive === 'function') return Boolean(_testOverrides.watcherAlive());
+  // 既有单测注入 spawnHook 但未显式指定 watcherAlive 时走回退 spawn，避免受本机真实 Watcher 干扰
+  if (typeof _testOverrides?.spawnHook === 'function') return false;
+  const pidFile =
+    typeof _testOverrides?.watcherPidFile === 'string'
+      ? _testOverrides.watcherPidFile.trim()
+      : resolveWatcherPidFilePath({
+          platform: _testOverrides?.platform || process.platform,
+          env: _testOverrides?.env || process.env,
+          homeDir: _testOverrides?.homeDir || os.homedir(),
+        });
+  if (!pidFile || !fs.existsSync(pidFile)) return false;
+  try {
+    const st = assertNotSymlinkSync(pidFile, 'watcher pid');
+    if (!st || !st.isFile() || st.size > 64) return false;
+    const raw = fs.readFileSync(pidFile, 'utf8').trim();
+    if (!/^\d+$/.test(raw)) return false;
+    const pid = parseInt(raw, 10);
+    if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return false;
+    const killFn = typeof _testOverrides?.killFn === 'function' ? _testOverrides.killFn : process.kill;
+    try {
+      killFn(pid, 0);
+      return true;
+    } catch (err) {
+      return err?.code === 'EPERM';
+    }
+  } catch {
+    return false;
+  }
+}
+
+export function scheduleOfflineArchiveTask(upd, arch, taskPayload, _testOverrides = null) {
+  const payload = {
+    ...taskPayload,
+    ownDaemonPid: Number.isInteger(Number(taskPayload?.ownDaemonPid)) && Number(taskPayload.ownDaemonPid) > 0
+      ? Number(taskPayload.ownDaemonPid)
+      : process.pid,
+    ...(upd?.rootDir ? { pluginDir: upd.rootDir } : {}),
+  };
+  if (isLocalWatcherAlive(_testOverrides)) {
+    try {
+      const handed = arch.writePendingArchiveTask(payload.archiveDir, payload);
+      arch.writeActiveArchiveTask(payload.archiveDir, {
+        action: payload.action,
+        pid: 0,
+        handoff: true,
+        id: handed.payload.id,
+      });
+      return {
+        spawned: true,
+        method: 'watcher-handoff',
+        taskId: handed.payload.id,
+        pendingFile: handed.filePath,
+      };
+    } catch (err) {
+      return {
+        spawned: false,
+        code: 'WATCHER_HANDOFF_FAILED',
+        error: sanitizeSecretText(err?.message || err),
+        method: 'watcher-handoff',
+      };
+    }
+  }
+  const scriptPath = path.join(upd.rootDir, 'sidecars', 'daemon', 'conversation-archive.mjs');
+  return arch.spawnDetachedArchiveTask(payload, {
+    scriptPath,
+    spawnHook: _testOverrides?.spawnHook,
+    disableWmiBreakaway: Boolean(_testOverrides?.disableWmiBreakaway),
+  });
 }
 
 export function resolveCdpQuitTarget(upd, _testOverrides = null) {
@@ -632,13 +720,15 @@ export async function handleStorageAction(upd, action, _testOverrides = null, ra
       }
 
       const cdpTarget = resolveCdpQuitTarget(upd, _testOverrides);
-      const scriptPath = path.join(upd.rootDir, 'sidecars', 'daemon', 'conversation-archive.mjs');
-      const spawnRes = arch.spawnDetachedArchiveTask(
+      const spawnRes = scheduleOfflineArchiveTask(
+        upd,
+        arch,
         {
           action: 'archive-and-restart',
           convDir,
           archiveDir,
           hostPid: host?.pid || 0,
+          ownDaemonPid: process.pid,
           cdpPort: cdpTarget.cdpPort,
           cdpBrowserWsPath: cdpTarget.cdpBrowserWsPath,
           exePath: host?.exePath || '',
@@ -648,11 +738,7 @@ export async function handleStorageAction(upd, action, _testOverrides = null, ra
           subagentMaxAgeHours: subagentHours,
           settleMs: 4000,
         },
-        {
-          scriptPath,
-          spawnHook: _testOverrides?.spawnHook,
-          disableWmiBreakaway: Boolean(_testOverrides?.disableWmiBreakaway),
-        }
+        _testOverrides
       );
       if (spawnRes?.spawned) {
         upd._autoArchiveExitRan = true;
