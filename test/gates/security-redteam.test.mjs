@@ -199,3 +199,47 @@ test('Law 7d: Every local http.createServer must explicitly bind to 127.0.0.1 / 
   assert.ok(serverFilesFound >= 3, `Expected at least 3 local HTTP server modules checked, found ${serverFilesFound}`);
   assert.deepEqual(violations, [], `Local HTTP loopback binding violations:\n${violations.join('\n')}`);
 });
+
+test('Law 7e: Windows PE metadata, watcher app.manifest, SignPath two-step hooks, and trust/security docs exist', () => {
+  const buildInstallerSrc = fs.readFileSync(path.join(ROOT, 'scripts', 'build-installer.mjs'), 'utf8');
+  for (const requiredToken of [
+    'AssemblyTitle',
+    'AssemblyDescription',
+    'AssemblyCompany',
+    'AssemblyProduct',
+    'AssemblyCopyright',
+    'AssemblyVersion',
+    'AssemblyFileVersion',
+    'AssemblyInformationalVersion',
+    '--watcher-only',
+    '--prebuilt-watcher',
+  ]) {
+    assert.ok(
+      buildInstallerSrc.includes(requiredToken),
+      `scripts/build-installer.mjs must include PE metadata / SignPath token: ${requiredToken}`
+    );
+  }
+
+  const watcherManifestPath = path.join(ROOT, 'installer', 'watcher', 'app.manifest');
+  assert.equal(fs.existsSync(watcherManifestPath), true, 'installer/watcher/app.manifest must exist');
+  const watcherManifest = fs.readFileSync(watcherManifestPath, 'utf8');
+  assert.ok(watcherManifest.includes('level="asInvoker"'), 'watcher/app.manifest must declare asInvoker');
+  assert.ok(
+    watcherManifest.includes('{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}'),
+    'watcher/app.manifest must declare Win10/11 compatibility GUID'
+  );
+
+  const signingPolicyPath = path.join(ROOT, 'docs', 'CODE_SIGNING_POLICY.md');
+  assert.equal(fs.existsSync(signingPolicyPath), true, 'docs/CODE_SIGNING_POLICY.md must exist');
+  const signingPolicy = fs.readFileSync(signingPolicyPath, 'utf8');
+  assert.ok(signingPolicy.includes('SignPath'), 'docs/CODE_SIGNING_POLICY.md must document SignPath Foundation');
+  assert.ok(signingPolicy.includes('GPL-3.0'), 'docs/CODE_SIGNING_POLICY.md must declare GPL-3.0 license');
+  assert.ok(signingPolicy.includes('SHA256SUMS.txt'), 'docs/CODE_SIGNING_POLICY.md must document SHA256SUMS.txt verification');
+
+  const securityMdPath = path.join(ROOT, '.github', 'SECURITY.md');
+  assert.equal(fs.existsSync(securityMdPath), true, '.github/SECURITY.md must exist');
+  const securityMd = fs.readFileSync(securityMdPath, 'utf8');
+  for (const needle of ['app.asar', '127.0.0.1', 'Sec-Fetch-Site', 'SSRF', '0o600', '<USER_HOME>']) {
+    assert.ok(securityMd.includes(needle), `.github/SECURITY.md must document security boundary: ${needle}`);
+  }
+});

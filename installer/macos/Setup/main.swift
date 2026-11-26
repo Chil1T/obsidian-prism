@@ -720,50 +720,23 @@ enum InstallerCore {
         }
     }
 
-    private static func copyNativePluginAssets(from srcRoot: String, to pluginDir: String, preserveConfig: Bool) throws {
+    private static func copyNativePluginAssets(from srcRoot: String, to pluginDir: String, preserveConfig: Bool, relPrefix: String = "", protectedPaths: [String] = InstallManifestHelper.defaultProtectedUserPaths) throws {
         let fm = FileManager.default
-        if isSymbolicLink(pluginDir) {
-            throw CdpError(InstallerI18n.tr(
-                "检测到插件目录为符号链接，已拒绝写入: \(pluginDir)",
-                "Plugin directory is a symbolic link; write refused: \(pluginDir)"
-            ))
-        }
-        if fm.fileExists(atPath: pluginDir) {
-            clearReadOnlyPermissionsNoSymlink(pluginDir)
-        }
+        if isSymbolicLink(pluginDir) { throw CdpError(InstallerI18n.tr("检测到插件目录为符号链接，已拒绝写入: \(pluginDir)", "Plugin directory is a symbolic link; write refused: \(pluginDir)")) }
+        if fm.fileExists(atPath: pluginDir) { clearReadOnlyPermissionsNoSymlink(pluginDir) }
         try fm.createDirectory(atPath: pluginDir, withIntermediateDirectories: true, attributes: nil)
-        let entries = try fm.contentsOfDirectory(atPath: srcRoot)
-        let skipNames: Set<String> = [
-            ".git", ".DS_Store", "__pycache__", ".daemon.pid", ".watch.pid", ".watch.lock",
-            "node_modules", "installer", "scripts", "test", "tools",
-            "Obsidian Prism.app", "Obsidian-Prism-macOS-universal.dmg", "installer.exe",
-        ]
-        for name in entries {
-            if skipNames.contains(name) || name.hasSuffix(".log") || name.hasSuffix(".tmp") { continue }
+        for name in try fm.contentsOfDirectory(atPath: srcRoot) {
+            let rel = relPrefix.isEmpty ? name : "\(relPrefix)/\(name)"
+            if InstallManifestHelper.shouldSkipNativeAsset(name, relPath: rel) { continue }
             let src = (srcRoot as NSString).appendingPathComponent(name)
             let dest = (pluginDir as NSString).appendingPathComponent(name)
-            if isSymbolicLink(src) {
-                throw CdpError(InstallerI18n.tr(
-                    "检测到插件源条目为符号链接，已拒绝部署: \(src)",
-                    "Plugin source entry is a symbolic link; deployment refused: \(src)"
-                ))
-            }
-            if isSymbolicLink(dest) {
-                throw CdpError(InstallerI18n.tr(
-                    "检测到插件目标路径为符号链接，已拒绝覆盖: \(dest)",
-                    "Plugin target path is a symbolic link; overwrite refused: \(dest)"
-                ))
-            }
+            if isSymbolicLink(src) { throw CdpError(InstallerI18n.tr("检测到插件源条目为符号链接，已拒绝部署: \(src)", "Plugin source entry is a symbolic link; deployment refused: \(src)")) }
+            if isSymbolicLink(dest) { throw CdpError(InstallerI18n.tr("检测到插件目标路径为符号链接，已拒绝覆盖: \(dest)", "Plugin target path is a symbolic link; overwrite refused: \(dest)")) }
             var isDir: ObjCBool = false
             guard fm.fileExists(atPath: src, isDirectory: &isDir) else { continue }
-            if !isDir.boolValue && name.caseInsensitiveCompare("config.json") == .orderedSame && preserveConfig && fm.fileExists(atPath: dest) {
-                continue
-            }
-            if isDir.boolValue {
-                try copyNativePluginAssets(from: src, to: dest, preserveConfig: false)
-            } else {
-                try copyItemSafelyWithRetry(from: src, to: dest)
-            }
+            if preserveConfig && fm.fileExists(atPath: dest) && InstallManifestHelper.isProtectedUserPath(rel, manifestProtectedPaths: protectedPaths) { continue }
+            if isDir.boolValue { try copyNativePluginAssets(from: src, to: dest, preserveConfig: preserveConfig, relPrefix: rel, protectedPaths: protectedPaths) }
+            else { try copyItemSafelyWithRetry(from: src, to: dest) }
         }
     }
 
@@ -1471,33 +1444,27 @@ enum InstallerCore {
 
             currentStep = "extract-payload"
             var preservedConfig = false
-            let payloadEntries = try fm.contentsOfDirectory(atPath: payloadDir)
-            for name in payloadEntries {
+            let installM = InstallManifestHelper.loadFromDir(payloadDir)
+            for name in try fm.contentsOfDirectory(atPath: payloadDir) {
                 if name.hasPrefix(".") || name == "native-plugin" { continue }
                 let src = (payloadDir as NSString).appendingPathComponent(name)
                 let dest = (installDir as NSString).appendingPathComponent(name)
                 currentTargetPath = dest
                 var isDir: ObjCBool = false
                 guard fm.fileExists(atPath: src, isDirectory: &isDir) else { continue }
-
-                if !isDir.boolValue && name.caseInsensitiveCompare("config.json") == .orderedSame && fm.fileExists(atPath: dest) {
-                    preservedConfig = true
-                    continue
-                }
+                if InstallManifestHelper.shouldSkipProtectedPayloadItem(name, dest: dest, isDir: isDir.boolValue, manifest: installM, preservedConfig: &preservedConfig) { continue }
                 try copyItemSafelyWithRetry(from: src, to: dest)
             }
+            InstallManifestHelper.cleanupObsoletePaths(in: installDir, manifest: installM, isSymbolicLink: isSymbolicLink, hasSymbolicLinkInChain: hasSymbolicLinkInChain)
 
             if !pluginDir.isEmpty {
                 currentTargetPath = pluginDir
-                if let nativeSrc = resolveNativePluginSourceDir(payloadDir: payloadDir) {
-                    try copyNativePluginAssets(from: nativeSrc, to: pluginDir, preserveConfig: true)
-                } else {
-                    try copyNativePluginAssets(from: payloadDir, to: pluginDir, preserveConfig: true)
-                }
-                if fm.fileExists(atPath: installCfgPath) && !pluginCfgPath.isEmpty {
-                    if hadInstallCfg || !fm.fileExists(atPath: pluginCfgPath) {
-                        try? copyItemSafelyWithRetry(from: installCfgPath, to: pluginCfgPath)
-                    }
+                let nativeSrc = resolveNativePluginSourceDir(payloadDir: payloadDir) ?? payloadDir
+                let pluginM = InstallManifestHelper.loadFromDir(nativeSrc)
+                try copyNativePluginAssets(from: nativeSrc, to: pluginDir, preserveConfig: true, protectedPaths: pluginM.protectedUserPaths)
+                InstallManifestHelper.cleanupObsoletePaths(in: pluginDir, manifest: pluginM, isSymbolicLink: isSymbolicLink, hasSymbolicLinkInChain: hasSymbolicLinkInChain)
+                if fm.fileExists(atPath: installCfgPath) && !pluginCfgPath.isEmpty && (hadInstallCfg || !fm.fileExists(atPath: pluginCfgPath)) {
+                    try? copyItemSafelyWithRetry(from: installCfgPath, to: pluginCfgPath)
                 }
             }
             result.nativePluginDeployed = !pluginDir.isEmpty && fm.fileExists(atPath: (pluginDir as NSString).appendingPathComponent("plugin.json"))
@@ -2342,11 +2309,8 @@ enum InstallerCore {
             _ = CdpHelper.syncHostPluginRegistry(pluginDir: pluginDir, enable: false)
         }
         if !pluginDir.isEmpty && FileManager.default.fileExists(atPath: pluginDir) && !isSymbolicLink(pluginDir) {
-            report(78, InstallerI18n.tr(
-                "正在清理本地插件目录: \(pluginDir)",
-                "Removing local plugin directory: \(pluginDir)"
-            ))
-            try? FileManager.default.removeItem(atPath: pluginDir)
+            report(78, InstallerI18n.tr("正在清理本地插件目录: \(pluginDir)", "Removing local plugin directory: \(pluginDir)"))
+            InstallManifestHelper.uninstallDirPreservingUserAssets(pluginDir, purgeData: opts.purgeData, isSymbolicLink: isSymbolicLink)
         }
 
         if shouldManageHostLauncher(opts: opts, installDir: installDir) {

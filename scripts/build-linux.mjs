@@ -10,6 +10,8 @@ import {
   cdp,
   resolveActiveConfigFile,
   collectNativePluginEntries,
+  createInstallManifestPayload,
+  INSTALL_MANIFEST_FILENAME,
   renderPrismIconPng,
 } from './build-common.mjs';
 
@@ -292,6 +294,7 @@ function collectLinuxPortableEntries({ configPath = null, version = cdp.PLUGIN_V
   pushEntry(`${ARCHIVE_ROOT_PREFIX}/README-LINUX.txt`, Buffer.from(generateLinuxReadme(version), 'utf8'), 0o644);
   pushEntry(`${ARCHIVE_ROOT_PREFIX}/assets/obsidian-prism-256.png`, renderPrismIconPng(256), 0o644);
 
+  const pluginManifestInputs = [...rawPluginEntries];
   for (const item of rawPluginEntries) {
     pushEntry(`${ARCHIVE_ROOT_PREFIX}/${item.name}`, item.data, 0o644);
   }
@@ -299,9 +302,19 @@ function collectLinuxPortableEntries({ configPath = null, version = cdp.PLUGIN_V
   for (const toolRel of ['tools/install-plugin.cjs', 'tools/patch-asar.cjs']) {
     const abs = path.join(ROOT_DIR, ...toolRel.split('/'));
     if (fs.existsSync(abs) && fs.statSync(abs).isFile()) {
-      pushEntry(`${ARCHIVE_ROOT_PREFIX}/native-plugin/${toolRel}`, fs.readFileSync(abs), 0o644);
+      const buf = fs.readFileSync(abs);
+      pushEntry(`${ARCHIVE_ROOT_PREFIX}/native-plugin/${toolRel}`, buf, 0o644);
+      pluginManifestInputs.push({ name: `native-plugin/${toolRel}`, data: buf });
     }
   }
+
+  const installManifestPayload = createInstallManifestPayload({
+    version,
+    installEntries: [],
+    pluginEntries: pluginManifestInputs,
+  });
+  pushEntry(`${ARCHIVE_ROOT_PREFIX}/${INSTALL_MANIFEST_FILENAME}`, installManifestPayload.buffer, 0o644);
+  pushEntry(`${ARCHIVE_ROOT_PREFIX}/native-plugin/${INSTALL_MANIFEST_FILENAME}`, installManifestPayload.buffer, 0o644);
 
   entries.sort((a, b) => a.name.localeCompare(b.name));
   return entries;

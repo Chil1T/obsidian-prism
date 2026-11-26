@@ -13,6 +13,8 @@ import {
   resolveActiveConfigFile,
   collectOptionalOmniTopEntries,
   collectNativePluginEntries,
+  createInstallManifestPayload,
+  INSTALL_MANIFEST_FILENAME,
   renderPrismIconPng,
   buildIcns,
 } from './build-common.mjs';
@@ -179,6 +181,7 @@ function buildMacosApp({
   try {
     const commonMiniJson = path.join(ROOT_DIR, 'installer', 'macos', 'Common', 'MiniJson.swift');
     const commonCdpClient = path.join(ROOT_DIR, 'installer', 'macos', 'Common', 'CdpClient.swift');
+    const commonInstallManifest = path.join(ROOT_DIR, 'installer', 'macos', 'Common', 'InstallManifest.swift');
     const watcherMain = path.join(ROOT_DIR, 'installer', 'macos', 'Watcher', 'main.swift');
     const setupMain = path.join(ROOT_DIR, 'installer', 'macos', 'Setup', 'main.swift');
 
@@ -198,7 +201,7 @@ function buildMacosApp({
       swiftc,
       lipo,
       sdkPath,
-      sources: [commonMiniJson, commonCdpClient, setupMain],
+      sources: [commonMiniJson, commonCdpClient, commonInstallManifest, setupMain],
       frameworks: ['Cocoa'],
       outputPath: setupOut,
       stageDir,
@@ -228,7 +231,7 @@ function buildMacosApp({
     const manifestJson = JSON.stringify(manifest, null, 2) + '\n';
     const activeConfigFile = resolveActiveConfigFile(configPath);
 
-    const payloadEntries = [
+    const topEntries = [
       { name: 'manifest.json', data: Buffer.from(manifestJson, 'utf8') },
       { name: 'style.css', data: Buffer.from(cdp.readCss(), 'utf8') },
       { name: 'config.json', data: fs.readFileSync(activeConfigFile) },
@@ -238,7 +241,18 @@ function buildMacosApp({
         data: Buffer.from(cdp.prepareRuntimePart(part, fs.readFileSync(path.join(ROOT_DIR, part), 'utf8')), 'utf8'),
       })),
       ...collectOptionalOmniTopEntries(),
-      ...collectNativePluginEntries(activeConfigFile),
+    ];
+    const nativeEntries = collectNativePluginEntries(activeConfigFile);
+    const installManifestPayload = createInstallManifestPayload({
+      version,
+      installEntries: topEntries,
+      pluginEntries: nativeEntries,
+    });
+    const payloadEntries = [
+      ...topEntries,
+      { name: INSTALL_MANIFEST_FILENAME, data: installManifestPayload.buffer },
+      ...nativeEntries,
+      { name: `native-plugin/${INSTALL_MANIFEST_FILENAME}`, data: installManifestPayload.buffer },
     ];
 
     for (const entry of payloadEntries) {

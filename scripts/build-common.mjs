@@ -5,6 +5,11 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import {
+  INSTALL_MANIFEST_FILENAME,
+  buildInstallManifest,
+  shouldExcludeSyncRelPath,
+} from '../src/platform/install-manifest.mjs';
 
 const require = createRequire(import.meta.url);
 const __filename = fileURLToPath(import.meta.url);
@@ -282,17 +287,10 @@ function collectNativePluginEntries(activeConfigFile) {
     }
     for (const dirent of dirents) {
       const name = dirent.name;
-      if (
-        name === '.DS_Store' ||
-        name === '__pycache__' ||
-        name === '.daemon.pid' ||
-        name.endsWith('.log') ||
-        name.endsWith('.tmp')
-      ) {
+      const nextRel = `${subRel}/${name}`;
+      if (shouldExcludeSyncRelPath(nextRel)) {
         continue;
       }
-      const nextRel = `${subRel}/${name}`;
-      if (nextRel === 'assets/screenshots') continue;
       const nextAbs = path.join(absDir, name);
       if (dirent.isDirectory()) {
         walkSubDir(nextRel);
@@ -309,6 +307,41 @@ function collectNativePluginEntries(activeConfigFile) {
   walkSubDir('vendor');
   walkSubDir('sidecars');
   return entries;
+}
+
+function createInstallManifestPayload({
+  version = cdp.PLUGIN_VERSION,
+  installEntries = [],
+  pluginEntries = [],
+  obsoletePaths = [],
+  extraProtectedPaths = [],
+} = {}) {
+  const manifestEntries = [];
+  for (const item of installEntries) {
+    if (!item || !item.name) continue;
+    const rel = String(item.name).replace(/\\/g, '/').replace(/^\/+/, '');
+    if (!rel || rel === INSTALL_MANIFEST_FILENAME || rel.startsWith('native-plugin/')) continue;
+    manifestEntries.push({ path: rel, scope: 'install', data: item.data, required: true });
+  }
+  for (const item of pluginEntries) {
+    if (!item || !item.name) continue;
+    const norm = String(item.name).replace(/\\/g, '/').replace(/^\/+/, '');
+    const rel = norm.startsWith('native-plugin/') ? norm.slice('native-plugin/'.length) : norm;
+    if (!rel || rel === INSTALL_MANIFEST_FILENAME) continue;
+    manifestEntries.push({ path: rel, scope: 'plugin', data: item.data, required: true });
+  }
+  const manifest = buildInstallManifest({
+    version,
+    entries: manifestEntries,
+    obsoletePaths,
+    extraProtectedPaths,
+  });
+  const json = JSON.stringify(manifest, null, 2) + '\n';
+  return {
+    manifest,
+    json,
+    buffer: Buffer.from(json, 'utf8'),
+  };
 }
 
 function buildMultiResIco(sizes = [16, 32, 48, 256]) {
@@ -447,6 +480,8 @@ export {
   collectOptionalWallpaperTopEntries,
   collectOptionalSuggesterTopEntries,
   collectNativePluginEntries,
+  createInstallManifestPayload,
+  INSTALL_MANIFEST_FILENAME,
   renderPrismIconPng,
   buildMultiResIco,
   buildIcns,
