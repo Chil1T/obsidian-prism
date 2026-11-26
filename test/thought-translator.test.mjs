@@ -1386,6 +1386,268 @@ test('UX-5 & UX-8 regression: thought-settings-ui supports 8 locales + yue migra
   assert.equal(promptTa.value, 'Imported custom system prompt');
 });
 
+test('Issue #105: clicking a style preset persists it right away so it survives closing and reopening the settings sheet', async () => {
+  const settingsUiSrc = fs.readFileSync(
+    path.join(ROOT_DIR, 'vendor', 'thought-translator', 'thought-settings-ui.js'),
+    'utf8'
+  );
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-thought-style-'));
+  let svc = null;
+  try {
+    // 真实持久化层落在隔离临时配置目录，仅 mock 桥接调用。
+    svc = new ThoughtTranslatorService({ configDir: tmpDir });
+    const saveCalls = [];
+    let holdNextLoad = null;
+    const { doc, rootBody, sandbox } = createMockDomEnv({
+      __agPrismThought: {
+        getViewMode: () => 'immersive',
+        setViewMode: () => {},
+        getLocalCacheStats: () => ({ memEntries: 0 }),
+        getConfig: async () => {
+          const snapshot = svc.getSanitizedConfig();
+          if (holdNextLoad) {
+            const gate = holdNextLoad;
+            holdNextLoad = null;
+            await gate;
+          }
+          return snapshot;
+        },
+        saveConfig: async (input) => {
+          saveCalls.push({ ...input });
+          return svc.saveConfig(input);
+        },
+      },
+    });
+    vm.runInNewContext(settingsUiSrc, sandbox);
+    const uiFactory = sandbox.__agPrismThoughtSettingsUi.createThoughtAiConfigBox;
+
+    // 每次打开设置抽屉都会重新创建配置盒实例。
+    const openSheet = async () => {
+      const cfgUi = uiFactory({
+        mkEl: (tag, cls) => {
+          const e = doc.createElement(tag);
+          if (cls) e.className = cls;
+          return e;
+        },
+        btnClass: 'seg-btn',
+        ui: {},
+        getMode: () => 'ai',
+        runGuardedMut: (fn) => fn(),
+      });
+      rootBody.appendChild(cfgUi.box);
+      await new Promise((r) => setTimeout(r, 30));
+      return cfgUi;
+    };
+    const styleBtn = (root, sid) => {
+      for (const ch of root.children) {
+        if (ch.getAttribute('data-thought-style') === sid) return ch;
+        const hit = styleBtn(ch, sid);
+        if (hit) return hit;
+      }
+      return null;
+    };
+    const pressed = (cfgUi) =>
+      ['technical', 'concise', 'custom'].filter((sid) => styleBtn(cfgUi.box, sid).getAttribute('aria-pressed') === 'true');
+
+    // 1) 点击 "concise" 后不点“保存配置”直接关闭重开，仍保持选中且已写入磁盘。
+    const first = await openSheet();
+    assert.deepEqual(pressed(first), ['technical'], 'default preset is technical');
+    styleBtn(first.box, 'concise').dispatchClick();
+    assert.deepEqual(pressed(first), ['concise'], 'clicked preset is highlighted immediately');
+    await new Promise((r) => setTimeout(r, 20));
+    first.box.remove();
+
+    const reopened = await openSheet();
+    assert.deepEqual(
+      pressed(reopened),
+      ['concise'],
+      'a style preset picked before closing the sheet must still be selected when it reopens (#105)'
+    );
+    assert.deepEqual(saveCalls, [{ stylePreset: 'concise' }], 'the click saves only the preset, like the sibling toggles');
+    assert.equal(svc.getSanitizedConfig().stylePreset, 'concise');
+    assert.equal(svc.getSanitizedConfig().styleTag, 'ai_concise', 'translations switch to the concise prompt');
+    const diskCheckSvc = new ThoughtTranslatorService({ configDir: tmpDir });
+    try {
+      assert.equal(
+        diskCheckSvc.getSanitizedConfig().stylePreset,
+        'concise',
+        'preset is written to obsidian-prism-thought.json'
+      );
+    } finally {
+      diskCheckSvc.dispose();
+    }
+
+    // 2) 点击时已在飞行中的 getConfig() 陈旧响应不得回滚刚选中的预设。
+    let releaseLoad;
+    holdNextLoad = new Promise((r) => {
+      releaseLoad = r;
+    });
+    reopened.box.remove();
+    const racing = await openSheet();
+    styleBtn(racing.box, 'technical').dispatchClick();
+    releaseLoad();
+    await new Promise((r) => setTimeout(r, 20));
+    assert.deepEqual(pressed(racing), ['technical'], 'stale get-config response must not clobber the clicked preset');
+    assert.equal(svc.getSanitizedConfig().stylePreset, 'technical');
+
+    // 3) reloadConfig()（JSON 导入路径）仍可清除 dirtyStyle 并同步最新磁盘配置。
+    svc.saveConfig({ stylePreset: 'concise' });
+    await racing.reloadConfig();
+    assert.deepEqual(pressed(racing), ['concise']);
+
+    // 4) "custom" 同样即时落盘；未填写自定义提示词时 styleTag 保持 ai_technical。
+    styleBtn(racing.box, 'custom').dispatchClick();
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(svc.getSanitizedConfig().stylePreset, 'custom');
+    assert.equal(svc.getSanitizedConfig().styleTag, 'ai_technical');
+    assert.equal(racing.box.querySelector('[data-testid="thought-custom-prompt"]').parentElement.hidden, false);
+  } finally {
+    svc?.dispose?.();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('Issue #105 coalescing queue: rapid style preset clicks A -> B -> C serialize strictly and persist final C without dropping or reordering', async () => {
+  const settingsUiSrc = fs.readFileSync(
+    path.join(ROOT_DIR, 'vendor', 'thought-translator', 'thought-settings-ui.js'),
+    'utf8'
+  );
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-thought-style-queue-'));
+  let svc = null;
+  try {
+    svc = new ThoughtTranslatorService({ configDir: tmpDir });
+    const saveCalls = [];
+    const gates = [];
+    let inFlight = 0;
+    let maxConcurrent = 0;
+    let failNextSave = false;
+
+    const { doc, rootBody, sandbox } = createMockDomEnv({
+      __agPrismThought: {
+        getViewMode: () => 'immersive',
+        setViewMode: () => {},
+        getLocalCacheStats: () => ({ memEntries: 0 }),
+        getConfig: async () => svc.getSanitizedConfig(),
+        saveConfig: async (input) => {
+          inFlight += 1;
+          if (inFlight > maxConcurrent) maxConcurrent = inFlight;
+          saveCalls.push({ ...input });
+          const gate = gates.shift();
+          try {
+            if (gate) await gate.promise;
+            if (failNextSave) {
+              failNextSave = false;
+              throw new Error('simulated transient save error');
+            }
+            return svc.saveConfig(input);
+          } finally {
+            inFlight -= 1;
+          }
+        },
+      },
+    });
+    vm.runInNewContext(settingsUiSrc, sandbox);
+    const uiFactory = sandbox.__agPrismThoughtSettingsUi.createThoughtAiConfigBox;
+
+    const mkGate = () => {
+      let release;
+      const promise = new Promise((r) => {
+        release = r;
+      });
+      return { promise, release };
+    };
+    const openSheet = async () => {
+      const cfgUi = uiFactory({
+        mkEl: (tag, cls) => {
+          const e = doc.createElement(tag);
+          if (cls) e.className = cls;
+          return e;
+        },
+        btnClass: 'seg-btn',
+        ui: {},
+        getMode: () => 'ai',
+        runGuardedMut: (fn) => fn(),
+      });
+      rootBody.appendChild(cfgUi.box);
+      await new Promise((r) => setTimeout(r, 30));
+      return cfgUi;
+    };
+    const styleBtn = (root, sid) => {
+      for (const ch of root.children) {
+        if (ch.getAttribute('data-thought-style') === sid) return ch;
+        const hit = styleBtn(ch, sid);
+        if (hit) return hit;
+      }
+      return null;
+    };
+    const pressed = (cfgUi) =>
+      ['technical', 'concise', 'custom'].filter((sid) => styleBtn(cfgUi.box, sid).getAttribute('aria-pressed') === 'true');
+
+    // 1) 挂起首次保存并连续快点 A(concise) -> B(technical) -> C(custom)，验证严格串行合并与最终落盘 C。
+    const first = await openSheet();
+    assert.deepEqual(pressed(first), ['technical']);
+
+    const gateA = mkGate();
+    const gateC = mkGate();
+    gates.push(gateA, gateC);
+
+    styleBtn(first.box, 'concise').dispatchClick(); // A：立刻发出并挂起
+    styleBtn(first.box, 'technical').dispatchClick(); // B：入队 pendingStylePreset
+    styleBtn(first.box, 'custom').dispatchClick(); // C：覆盖队列为最新点击
+
+    assert.deepEqual(pressed(first), ['custom'], 'UI reflects latest rapid click immediately');
+    assert.deepEqual(saveCalls, [{ stylePreset: 'concise' }], 'only first save is in flight while pending coalesces');
+    assert.equal(maxConcurrent, 1, 'saves must execute strictly serially');
+
+    // 放行 A 后自动补写最新 C（跳过过时的中间值 B），且 UI 不被 A 的返回回滚。
+    gateA.release();
+    await new Promise((r) => setTimeout(r, 20));
+    assert.deepEqual(pressed(first), ['custom'], 'completion of stale A must not revert UI away from pending C');
+    assert.deepEqual(
+      saveCalls,
+      [{ stylePreset: 'concise' }, { stylePreset: 'custom' }],
+      'coalescing queue drains latest C right after A finishes'
+    );
+    assert.equal(maxConcurrent, 1, 'no overlapping concurrent saveConfig calls');
+
+    // 放行 C，核验磁盘严格落盘为 C 且重开设置页仍选中 C。
+    gateC.release();
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(maxConcurrent, 1);
+    assert.equal(svc.getSanitizedConfig().stylePreset, 'custom');
+    const diskSvc1 = new ThoughtTranslatorService({ configDir: tmpDir });
+    try {
+      assert.equal(diskSvc1.getSanitizedConfig().stylePreset, 'custom', 'disk persistence must strictly settle on final C');
+    } finally {
+      diskSvc1.dispose();
+    }
+    first.box.remove();
+
+    const reopened = await openSheet();
+    assert.deepEqual(pressed(reopened), ['custom'], 'reopened sheet restores coalesced final preset C');
+
+    // 2) 首次保存异常失败时队列不卡死，仍继续追赶最新 pending 预设落盘。
+    const gateFail = mkGate();
+    gates.push(gateFail);
+    failNextSave = true;
+    styleBtn(reopened.box, 'concise').dispatchClick();
+    styleBtn(reopened.box, 'technical').dispatchClick();
+    gateFail.release();
+    await new Promise((r) => setTimeout(r, 25));
+    assert.equal(svc.getSanitizedConfig().stylePreset, 'technical', 'queue must recover after failure and persist latest click');
+    assert.deepEqual(pressed(reopened), ['technical']);
+    const diskSvc2 = new ThoughtTranslatorService({ configDir: tmpDir });
+    try {
+      assert.equal(diskSvc2.getSanitizedConfig().stylePreset, 'technical');
+    } finally {
+      diskSvc2.dispose();
+    }
+  } finally {
+    svc?.dispose?.();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test('Phase 2 TS-1~TS-8 security & lifecycle audit: SSRF/redirect defense, key revocation, live SSE abort + 96K cap, Omni fallback & 600K storage budget', async () => {
   // 1) TS-3: Block cloud metadata SSRF, 0.0.0.0, and dangerous non-HTTP ports
   assert.equal(normalizeOpenAiBaseUrl('http://169.254.169.254/latest/meta-data/'), 'https://api.openai.com/v1');
