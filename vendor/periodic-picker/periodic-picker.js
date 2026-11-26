@@ -6805,12 +6805,38 @@
 
       activate();
       if (root && typeof root === 'object') {
-        root.__agPrismPeriodicPicker = instanceApi; root.__agPeriodicFullLoaded = true;
+        root.__agPrismPeriodicPicker = instanceApi;
+        root.__agPeriodicFullLoaded = true;
         var po = root.__agPeriodicPendingOpen;
         if (po && typeof po === 'object') {
           try { delete root.__agPeriodicPendingOpen; } catch (_d) { root.__agPeriodicPendingOpen = null; }
-          var pa = Date.now() - Number(po.pointerDownAt);
-          if (Number.isFinite(pa) && pa >= 0 && pa < 2500 && po.autoOpen) { try { open(po.trigger || null); } catch (_e) {} }
+          var downAt = Number(po.pointerDownAt) || 0;
+          var pa = Date.now() - downAt;
+          if (po.autoOpen && !po.releasedEarly && Number.isFinite(pa) && pa >= 0 && pa < 2500) {
+            var setT = root && typeof root.setTimeout === 'function' ? root.setTimeout.bind(root) : (typeof setTimeout === 'function' ? setTimeout : null);
+            var clrT = root && typeof root.clearTimeout === 'function' ? root.clearTimeout.bind(root) : (typeof clearTimeout === 'function' ? clearTimeout : null);
+            if (po.releasedAt) {
+              if (Number(po.releasedAt) - downAt >= 260) { try { open(po.trigger || null); } catch (_e) {} }
+            } else if (!po.trigger || pa >= 260 || !doc || typeof doc.addEventListener !== 'function' || !setT) {
+              try { open(po.trigger || null); } catch (_e) {}
+            } else {
+              var pendingDone = false;
+              var pendingTm = 0;
+              var cancelPending = function () {
+                if (pendingDone) return;
+                pendingDone = true;
+                if (pendingTm && clrT) { try { clrT(pendingTm); } catch (_c) {} pendingTm = 0; }
+                try { doc.removeEventListener('pointerup', cancelPending, true); doc.removeEventListener('pointercancel', cancelPending, true); } catch (_r) {}
+              };
+              doc.addEventListener('pointerup', cancelPending, true);
+              doc.addEventListener('pointercancel', cancelPending, true);
+              pendingTm = setT(function () {
+                if (pendingDone) return;
+                cancelPending();
+                if (!isDestroyed && currentMode === 'on') { try { open(po.trigger || null); } catch (_e) {} }
+              }, Math.max(16, 260 - pa));
+            }
+          }
         }
       }
       return instanceApi;

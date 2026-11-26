@@ -255,6 +255,7 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
       if (liveCfg && typeof liveCfg === 'object' && (liveCfg.periodicModelPicker === 'off' || liveCfg.periodicModelPicker === false)) {
         try { window.__agPrismPeriodicStub?.destroy?.(); } catch {}
         try { window.__agPrismPeriodicPicker?.destroy?.(); } catch {}
+        try { document.getElementById?.('ag-prism-periodic-stub-css')?.remove?.(); } catch {}
         for (const k of ['__agPrismPeriodicStub', '__agPrismPeriodicStubFactory', '__agPeriodicPendingOpen', '__agPeriodicFullLoaded', '__agPeriodicStubHash']) {
           try { delete window[k]; } catch {}
           try { delete globalThis[k]; } catch {}
@@ -295,6 +296,17 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
         stub.__prismCodeHash = targetHash;
         if (!window.__agPrismPeriodicStub) window.__agPrismPeriodicStub = stub;
       }
+      try {
+        if (!document.getElementById?.('ag-prism-periodic-stub-css') && !document.getElementById?.('ag-prism-periodic-picker-css') && document.createElement) {
+          const p = document.head || document.documentElement;
+          if (p && typeof p.appendChild === 'function') {
+            const st = document.createElement('style');
+            st.id = 'ag-prism-periodic-stub-css';
+            st.textContent = '.ag-pp-mini-keycap{display:inline-flex;align-items:center;justify-content:center;gap:.5px;height:16px;padding:0 5px;margin:0 2px;border-radius:4px;box-sizing:border-box;flex:0 0 auto;background:var(--mk-bg,rgba(255,255,255,.045));color:var(--mk-fg,var(--secondary-foreground,#C8D0DF));border:1px solid var(--mk-border,rgba(218,228,255,.19));font:600 9.5px/1 var(--ag-cs-mono-stack,ui-monospace,monospace);pointer-events:none;user-select:none}.ag-pp-mk-z{font-size:7.5px;opacity:.78}';
+            p.appendChild(st);
+          }
+        }
+      } catch {}
       try { window.__agPeriodicStubHash = targetHash; } catch {}
       return { ok: true, status: 'stub', codeHash: targetHash };
     };
@@ -396,7 +408,7 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
           document.documentElement?.removeAttribute?.('data-ag-prism-periodic-picker');
           document.documentElement?.removeAttribute?.('data-ag-pp-open');
           document.documentElement?.removeAttribute?.('data-ag-pp-holding');
-          document.querySelectorAll?.('#ag-prism-periodic-picker-css, #ag-prism-periodic-picker-root, .ag-pp-hold-ring, .ag-pp-mini-keycap').forEach((n) => n.remove());
+          document.querySelectorAll?.('#ag-prism-periodic-stub-css, #ag-prism-periodic-picker-css, #ag-prism-periodic-picker-root, .ag-pp-hold-ring, .ag-pp-mini-keycap').forEach((n) => n.remove());
           for (const k of ['__agPrismPeriodicStub', '__agPrismPeriodicStubFactory', '__agPeriodicPendingOpen', '__agPeriodicFullLoaded', '__agPeriodicStubHash', '__agPrismPeriodicPicker', '__agPrismPeriodicPickerFactory', '__agPrismKeyboard3D', '__agPrismPeriodicKeyboard3D', '__agPrismOledScreen', '__agPrismGrainAssets', '__agPeriodicAudioFx', '__agPeriodicModelCatalog', '__agPeriodicHostBridge', '__agPeriodicBentoUi', '__agPeriodicPbrGrainAssets', '__agPeriodicOledScreen', '__agPeriodicKeyboard3D']) {
             try { delete window[k]; } catch {}
             try { delete globalThis[k]; } catch {}
@@ -412,10 +424,40 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
         const pending = window.__agPeriodicPendingOpen;
         if (!pending || typeof pending !== 'object') return;
         try { delete window.__agPeriodicPendingOpen; } catch {}
-        const ageMs = Date.now() - (Number(pending.pointerDownAt) || 0);
-        const holdMs = pending.releasedAt ? (pending.releasedAt - (Number(pending.pointerDownAt) || 0)) : 9999;
-        if (pending.autoOpen && ageMs >= 0 && ageMs < 10000 && holdMs >= 260 && typeof inst?.open === 'function') {
+        if (!pending.autoOpen || pending.releasedEarly || typeof inst?.open !== 'function') return;
+        const downAt = Number(pending.pointerDownAt) || 0;
+        const now = Date.now();
+        const ageMs = now - downAt;
+        if (ageMs < 0 || ageMs >= 2500) return;
+        if (pending.releasedAt) {
+          if (Number(pending.releasedAt) - downAt >= 260) inst.open(pending.trigger || undefined);
+          return;
+        }
+        if (ageMs >= 260) {
           inst.open(pending.trigger || undefined);
+          return;
+        }
+        // 拉包快于 260ms 且用户仍按住不放：补齐剩余长按时长，中途松手则静默取消防短按误弹
+        if (typeof setTimeout === 'function' && typeof document.addEventListener === 'function') {
+          let done = false;
+          const cleanup = () => {
+            if (done) return;
+            done = true;
+            try { clearTimeout(tm); } catch {}
+            try { document.removeEventListener('pointerup', onUp, true); } catch {}
+            try { document.removeEventListener('pointercancel', onUp, true); } catch {}
+          };
+          const onUp = () => { cleanup(); };
+          document.addEventListener('pointerup', onUp, true);
+          document.addEventListener('pointercancel', onUp, true);
+          const tm = setTimeout(() => {
+            if (done) return;
+            cleanup();
+            try {
+              const st = typeof inst.getStatus === 'function' ? inst.getStatus() : null;
+              if (!st || (st.status !== 'off' && st.status !== 'destroyed')) inst.open(pending.trigger || undefined);
+            } catch {}
+          }, Math.max(16, 260 - ageMs));
         }
       } catch {}
     };
@@ -428,13 +470,15 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
         const st = typeof existing.getStatus === 'function' ? existing.getStatus() : null;
         const domActive = !document.documentElement || document.documentElement.getAttribute('data-ag-prism-periodic-picker') === '1';
         if ((!st || (st.status !== 'off' && st.status !== 'destroyed' && st.mode !== 'off')) && domActive) {
-          try { window.__agPrismPeriodicStub?.destroy?.(); } catch {}
+          try { document.getElementById?.('ag-prism-periodic-stub-css')?.remove?.(); } catch {}
+          try { window.__agPrismPeriodicStub?.destroy?.(true); } catch {}
           try { window.__agPeriodicFullLoaded = true; globalThis.__agPeriodicFullLoaded = true; } catch {}
           consumePendingOpen(existing);
           return { ok: true, reused: true, codeHash: targetHash, ...(st && typeof st === 'object' ? st : {}) };
         }
       }
-      try { window.__agPrismPeriodicStub?.destroy?.(); } catch {}
+      try { document.getElementById?.('ag-prism-periodic-stub-css')?.remove?.(); } catch {}
+      try { window.__agPrismPeriodicStub?.destroy?.(true); } catch {}
       try { delete window.__agPrismPeriodicStub; delete window.__agPrismPeriodicStubFactory; } catch {}
       try { existing?.destroy?.(); } catch {}
 

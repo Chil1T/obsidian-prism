@@ -1187,7 +1187,7 @@
 
     function isModelTriggerLocked(triggerBtn, doc) {
       var btn = triggerBtn || findFallbackModelTrigger(doc);
-      var al = '';
+      var hint = '';
       if (btn) {
         try {
           if (btn.disabled === true || (typeof btn.hasAttribute === 'function' && btn.hasAttribute('disabled'))) return true;
@@ -1195,12 +1195,12 @@
             if (btn.getAttribute('aria-disabled') === 'true') return true;
             var dd = btn.getAttribute('data-disabled');
             if (dd !== null && dd !== undefined && dd !== 'false') return true;
-            al = btn.getAttribute('aria-label') || '';
-            if (/cannot be changed while.*running|运行中.*无法切换/i.test(al)) return true;
+            hint = (btn.getAttribute('aria-label') || '') + ' ' + (btn.getAttribute('title') || '');
+            if (/cannot be changed while.*running|运行中.*无法切换/i.test(hint)) return true;
           }
           var cls = typeof btn.className === 'string' ? btn.className : '';
           if (cls && cls.indexOf('cursor-not-allowed') !== -1) return true;
-          if (al && /applies to\s+\/btw|messages sent after this turn|应用于\s*\/btw|下一轮/i.test(al)) return false;
+          if (/\/btw\b|messages sent after this turn|下一轮/i.test(hint)) return false;
         } catch (eBtn) {}
       }
       var scope = null, hasExplicitPane = false;

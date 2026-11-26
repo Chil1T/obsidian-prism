@@ -172,8 +172,7 @@ export async function syncPersistentNewDocScript(entry, enabled, source, scriptP
   if (!scriptProp) return;
   if (!enabled || !source) {
     if (entry[scriptProp]) {
-      await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry[scriptProp] }).catch(() => {});
-      entry[scriptProp] = null;
+      await replaceEntryNewDocScript(entry, scriptProp, '');
     }
     if (sigProp) entry[sigProp] = '';
     return;

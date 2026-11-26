@@ -82,9 +82,10 @@ export function isSensitiveInlineDiffPath(filePath) {
   for (const b of basesToCheck) {
     if (b.startsWith('.env')) return true;
     if (b.endsWith('_history')) return true;
-    if (/^obsidian-prism-(?:thought|suggester|wallpaper)/.test(b) && (b.endsWith('.json') || b.endsWith('.json.tmp'))) {
+    if (/^obsidian-prism-(?:thought|suggester|wallpaper|sidebar|storage-guard|usage-rollup)/.test(b) && (b.endsWith('.json') || b.endsWith('.json.tmp'))) {
       return true;
     }
+    if (/^config\.backup(?:\.|$)/.test(b)) return true;
     if (INLINE_DIFF_SENSITIVE_BASENAMES.has(b)) return true;
     if (INLINE_DIFF_SENSITIVE_SSH_KEYS.has(b)) return true;
     const ext = path.posix.extname(b);
@@ -107,7 +108,7 @@ export function isSensitiveInlineDiffPath(filePath) {
       continue;
     }
     if (INLINE_DIFF_SENSITIVE_DIRS.has(seg)) return true;
-    if (i < segs.length - 1 && seg === '.git') return true;
+    if (seg === '.git') return true;
     if (seg === 'thought-translator' && basesToCheck.some((b) => b.endsWith('.json'))) return true;
   }
   for (const suffix of INLINE_DIFF_SENSITIVE_SYS_SUFFIXES) {

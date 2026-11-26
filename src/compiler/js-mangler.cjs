@@ -24,18 +24,43 @@ function mangleSafeLocals(tokens) {
   const minDeclScope = new Map();
   const bStack = [];
   const ternaryAtDepth = [];
-  const declDepths = new Set();
+  const declState = new Map();
+  const rhsDefaultDepths = new Set();
+  const exportedDeclDepths = new Set();
+  let exportDeclDepth = -1;
+  let exportNextId = false;
   let blockDepth = 0;
   let pendingBraceKind = '';
 
   const hasOuterDeclContext = () => {
-    for (let d = 0; d <= bStack.length; d++) {
-      if (declDepths.has(d)) return true;
+    for (let d = bStack.length; d >= 0; d--) {
+      if (rhsDefaultDepths.has(d)) return false;
+      if (declState.has(d)) return declState.get(d) === 'lhs';
+      if (d > 0) {
+        const br = bStack[d - 1];
+        if (br !== '{_obj' && br !== '[') return false;
+      }
+    }
+    return false;
+  };
+
+  const isOuterExportedDecl = () => {
+    for (let d = bStack.length; d >= 0; d--) {
+      if (exportedDeclDepths.has(d)) return true;
+      if (declState.has(d)) return false;
+      if (d > 0) {
+        const br = bStack[d - 1];
+        if (br !== '{_obj' && br !== '[') return false;
+      }
     }
     return false;
   };
 
   const recordDecl = (name, depth) => {
+    if (isOuterExportedDecl()) {
+      unsafe.add(name);
+      return;
+    }
     if (name.length < 2) return;
     declared.add(name);
     const prev = minDeclScope.get(name);
@@ -98,17 +123,33 @@ function mangleSafeLocals(tokens) {
         }
         ternaryAtDepth[bStack.length] = 0;
       } else if (t.val === ')' || t.val === ']' || t.val === '}') {
-        declDepths.delete(bStack.length);
+        declState.delete(bStack.length);
+        rhsDefaultDepths.delete(bStack.length);
+        exportedDeclDepths.delete(bStack.length);
+        if (exportDeclDepth === bStack.length) exportDeclDepth = -1;
         ternaryAtDepth[bStack.length] = 0;
         const popped = bStack.pop();
         if ((popped === '{_blk' || popped === '{_cls') && blockDepth > 0) blockDepth--;
         if (t.val === '}') pendingBraceKind = '';
       } else if (t.val === ';') {
-        declDepths.delete(bStack.length);
+        declState.delete(bStack.length);
+        rhsDefaultDepths.delete(bStack.length);
+        exportedDeclDepths.delete(bStack.length);
+        if (exportDeclDepth === bStack.length) exportDeclDepth = -1;
+        exportNextId = false;
         ternaryAtDepth[sd] = 0;
         pendingBraceKind = '';
-      } else if (t.val === '=' && !declDepths.has(bStack.length)) {
-        pendingBraceKind = '';
+      } else if (t.val === '=') {
+        if (declState.get(bStack.length) === 'lhs') {
+          declState.set(bStack.length, 'rhs');
+        } else if (bStack.length > 0 && (bStack[bStack.length - 1] === '{_obj' || bStack[bStack.length - 1] === '[')) {
+          rhsDefaultDepths.add(bStack.length);
+        } else if (!declState.has(bStack.length)) {
+          pendingBraceKind = '';
+        }
+      } else if (t.val === ',') {
+        rhsDefaultDepths.delete(bStack.length);
+        if (declState.has(bStack.length)) declState.set(bStack.length, 'lhs');
       }
       continue;
     }
@@ -117,32 +158,63 @@ function mangleSafeLocals(tokens) {
     if (t.type !== 'id') continue;
     const name = t.val;
     if (name === 'class') {
+      if (exportDeclDepth === bStack.length) {
+        exportNextId = true;
+        exportDeclDepth = -1;
+      }
       pendingBraceKind = '{_cls';
-      declDepths.delete(bStack.length);
+      declState.delete(bStack.length);
+      exportedDeclDepths.delete(bStack.length);
       continue;
     }
     if (name === 'import' || name === 'export') {
       if (next && next.val === '{') pendingBraceKind = '{_esm';
-      declDepths.delete(bStack.length);
+      declState.delete(bStack.length);
+      exportedDeclDepths.delete(bStack.length);
+      exportDeclDepth = name === 'export' ? bStack.length : -1;
+      exportNextId = false;
       continue;
     }
     if (name === 'const' || name === 'let' || name === 'var') {
-      declDepths.add(bStack.length);
+      declState.set(bStack.length, 'lhs');
+      if (exportDeclDepth === bStack.length) {
+        exportedDeclDepths.add(bStack.length);
+        exportDeclDepth = -1;
+      }
       pendingBraceKind = '';
       continue;
     }
     if (JS_KEYWORDS.has(name)) {
+      if ((name === 'in' || name === 'of') && declState.get(bStack.length) === 'lhs') {
+        declState.set(bStack.length, 'rhs');
+      }
+      if (exportDeclDepth === bStack.length) {
+        if (name === 'function') {
+          exportNextId = true;
+          exportDeclDepth = -1;
+        } else if (name !== 'async' && name !== 'default') {
+          exportDeclDepth = -1;
+        }
+      }
       const exprSafe =
         name === 'in' || name === 'of' || name === 'typeof' || name === 'void' || name === 'new' ||
         name === 'await' || name === 'extends' || name === 'null' || name === 'true' || name === 'false' ||
         name === 'this' || name === 'super' || name === 'delete' || name === 'instanceof' || name === 'async' ||
         (name === 'function' && prev && (prev.val === '=' || prev.val === ',' || prev.val === ':' || prev.val === '(' || prev.val === '[' || prev.val === '?' || prev.val === '&&' || prev.val === '||' || prev.val === '??' || prev.val === 'async'));
       if (!exprSafe) {
-        declDepths.delete(bStack.length);
+        declState.delete(bStack.length);
+        exportedDeclDepths.delete(bStack.length);
         pendingBraceKind = '';
       }
       continue;
     }
+    if (exportNextId) {
+      exportNextId = false;
+      unsafe.add(name);
+      counts.set(name, (counts.get(name) || 0) + 1);
+      continue;
+    }
+    if (exportDeclDepth === bStack.length) exportDeclDepth = -1;
     if (name.startsWith('__ag') || name === 'AntigravityCodexEffortSlider') {
       unsafe.add(name);
       continue;
@@ -231,7 +303,7 @@ function mangleSafeLocals(tokens) {
     recordRef(name, blockDepth);
 
     if (
-      declDepths.has(bStack.length) &&
+      declState.get(bStack.length) === 'lhs' &&
       prev &&
       (prev.val === 'const' || prev.val === 'let' || prev.val === 'var' || prev.val === ',') &&
       next &&
