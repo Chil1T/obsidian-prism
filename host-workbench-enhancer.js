@@ -341,7 +341,7 @@
     // Dedicated timer/rAF sets for non-Diff animations (strictly decoupled from Channel 6 Inline Diff)
     const nonDiffAnimTimers = new Set();
     const ovSecAnimRafs = new Set();
-    let scrollGlideRaf = 0, scrollGlideCleanup = null, scrollBlurTimer = 0, scrollBlurCv = null;
+    let scrollGlideRaf = 0, scrollGlideCleanup = null, scrollBlurTimer = 0, scrollBlurCv = null, scrollBlurTarget = null, lastAmbientSyncAt = 0, ambientThrottleTimer = 0;
     let sidebarMoreExpanded = false, sidebarMoreBtn = null;
 
     const stats = {
@@ -798,248 +798,146 @@
       }
     }
 
-    function getPreBodyStamp(body) {
-      if (!body) return '';
-      const ch = body.children;
-      const cLen = ch ? ch.length : 0;
-      if (cLen > 1) {
-        const first = ch[0];
-        const firstSub = first?.children;
-        const firstSig = firstSub && firstSub.length > 0 ? `n${firstSub.length}` : String(first?.textContent || '').length;
-        const last = ch[cLen - 1];
-        return `c:${cLen}:${firstSig}:${String(last?.textContent || '').length}`;
-      }
-      const target = cLen === 1 ? ch[0] : body;
-      const sub = target.children;
-      if (sub && sub.length > 1) {
-        return `s:${sub.length}:${String(sub[sub.length - 1]?.textContent || '').length}`;
-      }
-      return `t:${String(target.textContent || '').length}`;
-    }
-
-    function hasFollowingSiblingInResp(pre, resp) {
-      if (!pre || !resp) return false;
-      let cur = pre;
-      while (cur && cur !== resp) {
-        if (cur.nextElementSibling) return true;
-        cur = cur.parentElement;
-      }
-      return false;
-    }
-
-    function syncCodeBlocks() {
-      if (isDead() || !doc?.querySelectorAll) return;
-      const views = findAllConvViews();
-      const convScopes = views.length > 0 ? views : [findPrimaryConvView()].filter(Boolean);
-      const streamingPres = new Set();
-      const lastRespByConv = new Map();
-      let defaultLastResp = null;
-      for (let v = 0; v < convScopes.length; v++) {
-        const cv = convScopes[v];
-        const responses = qa(cv, '[data-testid="planner-response-text"], [data-testid="agent-response"]');
-        const lr = responses.length > 0 ? responses[responses.length - 1] : null;
-        if (lr) {
-          lastRespByConv.set(cv, lr);
-          if (!defaultLastResp) defaultLastResp = lr;
-          if (checkConvRunning(cv)) {
-            const rPres = qa(lr, 'pre');
-            const tailPre = rPres.length > 0 ? rPres[rPres.length - 1] : null;
-            if (tailPre && !hasFollowingSiblingInResp(tailPre, lr)) streamingPres.add(tailPre);
-          }
-        }
-      }
-
-      const pres = qa(doc, '[data-testid="planner-response-text"] pre, [data-testid="agent-response"] pre, [data-testid="artifact-view"] pre');
-      if (!pres.length) return;
-      const curLang = lastSyncedLang || String(getLang() || '');
-      const AF = 'data-ag-cs-code-folded',
-        AS = 'data-ag-cs-code-sticky',
-        AR = 'data-ag-cs-rich-pre';
-
-      mut(() => {
-        for (let i = 0; i < pres.length; i++) {
-          const pre = pres[i];
-          if (streamingPres.has(pre)) {
-            if (ga(pre, AR) !== '1' && tagU(pre.firstElementChild) === 'DIV') {
-              setA(pre, AR, '1');
-            }
-            continue;
-          }
-          const prevRec = preSyncCache.get(pre);
-          const recValid =
-            prevRec &&
-            prevRec.lang === curLang &&
-            ga(prevRec.header, AS) === '1' &&
-            (prevRec.lineCount < MIN_CODE_FOLD_LINES || (prevRec.btn && prevRec.btn.isConnected !== false && prevRec.btn.parentElement));
-          if (recValid && prevRec.sealed) continue;
-
-          let hasDirectDiv = false;
-          for (const c of pre.children || []) {
-            if (tagU(c) === 'DIV') {
-              hasDirectDiv = true;
-              break;
-            }
-          }
-          if (hasDirectDiv) setA(pre, AR, '1');
-          else if (ha(pre, AR)) ra(pre, AR);
-
-          const ownCv = cl(pre, S_CV);
-          const lastResp = (ownCv && lastRespByConv.get(ownCv)) || defaultLastResp;
-          const canSeal = Boolean(
-            lastResp &&
-              !cl(pre, '[data-testid="artifact-view"]') &&
-              (!lastResp.contains?.(pre) || hasFollowingSiblingInResp(pre, lastResp))
-          );
-          if (recValid && prevRec.stamp === getPreBodyStamp(prevRec.body)) {
-            if (canSeal) prevRec.sealed = true;
-            continue;
-          }
-
-          const parts = resolveCodeCardParts(pre);
-          if (!parts) continue;
-          const { card, header, body } = parts;
-          setA(header, AS, '1');
-
-          const lineCount = countCodeLines(body);
-          let btn = prevRec?.btn?.parentElement ? prevRec.btn : qs(header, '.ag-cs-code-fold-btn');
-          if (lineCount < MIN_CODE_FOLD_LINES) {
-            btn?.remove();
-            if (ha(card, AF)) ra(card, AF);
-            preSyncCache.set(pre, {
-              header,
-              body,
-              btn: null,
-              lineCount,
-              lang: curLang,
-              stamp: getPreBodyStamp(body),
-              sealed: canSeal,
-            });
-            continue;
-          }
-
-          const folded = ga(card, AF) === '1';
-          const lbl = formatFoldBtnLabel(folded, lineCount);
-          if (btn) {
-            setA(btn, 'data-lines', String(lineCount));
-            setA(btn, 'aria-expanded', folded ? 'false' : 'true');
-            if (btn.textContent !== lbl) btn.textContent = lbl;
-          } else {
-            btn = markNoTr(mk('button', 'ag-cs-code-fold-btn', lbl));
-            btn.type = 'button';
-            sa(btn, 'data-ag-no-i18n', '');
-            sa(btn, 'data-ag-owned', '1');
-            sa(btn, 'data-no-press-spring', '1');
-            sa(btn, 'data-lines', lineCount);
-            sa(btn, 'aria-expanded', folded ? 'false' : 'true');
-            btn.addEventListener('click', (ev) => {
-              ev?.preventDefault?.();
-              ev?.stopPropagation?.();
-              toggleCodeCardFold(card, btn);
-            });
-            const lc = header.lastElementChild;
-            if (lc && lc !== header.firstElementChild && tagU(lc) === 'DIV') lc.insertBefore(btn, lc.firstChild);
-            else header.appendChild(btn);
-          }
-          preSyncCache.set(pre, {
-            header,
-            body,
-            btn,
-            lineCount,
-            lang: curLang,
-            stamp: getPreBodyStamp(body),
-            sealed: canSeal,
-          });
-        }
-      });
-    }
-
-    function refreshCodeFoldLabels() {
-      const btns = qa(doc, '.ag-cs-code-fold-btn');
-      if (!btns.length) return;
-      mut(() => {
-        for (const b of btns) {
-          const n = parseInt(ga(b, 'data-lines') || '0', 10) || MIN_CODE_FOLD_LINES;
-          b.textContent = formatFoldBtnLabel(ga(b, 'aria-expanded') === 'false', n);
-        }
-      });
-    }
-
-    // ── 3. Long-Conversation Navigator Outline, Step Folding & Alt+Up/Down ─
-    function pulseSonarOnElement(target) {
-      if (!target) return;
-      mut(() => sa(target, 'data-ag-cs-sonar', '1'));
-      const tid = setTimeout(() => {
-        sonarTimers.delete(tid);
-        if (!isDead() && target.isConnected !== false) mut(() => ra(target, 'data-ag-cs-sonar'));
-      }, SONAR_DURATION_MS);
-      sonarTimers.add(tid);
-    }
-
-    function scrollElementToTopInViewport(target) {
-      if (!target) return;
-      const vp = findScrollViewport(target),
-        tr = target.getBoundingClientRect?.(),
-        vr = vp?.getBoundingClientRect?.();
-      if (vp && tr && vr && vr.height > 0) {
-        const top = Math.max(0, Math.round((vp.scrollTop || 0) + (tr.top - vr.top) - 16));
-        if (typeof vp.scrollTo === 'function') vp.scrollTo({ top, behavior: 'smooth' });
-        else vp.scrollTop = top;
-        return;
-      }
-      target.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
-    }
-
-    function getMountedUserTurns(convView) {
-      const root = convView || findPrimaryConvView();
-      if (!root?.querySelectorAll) return [];
-      const steps = Array.from(qa(root, '[data-testid="user-input-step"]'));
-      return steps.length ? steps : Array.from(qa(root, '[data-testid="user-message-bubble"]'));
-    }
-
-    function pickJumpTarget(conv, turns, delta) {
-      const vr = findScrollViewport(conv)?.getBoundingClientRect?.(),
-        ay = vr && vr.height > 0 ? vr.top + 36 : 80;
-      let idx = -1;
-      if (delta < 0) {
-        for (let i = turns.length - 1; i >= 0; i--) {
-          const r = turns[i].getBoundingClientRect?.();
-          if (r && r.top < ay - 8) { idx = i; break; }
-        }
-        if (idx < 0) idx = 0;
-      } else {
-        for (let i = 0; i < turns.length; i++) {
-          const r = turns[i].getBoundingClientRect?.();
-          if (r && r.top > ay + 8) { idx = i; break; }
-        }
-        if (idx < 0) idx = turns.length - 1;
-      }
-      return turns[idx] || null;
-    }
-
-    function jumpUserTurn(delta, targetEl = null) {
-      if (isDead() || !delta) return false;
-      const conv = findPrimaryConvView(targetEl),
-        turns = getMountedUserTurns(conv);
-      if (!turns.length) return false;
-      const bus = getDomBus();
-      if (bus?.measure && bus?.mutate) {
-        let target = null;
-        bus.measure('wb:jump-r', () => { if (!isDead()) target = pickJumpTarget(conv, turns, delta); });
-        bus.mutate('wb:jump-w', () => {
-          if (isDead() || !target) return;
-          scrollElementToTopInViewport(target);
-          pulseSonarOnElement(target);
-          stats.jumpCount++;
-        });
-        return true;
-      }
-      const target = pickJumpTarget(conv, turns, delta);
-      if (!target) return false;
-      scrollElementToTopInViewport(target);
-      pulseSonarOnElement(target);
-      stats.jumpCount++;
-      return true;
-    }
+const leafLen = (n) => {
+if (!n) return 0;
+if (n.nodeType === 3) return (n.data ?? n.nodeValue ?? '').length;
+const cns = n.childNodes;
+if (cns && cns.length === 1 && cns[0]?.nodeType === 3) return (cns[0].data ?? cns[0].nodeValue ?? '').length;
+if (cns && cns.length > 1) return cns.length;
+return String(n.textContent || '').length;
+};
+function getPreBodyStamp(body) {
+if (!body) return '';
+const ch = body.children, cLen = ch ? ch.length : 0;
+if (cLen > 1) { const f = ch[0], fSub = f?.children; return `c:${cLen}:${fSub?.length > 0 ? `n${fSub.length}` : leafLen(f)}:${leafLen(ch[cLen - 1])}`; }
+const target = cLen === 1 ? ch[0] : body, sub = target.children;
+return sub && sub.length > 1 ? `s:${sub.length}:${leafLen(sub[sub.length - 1])}` : `t:${leafLen(target)}`;
+}
+function hasFollowingSiblingInResp(pre, resp) {
+if (!pre || !resp) return false;
+for (let cur = pre; cur && cur !== resp; cur = cur.parentElement) if (cur.nextElementSibling) return true;
+return false;
+}
+function syncCodeBlocks() {
+if (isDead() || !doc?.querySelectorAll) return;
+const views = findAllConvViews(), convScopes = views.length > 0 ? views : [findPrimaryConvView()].filter(Boolean);
+const streamingPres = new Set(), lastRespByConv = new Map();
+let defaultLastResp = null, anyConvRunning = false;
+for (let v = 0; v < convScopes.length; v++) {
+const cv = convScopes[v], responses = qa(cv, '[data-testid="planner-response-text"], [data-testid="agent-response"]'), lr = responses.length > 0 ? responses[responses.length - 1] : null;
+if (lr) {
+lastRespByConv.set(cv, lr);
+if (!defaultLastResp) defaultLastResp = lr;
+if (checkConvRunning(cv)) {
+anyConvRunning = true;
+const rPres = qa(lr, 'pre'), tailPre = rPres.length > 0 ? rPres[rPres.length - 1] : null;
+if (tailPre && !hasFollowingSiblingInResp(tailPre, lr)) streamingPres.add(tailPre);
+}
+}
+}
+const pres = qa(doc, '[data-testid="planner-response-text"] pre, [data-testid="agent-response"] pre, [data-testid="artifact-view"] pre');
+if (!pres.length) return;
+const curLang = lastSyncedLang || String(getLang() || ''), isHot = anyConvRunning || Boolean(scrollBlurCv);
+const AF = 'data-ag-cs-code-folded', AS = 'data-ag-cs-code-sticky', AR = 'data-ag-cs-rich-pre';
+mut(() => {
+for (let i = 0; i < pres.length; i++) {
+const pre = pres[i];
+if (streamingPres.has(pre)) { if (ga(pre, AR) !== '1' && tagU(pre.firstElementChild) === 'DIV') setA(pre, AR, '1'); continue; }
+const prevRec = preSyncCache.get(pre);
+const recValid = prevRec && prevRec.lang === curLang && ga(prevRec.header, AS) === '1' && (prevRec.lineCount < MIN_CODE_FOLD_LINES || (prevRec.btn && prevRec.btn.isConnected !== false && prevRec.btn.parentElement));
+if (recValid && prevRec.sealed) continue;
+const prevBody = prevRec?.body, curCn = prevBody?.childNodes?.length || 0;
+if (recValid && prevBody && prevRec.cn === curCn && (scrollBlurCv || (isHot && prevRec.stamp === getPreBodyStamp(prevBody)))) continue;
+let hasDirectDiv = false;
+for (const c of pre.children || []) { if (tagU(c) === 'DIV') { hasDirectDiv = true; break; } }
+if (hasDirectDiv) setA(pre, AR, '1'); else if (ha(pre, AR)) ra(pre, AR);
+const ownCv = cl(pre, S_CV), lastResp = (ownCv && lastRespByConv.get(ownCv)) || defaultLastResp;
+const canSeal = Boolean(lastResp && !cl(pre, '[data-testid="artifact-view"]') && (!lastResp.contains?.(pre) || hasFollowingSiblingInResp(pre, lastResp)));
+if (recValid && prevBody && prevRec.cn === curCn && prevRec.stamp === getPreBodyStamp(prevBody)) { if (canSeal) prevRec.sealed = true; continue; }
+const parts = resolveCodeCardParts(pre);
+if (!parts) continue;
+const { card, header, body } = parts;
+setA(header, AS, '1');
+const lineCount = countCodeLines(body);
+let btn = prevRec?.btn?.parentElement ? prevRec.btn : qs(header, '.ag-cs-code-fold-btn');
+if (lineCount < MIN_CODE_FOLD_LINES) {
+btn?.remove(); if (ha(card, AF)) ra(card, AF);
+preSyncCache.set(pre, { header, body, btn: null, lineCount, lang: curLang, cn: body.childNodes?.length || 0, stamp: getPreBodyStamp(body), sealed: canSeal });
+continue;
+}
+const folded = ga(card, AF) === '1', lbl = formatFoldBtnLabel(folded, lineCount);
+if (btn) {
+setA(btn, 'data-lines', String(lineCount));
+setA(btn, 'aria-expanded', folded ? 'false' : 'true');
+if (btn.textContent !== lbl) btn.textContent = lbl;
+} else {
+btn = markNoTr(mk('button', 'ag-cs-code-fold-btn', lbl));
+btn.type = 'button';
+sa(btn, 'data-ag-no-i18n', ''); sa(btn, 'data-ag-owned', '1'); sa(btn, 'data-no-press-spring', '1');
+sa(btn, 'data-lines', lineCount); sa(btn, 'aria-expanded', folded ? 'false' : 'true');
+btn.addEventListener('click', (ev) => { ev?.preventDefault?.(); ev?.stopPropagation?.(); toggleCodeCardFold(card, btn); });
+const lc = header.lastElementChild;
+if (lc && lc !== header.firstElementChild && tagU(lc) === 'DIV') lc.insertBefore(btn, lc.firstChild); else header.appendChild(btn);
+}
+preSyncCache.set(pre, { header, body, btn, lineCount, lang: curLang, cn: body.childNodes?.length || 0, stamp: getPreBodyStamp(body), sealed: canSeal });
+}
+});
+}
+function refreshCodeFoldLabels() {
+const btns = qa(doc, '.ag-cs-code-fold-btn');
+if (!btns.length) return;
+mut(() => { for (const b of btns) { const n = parseInt(ga(b, 'data-lines') || '0', 10) || MIN_CODE_FOLD_LINES; b.textContent = formatFoldBtnLabel(ga(b, 'aria-expanded') === 'false', n); } });
+}
+function pulseSonarOnElement(target) {
+if (!target) return;
+mut(() => sa(target, 'data-ag-cs-sonar', '1'));
+const tid = setTimeout(() => { sonarTimers.delete(tid); if (!isDead() && target.isConnected !== false) mut(() => ra(target, 'data-ag-cs-sonar')); }, SONAR_DURATION_MS);
+sonarTimers.add(tid);
+}
+function scrollElementToTopInViewport(target) {
+if (!target) return;
+const vp = findScrollViewport(target), tr = target.getBoundingClientRect?.(), vr = vp?.getBoundingClientRect?.();
+if (vp && tr && vr && vr.height > 0) {
+const top = Math.max(0, Math.round((vp.scrollTop || 0) + (tr.top - vr.top) - 16));
+if (typeof vp.scrollTo === 'function') vp.scrollTo({ top, behavior: 'smooth' }); else vp.scrollTop = top;
+return;
+}
+target.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
+}
+function getMountedUserTurns(convView) {
+const root = convView || findPrimaryConvView();
+if (!root?.querySelectorAll) return [];
+const steps = Array.from(qa(root, '[data-testid="user-input-step"]'));
+return steps.length ? steps : Array.from(qa(root, '[data-testid="user-message-bubble"]'));
+}
+function pickJumpTarget(conv, turns, delta) {
+const vr = findScrollViewport(conv)?.getBoundingClientRect?.(), ay = vr && vr.height > 0 ? vr.top + 36 : 80;
+let idx = -1;
+if (delta < 0) {
+for (let i = turns.length - 1; i >= 0; i--) { const r = turns[i].getBoundingClientRect?.(); if (r && r.top < ay - 8) { idx = i; break; } }
+if (idx < 0) idx = 0;
+} else {
+for (let i = 0; i < turns.length; i++) { const r = turns[i].getBoundingClientRect?.(); if (r && r.top > ay + 8) { idx = i; break; } }
+if (idx < 0) idx = turns.length - 1;
+}
+return turns[idx] || null;
+}
+function jumpUserTurn(delta, targetEl = null) {
+if (isDead() || !delta) return false;
+const conv = findPrimaryConvView(targetEl), turns = getMountedUserTurns(conv);
+if (!turns.length) return false;
+const bus = getDomBus();
+if (bus?.measure && bus?.mutate) {
+let target = null;
+bus.measure('wb:jump-r', () => { if (!isDead()) target = pickJumpTarget(conv, turns, delta); });
+bus.mutate('wb:jump-w', () => { if (isDead() || !target) return; scrollElementToTopInViewport(target); pulseSonarOnElement(target); stats.jumpCount++; });
+return true;
+}
+const target = pickJumpTarget(conv, turns, delta);
+if (!target) return false;
+scrollElementToTopInViewport(target); pulseSonarOnElement(target); stats.jumpCount++;
+return true;
+}
 
     let foldRafId = 0;
     function cancelFoldRaf() {
@@ -1563,12 +1461,29 @@
       return false;
     }
 
-    function syncSubagentRunningAmbient() {
+    function syncSubagentRunningAmbient(force = false) {
 if (isDead() || !doc?.querySelectorAll) return;
+const now = Date.now();
+if (!force && now - lastAmbientSyncAt < 120) {
+if (!ambientThrottleTimer) {
+ambientThrottleTimer = setTimeout(() => { nonDiffAnimTimers.delete(ambientThrottleTimer); ambientThrottleTimer = 0; syncSubagentRunningAmbient(true); }, Math.max(16, 120 - (now - lastAmbientSyncAt)));
+nonDiffAnimTimers.add(ambientThrottleTimer);
+}
+return;
+}
+if (ambientThrottleTimer) { clearTimeout(ambientThrottleTimer); nonDiffAnimTimers.delete(ambientThrottleTimer); ambientThrottleTimer = 0; }
+lastAmbientSyncAt = now;
 const SP = '[data-testid="status-loading-spinner"], [data-testid="status-task-running"]';
-const rows = qa(doc, '[data-testid="subagent-node"], [data-testid="running-row"], [data-testid="background-task-row"]');
-const sps = qa(doc, '[data-testid="step-plan"]');
-const ovPanels = qa(doc, '[data-testid="overview-panel"]');
+const matched = qa(doc, '[data-testid="subagent-node"],[data-testid="running-row"],[data-testid="background-task-row"],[data-testid="step-plan"],[data-testid="overview-panel"],[data-ag-cs-overview-shell="1"]');
+if (!matched.length) return;
+const rows = [], sps = [], ovPanels = [], ovShells = [];
+for (let i = 0; i < matched.length; i++) {
+const el = matched[i], tid = ga(el, 'data-testid');
+if (tid === 'subagent-node' || tid === 'running-row' || tid === 'background-task-row') rows.push(el);
+else if (tid === 'step-plan') sps.push(el);
+else if (tid === 'overview-panel') ovPanels.push(el);
+if (ga(el, 'data-ag-cs-overview-shell') === '1') ovShells.push(el);
+}
 let anyInRun = null;
 const getAnyInRun = () => {
 if (anyInRun !== null) return anyInRun;
@@ -1586,7 +1501,7 @@ if (qs(sp, '[data-testid="step-plan-item"][data-status="in_progress"] [data-test
 else if (ha(sp, 'data-ag-sp-running')) ra(sp, 'data-ag-sp-running');
 }
 if (!ovPanels.length) {
-for (const sh of qa(doc, '[data-ag-cs-overview-shell="1"]')) if (ha(sh, 'data-ag-overview-running')) ra(sh, 'data-ag-overview-running');
+for (const sh of ovShells) if (ha(sh, 'data-ag-overview-running')) ra(sh, 'data-ag-overview-running');
 return;
 }
 for (const ovPanel of ovPanels) {
@@ -1596,13 +1511,8 @@ let ovRun = localRun || Boolean(qs(ovPanel, SP));
 for (const sec of qa(ovPanel, '.p-1')) {
 const hb = qs(sec, 'button');
 if (!hb) continue;
-const sp = Boolean(qs(sec, SP));
-if (sp || hasActiveFiberSubagents(sec)) {
-setA(hb, 'data-ag-sub-sec-running', '1');
-ovRun = true;
-} else if (ha(hb, 'data-ag-sub-sec-running')) {
-ra(hb, 'data-ag-sub-sec-running');
-}
+if (Boolean(qs(sec, SP)) || hasActiveFiberSubagents(sec)) { setA(hb, 'data-ag-sub-sec-running', '1'); ovRun = true; }
+else if (ha(hb, 'data-ag-sub-sec-running')) ra(hb, 'data-ag-sub-sec-running');
 }
 const ovShell = cl(ovPanel, '[data-ag-cs-overview-shell="1"]') || ovPanel.parentElement || null;
 if (ovShell) {
@@ -1968,20 +1878,40 @@ if (jumpUserTurn(ev.key === 'ArrowUp' ? -1 : 1, ev.target)) ev.preventDefault?.(
 }
 } catch {}
 }
+function armScrollBlurEnd() {
+if (scrollBlurTimer) { clearTimeout(scrollBlurTimer); nonDiffAnimTimers.delete(scrollBlurTimer); }
+scrollBlurTimer = setTimeout(() => { nonDiffAnimTimers.delete(scrollBlurTimer); scrollBlurTimer = 0; scrollBlurTarget = null; const targetCv = scrollBlurCv; scrollBlurCv = null; if (targetCv && !isDead() && ha(targetCv, 'data-ag-scrolling')) mut(() => ra(targetCv, 'data-ag-scrolling')); }, 150);
+nonDiffAnimTimers.add(scrollBlurTimer);
+}
+function resolveScrollScope(t) {
+if (!isM(t, S_VP) && ga(t, 'data-testid') !== 'autoscroll-viewport' && !((t.scrollHeight || 0) > (t.clientHeight || 0) + 1 || (t.scrollTop || 0) > 0)) return null;
+let scope = cl(t, S_PANE_SCOPE);
+if (!scope) for (let cur = t.parentElement; cur && cur !== doc.body && cur !== doc.documentElement; cur = cur.parentElement) { if (isM(cur, S_PANE_STOP)) break; if (qs(cur, '.agy-scroll-bottom, [data-ag-cs-overview-shell="1"]')) { scope = cur; break; } }
+return scope && qs(scope, '.agy-scroll-bottom, [data-ag-cs-overview-shell="1"]') ? scope : null;
+}
+function applyScrollScope(scope, t) {
+if (isDead() || !scope) return;
+if (scrollBlurCv && scrollBlurCv !== scope && ha(scrollBlurCv, 'data-ag-scrolling')) { const oldCv = scrollBlurCv; mut(() => ra(oldCv, 'data-ag-scrolling')); }
+if (scrollBlurCv !== scope || ga(scope, 'data-ag-scrolling') !== '1') mut(() => setA(scope, 'data-ag-scrolling', '1'));
+scrollBlurCv = scope; scrollBlurTarget = t;
+armScrollBlurEnd();
+}
 function onWinScrollPassive(ev) {
 if (isDead()) return;
 const t = ev?.target;
 if (!t || t === doc || t === win || t === doc.body || t === doc.documentElement) return;
-if (!isM(t, S_VP) && ga(t, 'data-testid') !== 'autoscroll-viewport' && !((t.scrollHeight || 0) > (t.clientHeight || 0) + 1 || (t.scrollTop || 0) > 0)) return;
-let scope = cl(t, S_PANE_SCOPE);
-if (!scope) for (let cur = t.parentElement; cur && cur !== doc.body && cur !== doc.documentElement; cur = cur.parentElement) { if (isM(cur, S_PANE_STOP)) break; if (qs(cur, '.agy-scroll-bottom, [data-ag-cs-overview-shell="1"]')) { scope = cur; break; } }
-if (!scope || !qs(scope, '.agy-scroll-bottom, [data-ag-cs-overview-shell="1"]')) return;
-if (scrollBlurCv && scrollBlurCv !== scope && ha(scrollBlurCv, 'data-ag-scrolling')) { const oldCv = scrollBlurCv; mut(() => ra(oldCv, 'data-ag-scrolling')); }
-if (scrollBlurCv !== scope || ga(scope, 'data-ag-scrolling') !== '1') mut(() => setA(scope, 'data-ag-scrolling', '1'));
-scrollBlurCv = scope;
-if (scrollBlurTimer) { clearTimeout(scrollBlurTimer); nonDiffAnimTimers.delete(scrollBlurTimer); }
-scrollBlurTimer = setTimeout(() => { nonDiffAnimTimers.delete(scrollBlurTimer); scrollBlurTimer = 0; const targetCv = scrollBlurCv; scrollBlurCv = null; if (targetCv && !isDead() && ha(targetCv, 'data-ag-scrolling')) mut(() => ra(targetCv, 'data-ag-scrolling')); }, 150);
-nonDiffAnimTimers.add(scrollBlurTimer);
+if (scrollBlurTarget === t && scrollBlurCv && ga(scrollBlurCv, 'data-ag-scrolling') === '1') { armScrollBlurEnd(); return; }
+const bus = getDomBus();
+if (bus?.measure && bus?.mutate) {
+bus.measure('enh:scroll', () => {
+if (isDead()) return;
+const sc = resolveScrollScope(t);
+if (sc) bus.mutate('enh:scroll', () => applyScrollScope(sc, t));
+});
+return;
+}
+const sc = resolveScrollScope(t);
+if (sc) applyScrollScope(sc, t);
 }
 if (win && typeof win.addEventListener === 'function') {
 win.addEventListener('click', onDocClickCapture, true);
@@ -2005,7 +1935,7 @@ if (isFull || flags.c || flags.l || flags.b || flags.r || flags.t || langChanged
 syncCodeBlocks();
 syncNavRails();
 }
-if (isFull || flags.o || flags.c || flags.l || flags.b || flags.r || flags.t || langChanged) syncSubagentRunningAmbient();
+if (isFull || flags.o || flags.c || flags.l || flags.b || flags.r || flags.t || langChanged) syncSubagentRunningAmbient(isFull);
 if (isFull || flags.s || flags.r || flags.t || langChanged) syncSidebarOverflowTools();
 if (isFull || flags.o || flags.c || flags.b || flags.r) syncPermissionsMenuState();
 if (isFull || flags.g || flags.o || flags.r) syncSettingsDialogChrome(doc, mut, setA);
@@ -2038,6 +1968,7 @@ nonDiffAnimTimers.clear();
 if (typeof win?.cancelAnimationFrame === 'function') { for (const rid of ovSecAnimRafs) { try { win.cancelAnimationFrame(rid); } catch {} } }
 ovSecAnimRafs.clear();
 try { win?.__agPrismInlineDiff?.unbindHooks?.(); } catch {}
+ambientThrottleTimer = 0; scrollBlurTarget = null;
 if (scrollBlurTimer) { try { clearTimeout(scrollBlurTimer); } catch {} nonDiffAnimTimers.delete(scrollBlurTimer); scrollBlurTimer = 0; }
 if (scrollBlurCv) { const scv = scrollBlurCv; scrollBlurCv = null; if (ha(scv, 'data-ag-scrolling')) mut(() => ra(scv, 'data-ag-scrolling')); }
 if (win && typeof win.removeEventListener === 'function') {

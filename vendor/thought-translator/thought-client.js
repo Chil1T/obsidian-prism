@@ -374,153 +374,92 @@
     return false;
   }
 
-  function disconnectWaitPanelObserver(panel) {
-    if (!panel) return;
-    const obs = waitPanelObservers.get(panel);
-    if (obs) {
-      try { obs.disconnect(); } catch (_) {}
-      waitPanelObservers.delete(panel);
-    }
-  }
-
-  function untrackStreamingTrigger(btn) {
-    if (!btn) return;
-    trackedStreamingTriggers.delete(btn);
-    const obs = streamingObservers.get(btn);
-    if (obs) {
-      try { obs.disconnect(); } catch (_) {}
-      streamingObservers.delete(btn);
-    }
-    if (!trackedStreamingTriggers.size && streamingWatchTimer) {
-      clearTimeout(streamingWatchTimer);
-      streamingWatchTimer = null;
-    }
-  }
-
-  function clearAllStreamingWatchers() {
-    if (streamingWatchTimer) {
-      clearTimeout(streamingWatchTimer);
-      streamingWatchTimer = null;
-    }
-    for (const btn of Array.from(trackedStreamingTriggers.keys())) {
-      untrackStreamingTrigger(btn);
-    }
-    trackedStreamingTriggers.clear();
-  }
-
-  function checkTrackedStreamingTriggers() {
-    streamingWatchTimer = null;
-    if (currentMode === 'off' || isDocHiddenOrSleep()) return;
-    const now = nowMs();
-    let wokeAny = false;
-    for (const [btn, rec] of Array.from(trackedStreamingTriggers.entries())) {
-      if (!isConn(btn) || now - rec.at > 300000) {
-        untrackStreamingTrigger(btn);
-        continue;
-      }
-      if (!isTriggerStreaming(btn)) {
-        untrackStreamingTrigger(btn);
-        wokeAny = true;
-      } else {
-        const panel = nextSib(btn);
-        if (panel) {
-          const stp = quickPanelStamp(panel);
-          if (stp !== rec.stp) {
-            rec.stp = stp;
-            rec.lastMut = now;
-          }
-        }
-      }
-    }
-    if (wokeAny) scheduleScan(25);
-    if (trackedStreamingTriggers.size > 0 && currentMode !== 'off' && !isDocHiddenOrSleep()) {
-      streamingWatchTimer = setTimeout(checkTrackedStreamingTriggers, 480);
-      streamingWatchTimer?.unref?.();
-    }
-  }
-
-  function trackStreamingTrigger(btn, panel) {
-    if (!btn || currentMode === 'off') return;
-    const now = nowMs();
-    const stp = panel ? quickPanelStamp(panel) : '';
-    const existing = trackedStreamingTriggers.get(btn);
-    if (existing) {
-      existing.stp = stp;
-    } else {
-      trackedStreamingTriggers.set(btn, { at: now, lastMut: now, stp });
-    }
-    const MO = W.MutationObserver || (typeof MutationObserver === 'function' ? MutationObserver : null);
-    if (MO && !streamingObservers.has(btn)) {
-      try {
-        const obs = new MO(() => {
-          if (currentMode === 'off') {
-            untrackStreamingTrigger(btn);
-            return;
-          }
-          if (!isConn(btn) || !isTriggerStreaming(btn)) {
-            untrackStreamingTrigger(btn);
-            scheduleScan(25);
-          }
-        });
-        obs.observe(btn, {
-          attributes: true,
-          attributeFilter: ['class', 'aria-expanded', 'data-op-thought-state', 'data-ag-cs-spark-streaming'],
-          characterData: true,
-          childList: true,
-          subtree: true,
-        });
-        streamingObservers.set(btn, obs);
-      } catch (_) {}
-    }
-    if (!streamingWatchTimer && !isDocHiddenOrSleep()) {
-      streamingWatchTimer = setTimeout(checkTrackedStreamingTriggers, 480);
-      streamingWatchTimer?.unref?.();
-    }
-  }
-
-  function setPanelWaitTimer(panel, btn, fn, delayMs) {
-    if (!panel) return;
-    clearPanelWaitTimer(panel);
-    const MO = W.MutationObserver || (typeof MutationObserver === 'function' ? MutationObserver : null);
-    if (MO && !waitPanelObservers.has(panel)) {
-      try {
-        const obs = new MO((records) => {
-          if (currentMode === 'off') {
-            disconnectWaitPanelObserver(panel);
-            return;
-          }
-          let sawHostChange = false;
-          for (let i = 0; i < records.length; i++) {
-            const tgt = records[i]?.target;
-            const el = tgt && tgt.nodeType === 1 ? tgt : parEl(tgt);
-            if (el && (isOverlayOrIgnoredElement(el) || el.closest?.('[data-prism-ignore], [data-op-thought]'))) continue;
-            sawHostChange = true;
-            break;
-          }
-          if (sawHostChange) {
-            const m = panelMeta.get(panel);
-            if (m) m.c = nowMs();
-          }
-        });
-        obs.observe(panel, { characterData: true, childList: true, subtree: true });
-        waitPanelObservers.set(panel, obs);
-      } catch (_) {}
-    }
-    const t = setTimeout(() => {
-      trackedWaitPanels.delete(panel);
-      disconnectWaitPanelObserver(panel);
-      fn();
-    }, delayMs);
-    trackedWaitPanels.set(panel, { t, b: btn });
-  }
-
-  function clearPanelWaitTimer(panel) {
-    disconnectWaitPanelObserver(panel);
-    const rec = trackedWaitPanels.get(panel);
-    if (!rec) return;
-    clearTimeout(rec.t);
-    trackedWaitPanels.delete(panel);
-  }
+function disconnectWaitPanelObserver(panel) {
+if (!panel) return;
+const obs = waitPanelObservers.get(panel);
+if (obs) { try { obs.disconnect(); } catch (_) {} waitPanelObservers.delete(panel); }
+}
+function untrackStreamingTrigger(btn) {
+if (!btn) return;
+trackedStreamingTriggers.delete(btn);
+const obs = streamingObservers.get(btn);
+if (obs) { try { obs.disconnect(); } catch (_) {} streamingObservers.delete(btn); }
+if (!trackedStreamingTriggers.size && streamingWatchTimer) { clearTimeout(streamingWatchTimer); streamingWatchTimer = null; }
+}
+function clearAllStreamingWatchers() {
+if (streamingWatchTimer) { clearTimeout(streamingWatchTimer); streamingWatchTimer = null; }
+for (const btn of Array.from(trackedStreamingTriggers.keys())) untrackStreamingTrigger(btn);
+trackedStreamingTriggers.clear();
+}
+function checkTrackedStreamingTriggers() {
+streamingWatchTimer = null;
+if (currentMode === 'off' || isDocHiddenOrSleep()) return;
+const now = nowMs();
+let wokeAny = false;
+for (const [btn, rec] of Array.from(trackedStreamingTriggers.entries())) {
+if (!isConn(btn) || now - rec.at > 300000) { untrackStreamingTrigger(btn); continue; }
+if (!isTriggerStreaming(btn)) { untrackStreamingTrigger(btn); wokeAny = true; }
+else { const panel = nextSib(btn); if (panel) { const stp = quickPanelStamp(panel); if (stp !== rec.stp) { rec.stp = stp; rec.lastMut = now; } } }
+}
+if (wokeAny) scheduleScan(25);
+if (trackedStreamingTriggers.size > 0 && currentMode !== 'off' && !isDocHiddenOrSleep()) { streamingWatchTimer = setTimeout(checkTrackedStreamingTriggers, 480); streamingWatchTimer?.unref?.(); }
+}
+function trackStreamingTrigger(btn, panel) {
+if (!btn || currentMode === 'off') return;
+const now = nowMs(), stp = panel ? quickPanelStamp(panel) : '', existing = trackedStreamingTriggers.get(btn);
+if (existing) existing.stp = stp; else trackedStreamingTriggers.set(btn, { at: now, lastMut: now, stp });
+const MO = W.MutationObserver || (typeof MutationObserver === 'function' ? MutationObserver : null);
+if (MO && !streamingObservers.has(btn)) {
+try {
+let last = 0, tm = 0;
+const run = () => { tm = 0; last = nowMs(); if (currentMode === 'off') { untrackStreamingTrigger(btn); return; } if (!isConn(btn) || !isTriggerStreaming(btn)) { untrackStreamingTrigger(btn); scheduleScan(25); } };
+const obs = new MO(() => { if (currentMode === 'off') { untrackStreamingTrigger(btn); return; } if (!tm && nowMs() - last >= 48) run(); else if (!tm) { tm = setTimeout(run, 48); tm?.unref?.(); } });
+obs.observe(btn, { attributes: true, attributeFilter: ['class', 'aria-expanded', 'data-op-thought-state', 'data-ag-cs-spark-streaming'], characterData: true, childList: true, subtree: true });
+streamingObservers.set(btn, { disconnect() { if (tm) { clearTimeout(tm); tm = 0; } obs.disconnect(); } });
+} catch (_) {}
+}
+if (!streamingWatchTimer && !isDocHiddenOrSleep()) { streamingWatchTimer = setTimeout(checkTrackedStreamingTriggers, 480); streamingWatchTimer?.unref?.(); }
+}
+function setPanelWaitTimer(panel, btn, fn, delayMs) {
+if (!panel) return;
+clearPanelWaitTimer(panel);
+const MO = W.MutationObserver || (typeof MutationObserver === 'function' ? MutationObserver : null);
+if (MO && !waitPanelObservers.has(panel)) {
+try {
+let last = 0, tm = 0;
+const pending = [];
+const flush = () => {
+tm = 0; last = nowMs();
+const batch = pending.splice(0, pending.length);
+if (currentMode === 'off') { disconnectWaitPanelObserver(panel); return; }
+for (let i = 0; i < batch.length; i++) {
+const tgt = batch[i], el = tgt && tgt.nodeType === 1 ? tgt : parEl(tgt);
+if (el && (isOverlayOrIgnoredElement(el) || el.closest?.('[data-prism-ignore], [data-op-thought]'))) continue;
+const m = panelMeta.get(panel);
+if (m) m.c = last;
+break;
+}
+};
+const obs = new MO((records) => {
+if (currentMode === 'off') { disconnectWaitPanelObserver(panel); return; }
+for (let i = 0; i < records.length && pending.length < 64; i++) if (records[i]?.target) pending.push(records[i].target);
+if (!pending.length) return;
+if (!tm && nowMs() - last >= 48) flush(); else if (!tm) { tm = setTimeout(flush, 48); tm?.unref?.(); }
+});
+obs.observe(panel, { characterData: true, childList: true, subtree: true });
+waitPanelObservers.set(panel, { disconnect() { if (tm) { clearTimeout(tm); tm = 0; } pending.length = 0; obs.disconnect(); } });
+} catch (_) {}
+}
+const t = setTimeout(() => { trackedWaitPanels.delete(panel); disconnectWaitPanelObserver(panel); fn(); }, delayMs);
+trackedWaitPanels.set(panel, { t, b: btn });
+}
+function clearPanelWaitTimer(panel) {
+disconnectWaitPanelObserver(panel);
+const rec = trackedWaitPanels.get(panel);
+if (!rec) return;
+clearTimeout(rec.t);
+trackedWaitPanels.delete(panel);
+}
 
   function findTriggerForPanel(panel) {
     if (!panel) return null;
@@ -2950,23 +2889,23 @@
   let offVis = new WeakSet();
   const offUnsubs = [], clrVis = () => { while (offUnsubs.length) try { offUnsubs.pop()(); } catch {} offVis = new WeakSet(); };
   const watchOff = (el) => { const b = getDomBus(); if (el && b?.observeVisibility && !offVis.has(el)) { offVis.add(el); offUnsubs.push(b.observeVisibility(el, (st) => { if (st.visible && currentMode !== 'off') scheduleScan(20); })); } };
-  function probeViewportBand(el) {
+  function readViewportDims() {
+    const r = docRoot();
+    return { vh: W.innerHeight || (r && r.clientHeight) || 0, vw: W.innerWidth || (r && r.clientWidth) || 1440 };
+  }
+  function probeViewportBand(el, vp) {
     if (getDomBus()?.isSkipped?.(el)) return 0;
     if (!el || typeof el.getBoundingClientRect !== 'function') return 2;
     try {
       const rect = el.getBoundingClientRect();
       if (rect.width === 0 && rect.height === 0) return typeof el[K_CV] === 'function' ? 0 : 2;
-      const rootEl = docRoot();
-      const vh = W.innerHeight || (rootEl && rootEl.clientHeight) || 0;
+      const d = vp || readViewportDims(), vh = d.vh, vw = d.vw;
       if (vh <= 0 || rect.height <= 0) return 2;
-      const vw = W.innerWidth || (rootEl && rootEl.clientWidth) || 1440;
       if (rect.right < 0 || rect.left > vw) return 0;
       if (rect.bottom >= -120 && rect.top <= vh + 120) return 2;
       if (rect.bottom >= -800 && rect.top <= vh + 800) return 1;
       return 0;
-    } catch (_) {
-      return 2;
-    }
+    } catch (_) { return 2; }
   }
 
   function enqueueHydrate(panel, cached, sig, engine) {
@@ -3257,73 +3196,50 @@
     }
   }
 
-  function scanToolSummaryContainers() {
-    pruneDetachedToolSummaryRecords();
-    if (!translateToolSummaries || currentMode === 'off' || typeof document === 'undefined') return;
-    const br = getBridge();
-    if (!br || typeof br.translateStream !== 'function') return;
-
-    const scope = isConn(cachedConvRoot) && cachedConvRoot.querySelectorAll ? cachedConvRoot : document;
-    const thoughtPanelSet = new Set();
-    const tBtns = queryTriggers();
-    for (let i = 0; i < tBtns.length; i++) {
-      const tp = nextSib(tBtns[i]);
-      if (tp) thoughtPanelSet.add(tp);
-    }
-
-    const containers = [];
-    const seenContainer = new Set();
-    const pushContainer = (c) => {
-      if (!c || seenContainer.has(c) || !isConn(c) || isHiddenByAncestor(null, c)) return;
-      if (probeViewportBand(c) === 0) return;
-      seenContainer.add(c);
-      containers.push(c);
-    };
-
-    const groupTrigs = scope.querySelectorAll ? scope.querySelectorAll(SEL_TOOL_TRIGGERS) : [];
-    const findBody = W.__agPrismToolStepVerbs?.findToolCollapsibleBody;
-    for (let i = 0; i < groupTrigs.length; i++) {
-      const trig = groupTrigs[i];
-      if (!trig) continue;
-      if (ga(trig, 'data-testid') === 'tool-group-collapsible') pushContainer(trig);
-      if (ga(trig, A_EXP) !== 'true') continue;
-      const bodyDiv = findBody ? findBody(trig) : nextSib(trig);
-      if (bodyDiv && (findBody || String(bodyDiv.tagName || '').toUpperCase() === 'DIV')) pushContainer(bodyDiv);
-    }
-
-    const rowEls = scope.querySelectorAll ? scope.querySelectorAll(SEL_TOOL_ROWS) : [];
-    if (rowEls && rowEls.length) {
-      const orphanRows = [];
-      for (let i = 0; i < rowEls.length; i++) {
-        const r = rowEls[i];
-        let insideKnown = false;
-        let cur = parEl(r);
-        while (cur) {
-          if (seenContainer.has(cur)) {
-            insideKnown = true;
-            break;
-          }
-          cur = parEl(cur);
-        }
-        if (!insideKnown && !isHiddenByAncestor(null, r) && probeViewportBand(r) > 0) {
-          orphanRows.push(r);
-        }
-      }
-      if (orphanRows.length) {
-        const byParent = new Map();
-        for (let i = 0; i < orphanRows.length; i++) {
-          const p = parEl(orphanRows[i]) || orphanRows[i];
-          if (!byParent.has(p)) byParent.set(p, []);
-          byParent.get(p).push(orphanRows[i]);
-        }
-        for (const [p, rows] of byParent.entries()) {
-          if (!seenContainer.has(p)) {
-            seenContainer.add(p);
-            containers.push({ __rows: rows });
-          }
-        }
-      }
-    }
+function collectToolSummaryTargets(vp) {
+const scope = isConn(cachedConvRoot) && cachedConvRoot.querySelectorAll ? cachedConvRoot : document;
+const thoughtPanelSet = new Set(), tBtns = queryTriggers();
+for (let i = 0; i < tBtns.length; i++) { const tp = nextSib(tBtns[i]); if (tp) thoughtPanelSet.add(tp); }
+const containers = [], seenContainer = new Set(), rawCands = [];
+const stage = (c) => { if (c && !seenContainer.has(c) && isConn(c) && !isHiddenByAncestor(null, c)) { seenContainer.add(c); rawCands.push(c); } };
+const groupTrigs = scope.querySelectorAll ? scope.querySelectorAll(SEL_TOOL_TRIGGERS) : [];
+const findBody = W.__agPrismToolStepVerbs?.findToolCollapsibleBody;
+for (let i = 0; i < groupTrigs.length; i++) {
+const trig = groupTrigs[i]; if (!trig) continue;
+if (ga(trig, 'data-testid') === 'tool-group-collapsible') stage(trig);
+if (ga(trig, A_EXP) !== 'true') continue;
+const bodyDiv = findBody ? findBody(trig) : nextSib(trig);
+if (bodyDiv && (findBody || String(bodyDiv.tagName || '').toUpperCase() === 'DIV')) stage(bodyDiv);
+}
+const visSet = new Set();
+for (let i = 0; i < rawCands.length; i++) if (probeViewportBand(rawCands[i], vp) > 0) { visSet.add(rawCands[i]); containers.push(rawCands[i]); }
+const rowEls = scope.querySelectorAll ? scope.querySelectorAll(SEL_TOOL_ROWS) : [];
+if (rowEls && rowEls.length) {
+const orphanRaw = [];
+for (let i = 0; i < rowEls.length; i++) {
+const r = rowEls[i];
+let insideKnown = false;
+for (let cur = parEl(r); cur; cur = parEl(cur)) if (visSet.has(cur)) { insideKnown = true; break; }
+if (!insideKnown && !isHiddenByAncestor(null, r)) orphanRaw.push(r);
+}
+const byParent = new Map();
+for (let i = 0; i < orphanRaw.length; i++) {
+const r = orphanRaw[i];
+if (probeViewportBand(r, vp) === 0) continue;
+const p = parEl(r) || r;
+if (!byParent.has(p)) byParent.set(p, []);
+byParent.get(p).push(r);
+}
+for (const [p, rows] of byParent.entries()) if (!visSet.has(p)) { visSet.add(p); containers.push({ __rows: rows }); }
+}
+return { containers, thoughtPanelSet };
+}
+function scanToolSummaryContainers(preRead) {
+pruneDetachedToolSummaryRecords();
+if (!translateToolSummaries || currentMode === 'off' || typeof document === 'undefined') return;
+const br = getBridge();
+if (!br || typeof br.translateStream !== 'function') return;
+const { containers, thoughtPanelSet } = preRead || collectToolSummaryTargets(readViewportDims());
 
     if (!containers.length) return;
     const activeLang = resolveActiveLang();
@@ -3968,7 +3884,7 @@
     if (currentMode === 'off') return;
     const triggers = queryTriggers();
     if (!triggers.length) { if (translateToolSummaries) scanToolSummaryContainers(); if (translateTitles) scanConversationTitles(); return; }
-    const lastIdx = triggers.length - 1, candidates = [], activePanelSet = new Set();
+    const lastIdx = triggers.length - 1, candidates = [], activePanelSet = new Set(), vp = readViewportDims();
     let sawOffscreenLazy = false;
     for (let i = 0; i <= lastIdx; i++) {
       const btn = triggers[i]; if (!btn) continue;
@@ -3988,12 +3904,13 @@
           if (inf && inf.s === em.rs && em.ps && em.ps === sigFromBody(inf.k, currentMode)) { activePanelSet.add(panel); continue; }
         }
       }
-      const band = expanded && !isLatest ? probeViewportBand(panel || btn) : 0;
+      const band = expanded && !isLatest ? probeViewportBand(panel || btn, vp) : 0;
       if (!isLatest && band === 0) { sawOffscreenLazy = true; watchOff(panel || btn); continue; }
       if (panel) activePanelSet.add(panel);
       const tier = isLatest && expanded ? 25 : band === 2 ? 20 : isLatest ? 12 : 10;
       candidates.push({ b: btn, a: allowPreload, p: tier * 1000 + i });
     }
+    const preToolTargets = translateToolSummaries && typeof document !== 'undefined' ? collectToolSummaryTargets(vp) : null;
     hasOffscreenLazyPanels = sawOffscreenLazy;
     if (inflightBySig.size > 0) pruneUnneededPendingRequests(activePanelSet);
     if (candidates.length) {
@@ -4002,7 +3919,7 @@
       try { for (let i = 0; i < candidates.length; i++) processSingleTrigger(candidates[i].b, candidates[i].a, candidates[i].p); }
       finally { syncHydrateBudget = 99; }
     }
-    if (translateToolSummaries) scanToolSummaryContainers();
+    if (translateToolSummaries) scanToolSummaryContainers(preToolTargets);
     if (translateTitles) scanConversationTitles();
   }
 
