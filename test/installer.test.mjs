@@ -146,6 +146,19 @@ function createMockCdpServer(options = {}) {
           },
         };
       } else if (
+        expr.includes('const targetHash =') &&
+        (expr.includes('__agPrismTelemetry') ||
+          expr.includes('__agPrismEffortSlider') ||
+          expr.includes('__agPrismHostEnhancer') ||
+          expr.includes('__agPrismContextMenu'))
+      ) {
+        result = {
+          result: {
+            type: 'object',
+            value: { ok: true, status: 'mounted' },
+          },
+        };
+      } else if (
         expr.includes('delete window.__agPrismInlineDiff') &&
         expr.includes("status: 'off'") &&
         !expr.includes('const targetHash =')
@@ -517,6 +530,9 @@ test(
       assert.ok(fs.existsSync(path.join(installDir, 'vendor', 'effort-slider', 'slider-coexist.js')));
       assert.ok(fs.existsSync(path.join(installDir, 'vendor', 'thought-translator', 'thought-client.js')));
       assert.ok(fs.existsSync(path.join(installDir, 'vendor', 'thought-translator', 'thought-settings-ui.js')));
+      for (const chId of ['telemetry', 'effortSlider', 'workbenchEnhancer', 'contextMenu']) {
+        assert.ok(fs.existsSync(path.join(installDir, 'runtime-channels', `${chId}.js`)), `installer.exe must deploy runtime-channels/${chId}.js`);
+      }
       assert.ok(fs.existsSync(path.join(installDir, '.watch.pid')));
 
       // Verify full 5-channel native Sidecar plugin directory deployed cleanly
@@ -2227,3 +2243,135 @@ test(
     }
   }
 );
+
+test('Phase 4A P0: C# CdpClient fixes bundleUnchanged/destroy() and static runtime-channels/*.js fallback compiles & packages cleanly', async () => {
+  const cdpCs = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'common', 'CdpClient.cs'), 'utf8');
+  const runtimeChannelsCs = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'common', 'RuntimeChannels.cs'), 'utf8');
+  const watcherCs = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'watcher', 'Program.cs'), 'utf8');
+
+  // 1) bundleUnchanged must NOT require offloaded Ch13/Ch14 globals, and C# else branch must invoke existingPrism?.destroy?.()
+  const unchangedMatch = cdpCs.match(/const bundleUnchanged = Boolean\([\s\S]*?if \(bundleUnchanged\)[\s\S]*?\} else \{[\s\S]*?globalThis\.__agCsUiMain\(bootCfg\);/);
+  assert.ok(unchangedMatch, 'CdpClient.cs must contain bundleUnchanged block');
+  const unchangedBlock = unchangedMatch[0];
+  const condOnly = unchangedBlock.slice(0, unchangedBlock.indexOf('if (bundleUnchanged)'));
+  assert.equal(condOnly.includes('window.__agPrismTelemetry'), false, 'C# bundleUnchanged must not check offloaded __agPrismTelemetry');
+  assert.equal(condOnly.includes('window.__agPrismEffortSlider'), false, 'C# bundleUnchanged must not check offloaded __agPrismEffortSlider');
+  assert.ok(unchangedBlock.includes('existingPrism?.destroy?.()'), 'C# BuildInjectExpression else branch must destroy existingPrism before remount');
+
+  // 2) RuntimeChannels.cs must load precompiled runtime-channels/<id>.js with zero hand-assembled JS templates
+  assert.ok(runtimeChannelsCs.includes('runtime-channels/'), 'RuntimeChannels.cs must load precompiled runtime-channels/<id>.js');
+  assert.equal(runtimeChannelsCs.includes('(() =>'), false, 'RuntimeChannels.cs must not hand-assemble JS templates');
+  assert.equal(runtimeChannelsCs.includes('document.createElement'), false, 'RuntimeChannels.cs must not hand-assemble DOM JS');
+  assert.ok(watcherCs.includes('RuntimeChannelFallback.LoadEnabledExpressions'), 'Windows Watcher Program.cs must load precompiled runtime channels');
+
+  // 3) build-common static precompiled Ch13-Ch16 entries compile to valid JS and are tracked in install-manifest.json
+  const buildCommon = await import('../scripts/build-common.mjs');
+  const staticEntries = buildCommon.collectStaticRuntimeChannelEntries();
+  const expectedNames = [
+    'runtime-channels/telemetry.js',
+    'runtime-channels/effortSlider.js',
+    'runtime-channels/workbenchEnhancer.js',
+    'runtime-channels/contextMenu.js',
+  ];
+  assert.deepEqual(staticEntries.map((e) => e.name), expectedNames);
+  for (const ent of staticEntries) {
+    const code = ent.data.toString('utf8');
+    assert.ok(code.length > 500, `${ent.name} must contain non-trivial precompiled JS`);
+    assert.doesNotThrow(() => new vm.Script(code), `${ent.name} must be syntactically valid JS`);
+  }
+  const topEntries = buildCommon.collectOptionalOmniTopEntries();
+  const topNames = new Set(topEntries.map((e) => e.name));
+  for (const name of expectedNames) {
+    assert.equal(topNames.has(name), true, `collectOptionalOmniTopEntries must include ${name}`);
+  }
+  const { manifest } = buildCommon.createInstallManifestPayload({
+    version: cdp.PLUGIN_VERSION,
+    installEntries: topEntries,
+    pluginEntries: [],
+  });
+  const manifestPaths = new Set(manifest.files.map((f) => f.path));
+  for (const name of expectedNames) {
+    assert.equal(manifestPaths.has(name), true, `install-manifest.json must include ${name}`);
+  }
+
+  // 4) On Windows, compile RuntimeChannels.cs with csc /warnaserror and verify config-gated loading at runtime
+  if (process.platform === 'win32') {
+    const winDir = process.env.WINDIR || 'C:\\Windows';
+    const csc = [
+      path.join(winDir, 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe'),
+      path.join(winDir, 'Microsoft.NET', 'Framework', 'v4.0.30319', 'csc.exe'),
+    ].find((p) => fs.existsSync(p));
+    assert.ok(csc, 'Expected .NET Framework csc.exe on Windows');
+
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-prism-rtch-cs-'));
+    try {
+      const baseDir = path.join(tmpDir, 'base');
+      fs.mkdirSync(path.join(baseDir, 'runtime-channels'), { recursive: true });
+      for (const ent of staticEntries) {
+        fs.writeFileSync(path.join(baseDir, ...ent.name.split('/')), ent.data);
+      }
+      const probeCs = path.join(tmpDir, 'RtProbe.cs');
+      const probeExe = path.join(tmpDir, 'rt-probe.exe');
+      fs.writeFileSync(
+        probeCs,
+        [
+          'using System;',
+          'using System.Collections.Generic;',
+          'using AgyClaudeStyle;',
+          'class RtProbe {',
+          '  static void Main(string[] args) {',
+          '    string dir = args[0];',
+          '    var allOn = new Dictionary<string, object>(StringComparer.Ordinal);',
+          '    var loadedOn = RuntimeChannelFallback.LoadEnabledExpressions(dir, allOn);',
+          '    var allOff = new Dictionary<string, object>(StringComparer.Ordinal);',
+          '    allOff["telemetryModule"] = "off";',
+          '    allOff["effortSliderModule"] = "off";',
+          '    allOff["workbenchEnhancer"] = "off";',
+          '    allOff["contextMenu"] = false;',
+          '    var loadedOff = RuntimeChannelFallback.LoadEnabledExpressions(dir, allOff);',
+          '    var outObj = new Dictionary<string, object>(StringComparer.Ordinal);',
+          '    outObj["onCount"] = loadedOn.Count;',
+          '    outObj["offCount"] = loadedOff.Count;',
+          '    outObj["hasTel"] = loadedOn.ContainsKey("telemetry");',
+          '    outObj["hasEff"] = loadedOn.ContainsKey("effortSlider");',
+          '    outObj["hasWb"] = loadedOn.ContainsKey("workbenchEnhancer");',
+          '    outObj["hasCtx"] = loadedOn.ContainsKey("contextMenu");',
+          '    Console.Write(MiniJson.Stringify(outObj, false));',
+          '  }',
+          '}',
+        ].join('\n'),
+        'utf8'
+      );
+      execFileSync(
+        csc,
+        [
+          '/nologo',
+          '/utf8output',
+          '/codepage:65001',
+          '/warnaserror',
+          '/target:exe',
+          `/out:${probeExe}`,
+          '/r:System.dll',
+          '/r:System.Core.dll',
+          '/r:System.Drawing.dll',
+          '/r:System.Net.Http.dll',
+          '/r:System.Windows.Forms.dll',
+          path.join(ROOT_DIR, 'installer', 'common', 'MiniJson.cs'),
+          path.join(ROOT_DIR, 'installer', 'common', 'CdpClient.cs'),
+          path.join(ROOT_DIR, 'installer', 'common', 'RuntimeChannels.cs'),
+          probeCs,
+        ],
+        { stdio: 'pipe' }
+      );
+      const parsed = JSON.parse(execFileSync(probeExe, [baseDir], { encoding: 'utf8' }));
+      assert.equal(parsed.onCount, 4);
+      assert.equal(parsed.offCount, 0);
+      assert.equal(parsed.hasTel, true);
+      assert.equal(parsed.hasEff, true);
+      assert.equal(parsed.hasWb, true);
+      assert.equal(parsed.hasCtx, true);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }
+});

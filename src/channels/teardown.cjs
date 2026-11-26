@@ -1,10 +1,10 @@
-// 全量卸载清理表达式（REMOVE_EXPRESSION）与磁盘数据清理白名单（与 install-manifest.mjs 严格对齐）
+// 全量卸载清理表达式（REMOVE_EXPRESSION）与磁盘数据清理白名单（与 install-manifest.cjs 严格对齐）
 'use strict';
 
 const { STYLE_ID, LEGACY_STYLE_ID } = require('../config/schema.cjs');
 const channelTeardowns = require('./channel-teardowns.cjs');
 
-// 与 src/platform/install-manifest.mjs 中 PURGE_DATA_FILES 保持完全一致
+// 与 src/platform/install-manifest.cjs 中 PURGE_DATA_FILES 保持完全一致
 const PURGE_DATA_FILES = Object.freeze([
   'obsidian-prism-config.backup.json',
   'obsidian-prism-thought.json',

@@ -3479,7 +3479,7 @@ namespace AgyClaudeStyle
             return raw == "machine" || raw == "ai" || raw == "on" || raw == "auto";
         }
 
-        private static string ResolveSafePluginFile(string pluginDir, string relPath)
+        public static string ResolveSafePluginFile(string pluginDir, string relPath)
         {
             if (string.IsNullOrEmpty(pluginDir) || string.IsNullOrEmpty(relPath)) return null;
             try
@@ -3986,13 +3986,12 @@ namespace AgyClaudeStyle
             sb.Append("          existingPrism &&\n");
             sb.Append("          existingPrism.version === ").Append(verJson).Append(" &&\n");
             sb.Append("          existingPrism.codeHash === bootCfg.codeHash &&\n");
-            sb.Append("          typeof existingPrism.refreshConfig === 'function' &&\n");
-            sb.Append("          window.__agPrismTelemetry &&\n");
-            sb.Append("          window.__agPrismEffortSlider\n");
+            sb.Append("          typeof existingPrism.refreshConfig === 'function'\n");
             sb.Append("        );\n");
             sb.Append("        if (bundleUnchanged) {\n");
             sb.Append("          existingPrism.refreshConfig(bootCfg);\n");
             sb.Append("        } else {\n");
+            sb.Append("          try { existingPrism?.destroy?.(); } catch {}\n");
             sb.Append("          try { window.__agPrismTelemetry?.destroy?.(); } catch {}\n");
             sb.Append("          try { window.__agPrismEffortSlider?.destroy?.(); } catch {}\n");
             sb.Append("          try { window.__agPrismThought?.destroy?.(); } catch {}\n");

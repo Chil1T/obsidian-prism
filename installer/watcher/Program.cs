@@ -23,6 +23,7 @@ namespace AgyClaudeStyle.Watcher
         public string OmniScriptId;
         public string ThoughtScriptId;
         public string InlineDiffScriptId;
+        public readonly Dictionary<string, string> RuntimeChannelScriptIds = new Dictionary<string, string>(StringComparer.Ordinal);
         public string Title;
         public string MainFrameId;
         public bool HasFrameTree;
@@ -309,6 +310,7 @@ namespace AgyClaudeStyle.Watcher
                 ? CdpHelper.BuildThoughtExpression(_baseDir, onceCfg)
                 : "";
             string inlineDiffExpr = CdpHelper.BuildInlineDiffExpression(_baseDir, onceCfg);
+            Dictionary<string, string> runtimeChannelExprs = RuntimeChannelFallback.LoadEnabledExpressions(_baseDir, onceCfg);
             List<string> injectedTitles = new List<string>();
             for (int i = 0; i < pages.Count; i++)
             {
@@ -328,6 +330,7 @@ namespace AgyClaudeStyle.Watcher
                     {
                         try { await session.EvaluateAsync(inlineDiffExpr, false).ConfigureAwait(false); } catch { }
                     }
+                    await RuntimeChannelFallback.EvaluateOnceAsync(session, runtimeChannelExprs).ConfigureAwait(false);
                     injectedTitles.Add(CdpHelper.ShortTitle(page));
                 }
             }
@@ -427,6 +430,10 @@ namespace AgyClaudeStyle.Watcher
             {
                 return true;
             }
+            if (RuntimeChannelFallback.IsRuntimeChannelFile(norm))
+            {
+                return true;
+            }
             return norm.EndsWith(".css", StringComparison.OrdinalIgnoreCase) ||
                    norm.EndsWith(".js", StringComparison.OrdinalIgnoreCase) ||
                    norm.EndsWith(".json", StringComparison.OrdinalIgnoreCase);
@@ -485,6 +492,7 @@ namespace AgyClaudeStyle.Watcher
                     ? CdpHelper.BuildThoughtExpression(_baseDir, initialCfg)
                     : "";
                 string currentInlineDiffExpr = CdpHelper.BuildInlineDiffExpression(_baseDir, initialCfg);
+                Dictionary<string, string> currentRuntimeChannels = RuntimeChannelFallback.LoadEnabledExpressions(_baseDir, initialCfg);
                 object exprLock = new object();
                 ConcurrentDictionary<string, AttachedEntry> attached = new ConcurrentDictionary<string, AttachedEntry>(StringComparer.Ordinal);
                 ManualResetEventSlim exitEvent = new ManualResetEventSlim(false);
@@ -501,168 +509,77 @@ namespace AgyClaudeStyle.Watcher
                     ReleasePidFile(selfPid);
                 };
 
-                Func<AttachedEntry, string, string, string, string, Task<Dictionary<string, object>>> applyAsync = async (entry, exprToUse, omniExprToUse, thoughtExprToUse, inlineDiffExprToUse) =>
+                Func<AttachedEntry, string, string, string, string, Dictionary<string, string>, Task<Dictionary<string, object>>> applyAsync = async (entry, exprToUse, omniExprToUse, thoughtExprToUse, inlineDiffExprToUse, runtimeChannelsToUse) =>
                 {
-                    if (!string.IsNullOrEmpty(entry.ScriptId))
-                    {
-                        try
-                        {
-                            Dictionary<string, object> rmParams = new Dictionary<string, object>(StringComparer.Ordinal);
-                            rmParams["identifier"] = entry.ScriptId;
-                            await entry.Session.SendAsync("Page.removeScriptToEvaluateOnNewDocument", rmParams, 5000).ConfigureAwait(false);
-                        }
-                        catch { }
-                    }
-                    Dictionary<string, object> addParams = new Dictionary<string, object>(StringComparer.Ordinal);
-                    addParams["source"] = exprToUse;
-                    Dictionary<string, object> addRes = await entry.Session.SendAsync("Page.addScriptToEvaluateOnNewDocument", addParams, 15000).ConfigureAwait(false);
-                    object idVal;
-                    if (addRes.TryGetValue("identifier", out idVal)) entry.ScriptId = idVal as string;
+                    await RuntimeChannelFallback.RemoveNewDocScriptAsync(entry.Session, entry.ScriptId).ConfigureAwait(false);
+                    entry.ScriptId = await RuntimeChannelFallback.AddNewDocScriptAsync(entry.Session, exprToUse).ConfigureAwait(false);
                     object evalVal = await entry.Session.EvaluateAsync(exprToUse, false).ConfigureAwait(false);
                     Dictionary<string, object> evalDict = evalVal as Dictionary<string, object>;
                     object statusVal;
                     if (evalDict != null && evalDict.TryGetValue("status", out statusVal) &&
                         string.Equals(statusVal as string, "skipped-non-host", StringComparison.Ordinal))
                     {
-                        if (!string.IsNullOrEmpty(entry.ScriptId))
-                        {
-                            try
-                            {
-                                Dictionary<string, object> rmSkip = new Dictionary<string, object>(StringComparer.Ordinal);
-                                rmSkip["identifier"] = entry.ScriptId;
-                                await entry.Session.SendAsync("Page.removeScriptToEvaluateOnNewDocument", rmSkip, 5000).ConfigureAwait(false);
-                            }
-                            catch { }
-                            entry.ScriptId = null;
-                        }
-                        if (!string.IsNullOrEmpty(entry.OmniScriptId))
-                        {
-                            try
-                            {
-                                Dictionary<string, object> rmOmniSkip = new Dictionary<string, object>(StringComparer.Ordinal);
-                                rmOmniSkip["identifier"] = entry.OmniScriptId;
-                                await entry.Session.SendAsync("Page.removeScriptToEvaluateOnNewDocument", rmOmniSkip, 5000).ConfigureAwait(false);
-                            }
-                            catch { }
-                            entry.OmniScriptId = null;
-                        }
-                        if (!string.IsNullOrEmpty(entry.ThoughtScriptId))
-                        {
-                            try
-                            {
-                                Dictionary<string, object> rmThoughtSkip = new Dictionary<string, object>(StringComparer.Ordinal);
-                                rmThoughtSkip["identifier"] = entry.ThoughtScriptId;
-                                await entry.Session.SendAsync("Page.removeScriptToEvaluateOnNewDocument", rmThoughtSkip, 5000).ConfigureAwait(false);
-                            }
-                            catch { }
-                            entry.ThoughtScriptId = null;
-                        }
-                        if (!string.IsNullOrEmpty(entry.InlineDiffScriptId))
-                        {
-                            try
-                            {
-                                Dictionary<string, object> rmInlineSkip = new Dictionary<string, object>(StringComparer.Ordinal);
-                                rmInlineSkip["identifier"] = entry.InlineDiffScriptId;
-                                await entry.Session.SendAsync("Page.removeScriptToEvaluateOnNewDocument", rmInlineSkip, 5000).ConfigureAwait(false);
-                            }
-                            catch { }
-                            entry.InlineDiffScriptId = null;
-                        }
+                        await RuntimeChannelFallback.RemoveNewDocScriptAsync(entry.Session, entry.ScriptId).ConfigureAwait(false);
+                        entry.ScriptId = null;
+                        await RuntimeChannelFallback.RemoveNewDocScriptAsync(entry.Session, entry.OmniScriptId).ConfigureAwait(false);
+                        entry.OmniScriptId = null;
+                        await RuntimeChannelFallback.RemoveNewDocScriptAsync(entry.Session, entry.ThoughtScriptId).ConfigureAwait(false);
+                        entry.ThoughtScriptId = null;
+                        await RuntimeChannelFallback.RemoveNewDocScriptAsync(entry.Session, entry.InlineDiffScriptId).ConfigureAwait(false);
+                        entry.InlineDiffScriptId = null;
+                        await RuntimeChannelFallback.RemoveAllScriptsAsync(entry.Session, entry.RuntimeChannelScriptIds).ConfigureAwait(false);
                         return evalDict;
                     }
 
-                    if (!string.IsNullOrEmpty(entry.OmniScriptId))
-                    {
-                        try
-                        {
-                            Dictionary<string, object> rmOmni = new Dictionary<string, object>(StringComparer.Ordinal);
-                            rmOmni["identifier"] = entry.OmniScriptId;
-                            await entry.Session.SendAsync("Page.removeScriptToEvaluateOnNewDocument", rmOmni, 5000).ConfigureAwait(false);
-                        }
-                        catch { }
-                        entry.OmniScriptId = null;
-                    }
+                    await RuntimeChannelFallback.RemoveNewDocScriptAsync(entry.Session, entry.OmniScriptId).ConfigureAwait(false);
+                    entry.OmniScriptId = null;
                     if (!string.IsNullOrEmpty(omniExprToUse))
                     {
                         try
                         {
-                            Dictionary<string, object> addOmni = new Dictionary<string, object>(StringComparer.Ordinal);
-                            addOmni["source"] = omniExprToUse;
-                            Dictionary<string, object> omniRes = await entry.Session.SendAsync("Page.addScriptToEvaluateOnNewDocument", addOmni, 15000).ConfigureAwait(false);
-                            object omniIdVal;
-                            if (omniRes.TryGetValue("identifier", out omniIdVal)) entry.OmniScriptId = omniIdVal as string;
+                            entry.OmniScriptId = await RuntimeChannelFallback.AddNewDocScriptAsync(entry.Session, omniExprToUse).ConfigureAwait(false);
                             await entry.Session.EvaluateAsync(omniExprToUse, false).ConfigureAwait(false);
                         }
                         catch { }
                     }
 
                     bool hadThought = !string.IsNullOrEmpty(entry.ThoughtScriptId);
-                    if (hadThought)
-                    {
-                        try
-                        {
-                            Dictionary<string, object> rmThought = new Dictionary<string, object>(StringComparer.Ordinal);
-                            rmThought["identifier"] = entry.ThoughtScriptId;
-                            await entry.Session.SendAsync("Page.removeScriptToEvaluateOnNewDocument", rmThought, 5000).ConfigureAwait(false);
-                        }
-                        catch { }
-                        entry.ThoughtScriptId = null;
-                    }
+                    await RuntimeChannelFallback.RemoveNewDocScriptAsync(entry.Session, entry.ThoughtScriptId).ConfigureAwait(false);
+                    entry.ThoughtScriptId = null;
                     if (!string.IsNullOrEmpty(thoughtExprToUse))
                     {
                         try
                         {
-                            Dictionary<string, object> addThought = new Dictionary<string, object>(StringComparer.Ordinal);
-                            addThought["source"] = thoughtExprToUse;
-                            Dictionary<string, object> thoughtRes = await entry.Session.SendAsync("Page.addScriptToEvaluateOnNewDocument", addThought, 15000).ConfigureAwait(false);
-                            object thoughtIdVal;
-                            if (thoughtRes.TryGetValue("identifier", out thoughtIdVal)) entry.ThoughtScriptId = thoughtIdVal as string;
+                            entry.ThoughtScriptId = await RuntimeChannelFallback.AddNewDocScriptAsync(entry.Session, thoughtExprToUse).ConfigureAwait(false);
                             await entry.Session.EvaluateAsync(thoughtExprToUse, false).ConfigureAwait(false);
                         }
                         catch { }
                     }
                     else if (hadThought)
                     {
-                        try
-                        {
-                            await entry.Session.EvaluateAsync(CdpHelper.ThoughtRemoveExpression, false).ConfigureAwait(false);
-                        }
-                        catch { }
+                        try { await entry.Session.EvaluateAsync(CdpHelper.ThoughtRemoveExpression, false).ConfigureAwait(false); } catch { }
                     }
 
                     bool hadInlineDiff = !string.IsNullOrEmpty(entry.InlineDiffScriptId);
-                    if (hadInlineDiff)
-                    {
-                        try
-                        {
-                            Dictionary<string, object> rmInline = new Dictionary<string, object>(StringComparer.Ordinal);
-                            rmInline["identifier"] = entry.InlineDiffScriptId;
-                            await entry.Session.SendAsync("Page.removeScriptToEvaluateOnNewDocument", rmInline, 5000).ConfigureAwait(false);
-                        }
-                        catch { }
-                        entry.InlineDiffScriptId = null;
-                    }
+                    await RuntimeChannelFallback.RemoveNewDocScriptAsync(entry.Session, entry.InlineDiffScriptId).ConfigureAwait(false);
+                    entry.InlineDiffScriptId = null;
                     if (!string.IsNullOrEmpty(inlineDiffExprToUse))
                     {
                         try
                         {
-                            Dictionary<string, object> addInline = new Dictionary<string, object>(StringComparer.Ordinal);
-                            addInline["source"] = inlineDiffExprToUse;
-                            Dictionary<string, object> inlineRes = await entry.Session.SendAsync("Page.addScriptToEvaluateOnNewDocument", addInline, 15000).ConfigureAwait(false);
-                            object inlineIdVal;
-                            if (inlineRes.TryGetValue("identifier", out inlineIdVal)) entry.InlineDiffScriptId = inlineIdVal as string;
+                            entry.InlineDiffScriptId = await RuntimeChannelFallback.AddNewDocScriptAsync(entry.Session, inlineDiffExprToUse).ConfigureAwait(false);
                             await entry.Session.EvaluateAsync(inlineDiffExprToUse, false).ConfigureAwait(false);
                         }
                         catch { }
                     }
                     else if (hadInlineDiff)
                     {
-                        try
-                        {
-                            await entry.Session.EvaluateAsync(CdpHelper.InlineDiffRemoveExpression, false).ConfigureAwait(false);
-                        }
-                        catch { }
+                        try { await entry.Session.EvaluateAsync(CdpHelper.InlineDiffRemoveExpression, false).ConfigureAwait(false); } catch { }
                     }
+
+                    HashSet<string> prevRuntimeIds = new HashSet<string>(StringComparer.Ordinal);
+                    await RuntimeChannelFallback.SyncNewDocScriptsAsync(entry.Session, entry.RuntimeChannelScriptIds, runtimeChannelsToUse, prevRuntimeIds).ConfigureAwait(false);
+                    await RuntimeChannelFallback.EvaluateSyncedAsync(entry.Session, _baseDir, runtimeChannelsToUse, prevRuntimeIds).ConfigureAwait(false);
                     return evalVal as Dictionary<string, object>;
                 };
 
@@ -851,14 +768,16 @@ namespace AgyClaudeStyle.Watcher
                         string omniSnapshot;
                         string thoughtSnapshot;
                         string inlineDiffSnapshot;
+                        Dictionary<string, string> runtimeChannelsSnapshot;
                         lock (exprLock)
                         {
                             exprSnapshot = currentExpr;
                             omniSnapshot = currentOmniExpr;
                             thoughtSnapshot = currentThoughtExpr;
                             inlineDiffSnapshot = currentInlineDiffExpr;
+                            runtimeChannelsSnapshot = currentRuntimeChannels;
                         }
-                        Dictionary<string, object> res = await applyAsync(entry, exprSnapshot, omniSnapshot, thoughtSnapshot, inlineDiffSnapshot).ConfigureAwait(false);
+                        Dictionary<string, object> res = await applyAsync(entry, exprSnapshot, omniSnapshot, thoughtSnapshot, inlineDiffSnapshot, runtimeChannelsSnapshot).ConfigureAwait(false);
                         string status = (res != null && res.ContainsKey("status")) ? Convert.ToString(res["status"]) : "ok";
                         Log(InstallerI18n.TrFormat(
                             "[✓] 已注入 obsidian-prism: {0} ({1})",
@@ -923,19 +842,23 @@ namespace AgyClaudeStyle.Watcher
                                             ? CdpHelper.BuildThoughtExpression(_baseDir, nextCfg)
                                             : "";
                                         string nextInlineDiffExpr = CdpHelper.BuildInlineDiffExpression(_baseDir, nextCfg);
+                                        Dictionary<string, string> nextRuntimeChannels = RuntimeChannelFallback.LoadEnabledExpressions(_baseDir, nextCfg);
                                         string fastCfgExpr = string.Equals(Path.GetFileName(changedName ?? ""), "config.json", StringComparison.OrdinalIgnoreCase)
                                             ? CdpHelper.BuildConfigRefreshExpression(_baseDir, manifest)
                                             : null;
                                         string prevThoughtExpr;
                                         string prevInlineDiffExpr;
+                                        Dictionary<string, string> prevRuntimeChannels;
                                         lock (exprLock)
                                         {
                                             prevThoughtExpr = currentThoughtExpr;
                                             prevInlineDiffExpr = currentInlineDiffExpr;
+                                            prevRuntimeChannels = currentRuntimeChannels;
                                             currentExpr = nextExpr;
                                             currentOmniExpr = nextOmniExpr;
                                             currentThoughtExpr = nextThoughtExpr;
                                             currentInlineDiffExpr = nextInlineDiffExpr;
+                                            currentRuntimeChannels = nextRuntimeChannels;
                                         }
 
                                         int n = 0;
@@ -947,124 +870,46 @@ namespace AgyClaudeStyle.Watcher
                                             {
                                                 if (!string.IsNullOrEmpty(fastCfgExpr))
                                                 {
-                                                    if (!string.IsNullOrEmpty(entry.ScriptId))
-                                                    {
-                                                        try
-                                                        {
-                                                            Dictionary<string, object> rmP = new Dictionary<string, object>(StringComparer.Ordinal);
-                                                            rmP["identifier"] = entry.ScriptId;
-                                                            await entry.Session.SendAsync("Page.removeScriptToEvaluateOnNewDocument", rmP, 5000).ConfigureAwait(false);
-                                                        }
-                                                        catch { }
-                                                    }
-                                                    Dictionary<string, object> addP = new Dictionary<string, object>(StringComparer.Ordinal);
-                                                    addP["source"] = nextExpr;
-                                                    Dictionary<string, object> addR = await entry.Session.SendAsync("Page.addScriptToEvaluateOnNewDocument", addP, 15000).ConfigureAwait(false);
-                                                    object idV;
-                                                    if (addR.TryGetValue("identifier", out idV)) entry.ScriptId = idV as string;
+                                                    await RuntimeChannelFallback.RemoveNewDocScriptAsync(entry.Session, entry.ScriptId).ConfigureAwait(false);
+                                                    entry.ScriptId = await RuntimeChannelFallback.AddNewDocScriptAsync(entry.Session, nextExpr).ConfigureAwait(false);
 
-                                                    if (!string.IsNullOrEmpty(entry.OmniScriptId))
-                                                    {
-                                                        try
-                                                        {
-                                                            Dictionary<string, object> rmO = new Dictionary<string, object>(StringComparer.Ordinal);
-                                                            rmO["identifier"] = entry.OmniScriptId;
-                                                            await entry.Session.SendAsync("Page.removeScriptToEvaluateOnNewDocument", rmO, 5000).ConfigureAwait(false);
-                                                        }
-                                                        catch { }
-                                                        entry.OmniScriptId = null;
-                                                    }
+                                                    await RuntimeChannelFallback.RemoveNewDocScriptAsync(entry.Session, entry.OmniScriptId).ConfigureAwait(false);
+                                                    entry.OmniScriptId = null;
                                                     if (!string.IsNullOrEmpty(nextOmniExpr))
                                                     {
-                                                        try
-                                                        {
-                                                            Dictionary<string, object> addO = new Dictionary<string, object>(StringComparer.Ordinal);
-                                                            addO["source"] = nextOmniExpr;
-                                                            Dictionary<string, object> omniR = await entry.Session.SendAsync("Page.addScriptToEvaluateOnNewDocument", addO, 15000).ConfigureAwait(false);
-                                                            object oIdV;
-                                                            if (omniR.TryGetValue("identifier", out oIdV)) entry.OmniScriptId = oIdV as string;
-                                                        }
-                                                        catch { }
+                                                        try { entry.OmniScriptId = await RuntimeChannelFallback.AddNewDocScriptAsync(entry.Session, nextOmniExpr).ConfigureAwait(false); } catch { }
                                                     }
 
                                                     bool hadThought = !string.IsNullOrEmpty(entry.ThoughtScriptId) || !string.IsNullOrEmpty(prevThoughtExpr);
-                                                    if (!string.IsNullOrEmpty(entry.ThoughtScriptId))
-                                                    {
-                                                        try
-                                                        {
-                                                            Dictionary<string, object> rmT = new Dictionary<string, object>(StringComparer.Ordinal);
-                                                            rmT["identifier"] = entry.ThoughtScriptId;
-                                                            await entry.Session.SendAsync("Page.removeScriptToEvaluateOnNewDocument", rmT, 5000).ConfigureAwait(false);
-                                                        }
-                                                        catch { }
-                                                        entry.ThoughtScriptId = null;
-                                                    }
+                                                    await RuntimeChannelFallback.RemoveNewDocScriptAsync(entry.Session, entry.ThoughtScriptId).ConfigureAwait(false);
+                                                    entry.ThoughtScriptId = null;
                                                     if (!string.IsNullOrEmpty(nextThoughtExpr))
                                                     {
-                                                        try
-                                                        {
-                                                            Dictionary<string, object> addT = new Dictionary<string, object>(StringComparer.Ordinal);
-                                                            addT["source"] = nextThoughtExpr;
-                                                            Dictionary<string, object> thoughtR = await entry.Session.SendAsync("Page.addScriptToEvaluateOnNewDocument", addT, 15000).ConfigureAwait(false);
-                                                            object tIdV;
-                                                            if (thoughtR.TryGetValue("identifier", out tIdV)) entry.ThoughtScriptId = tIdV as string;
-                                                        }
-                                                        catch { }
+                                                        try { entry.ThoughtScriptId = await RuntimeChannelFallback.AddNewDocScriptAsync(entry.Session, nextThoughtExpr).ConfigureAwait(false); } catch { }
                                                     }
 
                                                     bool hadInlineDiff = !string.IsNullOrEmpty(entry.InlineDiffScriptId) || !string.IsNullOrEmpty(prevInlineDiffExpr);
-                                                    if (!string.IsNullOrEmpty(entry.InlineDiffScriptId))
-                                                    {
-                                                        try
-                                                        {
-                                                            Dictionary<string, object> rmI = new Dictionary<string, object>(StringComparer.Ordinal);
-                                                            rmI["identifier"] = entry.InlineDiffScriptId;
-                                                            await entry.Session.SendAsync("Page.removeScriptToEvaluateOnNewDocument", rmI, 5000).ConfigureAwait(false);
-                                                        }
-                                                        catch { }
-                                                        entry.InlineDiffScriptId = null;
-                                                    }
+                                                    await RuntimeChannelFallback.RemoveNewDocScriptAsync(entry.Session, entry.InlineDiffScriptId).ConfigureAwait(false);
+                                                    entry.InlineDiffScriptId = null;
                                                     if (!string.IsNullOrEmpty(nextInlineDiffExpr))
                                                     {
-                                                        try
-                                                        {
-                                                            Dictionary<string, object> addI = new Dictionary<string, object>(StringComparer.Ordinal);
-                                                            addI["source"] = nextInlineDiffExpr;
-                                                            Dictionary<string, object> inlineR = await entry.Session.SendAsync("Page.addScriptToEvaluateOnNewDocument", addI, 15000).ConfigureAwait(false);
-                                                            object iIdV;
-                                                            if (inlineR.TryGetValue("identifier", out iIdV)) entry.InlineDiffScriptId = iIdV as string;
-                                                        }
-                                                        catch { }
+                                                        try { entry.InlineDiffScriptId = await RuntimeChannelFallback.AddNewDocScriptAsync(entry.Session, nextInlineDiffExpr).ConfigureAwait(false); } catch { }
                                                     }
+
+                                                    HashSet<string> prevRuntimeIds = new HashSet<string>(StringComparer.Ordinal);
+                                                    if (prevRuntimeChannels != null)
+                                                    {
+                                                        foreach (string pk in prevRuntimeChannels.Keys) prevRuntimeIds.Add(pk);
+                                                    }
+                                                    await RuntimeChannelFallback.SyncNewDocScriptsAsync(entry.Session, entry.RuntimeChannelScriptIds, nextRuntimeChannels, prevRuntimeIds).ConfigureAwait(false);
 
                                                     Dictionary<string, object> fastRes = await entry.Session.EvaluateAsync(fastCfgExpr, false).ConfigureAwait(false) as Dictionary<string, object>;
                                                     object refVal;
-                                                    if (fastRes != null && fastRes.TryGetValue("refreshed", out refVal) && refVal is bool && (bool)refVal)
+                                                    bool refreshed = fastRes != null && fastRes.TryGetValue("refreshed", out refVal) && refVal is bool && (bool)refVal;
+                                                    if (!refreshed)
                                                     {
-                                                        if (!string.IsNullOrEmpty(nextOmniExpr))
-                                                        {
-                                                            try { await entry.Session.EvaluateAsync(nextOmniExpr, false).ConfigureAwait(false); } catch { }
-                                                        }
-                                                        if (!string.IsNullOrEmpty(nextThoughtExpr))
-                                                        {
-                                                            try { await entry.Session.EvaluateAsync(nextThoughtExpr, false).ConfigureAwait(false); } catch { }
-                                                        }
-                                                        else if (hadThought)
-                                                        {
-                                                            try { await entry.Session.EvaluateAsync(CdpHelper.ThoughtRemoveExpression, false).ConfigureAwait(false); } catch { }
-                                                        }
-                                                        if (!string.IsNullOrEmpty(nextInlineDiffExpr))
-                                                        {
-                                                            try { await entry.Session.EvaluateAsync(nextInlineDiffExpr, false).ConfigureAwait(false); } catch { }
-                                                        }
-                                                        else if (hadInlineDiff)
-                                                        {
-                                                            try { await entry.Session.EvaluateAsync(CdpHelper.InlineDiffRemoveExpression, false).ConfigureAwait(false); } catch { }
-                                                        }
-                                                        n++;
-                                                        continue;
+                                                        await entry.Session.EvaluateAsync(nextExpr, false).ConfigureAwait(false);
                                                     }
-                                                    await entry.Session.EvaluateAsync(nextExpr, false).ConfigureAwait(false);
                                                     if (!string.IsNullOrEmpty(nextOmniExpr))
                                                     {
                                                         try { await entry.Session.EvaluateAsync(nextOmniExpr, false).ConfigureAwait(false); } catch { }
@@ -1085,11 +930,12 @@ namespace AgyClaudeStyle.Watcher
                                                     {
                                                         try { await entry.Session.EvaluateAsync(CdpHelper.InlineDiffRemoveExpression, false).ConfigureAwait(false); } catch { }
                                                     }
+                                                    await RuntimeChannelFallback.EvaluateSyncedAsync(entry.Session, _baseDir, nextRuntimeChannels, prevRuntimeIds).ConfigureAwait(false);
                                                     n++;
                                                 }
                                                 else
                                                 {
-                                                    await applyAsync(entry, nextExpr, nextOmniExpr, nextThoughtExpr, nextInlineDiffExpr).ConfigureAwait(false);
+                                                    await applyAsync(entry, nextExpr, nextOmniExpr, nextThoughtExpr, nextInlineDiffExpr, nextRuntimeChannels).ConfigureAwait(false);
                                                     n++;
                                                 }
                                             }

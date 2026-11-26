@@ -24,7 +24,7 @@ const REDLINE_DIR_SEGMENTS = new Set([
 ]);
 let sharedPurgeDataFiles = null;
 try {
-  const manifestMod = require('./src/platform/install-manifest.mjs');
+  const manifestMod = require('./src/platform/install-manifest.cjs');
   if (Array.isArray(manifestMod?.PURGE_DATA_FILES) && manifestMod.PURGE_DATA_FILES.length > 0) {
     sharedPurgeDataFiles = [...manifestMod.PURGE_DATA_FILES];
   }

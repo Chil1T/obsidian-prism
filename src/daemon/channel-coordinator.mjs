@@ -3,10 +3,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
+import { clearCdpRequireCache } from '../platform/repo-sync.cjs';
 import { isAutomatedTestRuntime } from './pid-lock.mjs';
 import { RUNTIME_CHANNEL_SPECS } from './runtime-channel-specs.mjs';
 
 const require = createRequire(import.meta.url);
+const CDP_WATCHED_SRC_DIRS = Object.freeze(['utils', 'config', 'platform', 'cdp', 'compiler', 'channels', 'compat']);
 
 export function extractTargetCodeHash(expr) {
   const str = typeof expr === 'string' ? expr : '';
@@ -65,13 +67,36 @@ function resolveChannelTeardown(cdpMod, id, cdpConstName) {
 }
 
 export const channelCoordinatorMethods = {
-  _readCdpFileSig() {
-    try {
-      const st = fs.statSync(path.join(this.rootDir, 'cdp.js'));
-      return `${st.mtimeMs}:${st.size}`;
-    } catch {
-      return '';
+  _readCdpTreeSig() {
+    const parts = [];
+    const recordFile = (rel, abs) => {
+      try {
+        const st = fs.lstatSync(abs);
+        if (!st.isSymbolicLink() && st.isFile()) parts.push(`${rel}:${st.mtimeMs}:${st.size}`);
+      } catch {}
+    };
+    recordFile('cdp.js', path.join(this.rootDir, 'cdp.js'));
+    const walkCjs = (dirAbs, relPrefix) => {
+      let ents = [];
+      try { ents = fs.readdirSync(dirAbs, { withFileTypes: true }); } catch { return; }
+      ents.sort((a, b) => a.name.localeCompare(b.name));
+      for (const ent of ents) {
+        if (ent.isSymbolicLink()) continue;
+        const childAbs = path.join(dirAbs, ent.name);
+        const childRel = `${relPrefix}/${ent.name}`;
+        if (ent.isDirectory()) walkCjs(childAbs, childRel);
+        else if (ent.isFile() && ent.name.endsWith('.cjs')) recordFile(childRel, childAbs);
+      }
+    };
+    for (const sub of CDP_WATCHED_SRC_DIRS) {
+      walkCjs(path.join(this.rootDir, 'src', sub), `src/${sub}`);
     }
+    if (parts.length === 0) return '';
+    return crypto.createHash('sha256').update(parts.join('\n')).digest('hex').slice(0, 24);
+  },
+
+  _readCdpFileSig() {
+    return this._readCdpTreeSig();
   },
 
   _isGitSourceDir(dirPath) {
@@ -155,14 +180,17 @@ export const channelCoordinatorMethods = {
 
   rebuildBundle({ forceReloadCdp = false, deferDiskCacheWrite = false } = {}) {
     const cdpPath = path.join(this.rootDir, 'cdp.js');
-    const nextSig = this._readCdpFileSig();
+    const nextSig =
+      this._readCdpFileSig === channelCoordinatorMethods._readCdpFileSig
+        ? this._readCdpTreeSig()
+        : this._readCdpFileSig();
     if (forceReloadCdp || !this.cdp || (nextSig && nextSig !== this._cdpFileSig)) {
       if (this._bundleCacheFlushTimer) {
         clearTimeout(this._bundleCacheFlushTimer);
         this._bundleCacheFlushTimer = null;
       }
       try {
-        delete require.cache[require.resolve(cdpPath)];
+        clearCdpRequireCache(this.rootDir);
       } catch {}
       this.cdp = require(cdpPath);
       this._loadedCdpVerifier =

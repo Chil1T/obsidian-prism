@@ -7,7 +7,7 @@ import { UpdateService } from '../../sidecars/daemon/update-service.mjs';
 import { AddonRegistry } from '../../sidecars/daemon/addon-registry.mjs';
 import { QuotaForceRefreshGuard } from './quota-guard.mjs';
 import { OmniServer, OMNI_BINDING } from '../../vendor/omni-viewer/omni-server.mjs';
-import { copyUpdatedRuntimeFromRepo } from '../platform/repo-sync.mjs';
+import { copyUpdatedRuntimeFromRepo } from '../platform/repo-sync.cjs';
 import {
   DEFAULT_ROOT_DIR,
   PKG_VERSION,

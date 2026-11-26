@@ -1836,7 +1836,7 @@ enum CdpHelper {
         return raw == "machine" || raw == "ai" || raw == "on" || raw == "auto"
     }
 
-    private static func resolveSafePluginFile(baseDir: String, relPath: String) -> String? {
+    static func resolveSafePluginFile(baseDir: String, relPath: String) -> String? {
         let trimmedBase = baseDir.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedBase.isEmpty, !relPath.isEmpty else { return nil }
         let rootUrl = URL(fileURLWithPath: trimmedBase).resolvingSymlinksInPath().standardizedFileURL
@@ -2338,9 +2338,7 @@ enum CdpHelper {
         sb.append(verJson)
         sb.append(" &&\n")
         sb.append("          existingPrism.codeHash === bootCfg.codeHash &&\n")
-        sb.append("          typeof existingPrism.refreshConfig === 'function' &&\n")
-        sb.append("          window.__agPrismTelemetry &&\n")
-        sb.append("          window.__agPrismEffortSlider\n")
+        sb.append("          typeof existingPrism.refreshConfig === 'function'\n")
         sb.append("        );\n")
         sb.append("        if (bundleUnchanged) {\n")
         sb.append("          existingPrism.refreshConfig(bootCfg);\n")

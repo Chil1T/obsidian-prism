@@ -1,4 +1,4 @@
-// app_storage.json runInBackground 崩溃安全恢复标记管理（CJS，供 cdp.js 与 ESM sidecars 共用）
+// app_storage.json runInBackground 崩溃安全恢复标记管理（CJS，供 src/platform 与 ESM sidecars 共用）
 'use strict';
 
 const crypto = require('crypto');

@@ -12,15 +12,17 @@
 *Zero Runtime `node_modules` Dependencies & Strict `L0 → L4` Acyclic DAG*
 
 1. **0 外部运行期 `node_modules` 依赖**：`package.json` 严禁引入运行期第三方 npm 包；Node 侧仅允许 Node.js >= 22 内置能力（`node:*`、`fetch`、`WebSocket`、`node:sqlite`、`node:test`），浏览器侧仅允许原生 Web API。
-2. **严格分层单向依赖（`L0 → L4`）**：
-   - **`L0` 纯叶子 / 契约层**：无副作用纯函数、静态常量、词典、配置 Schema 与通道注册表（如 `i18n-core.js`、`i18n-locales.js`、`vendor/pulse-dashboard/sidecars/panel/usage-keys.mjs`，以及规划中的 `src/config/schema.mjs`、`src/channels/registry.mjs`）。
-   - **`L1` 浏览器核心组件层**：光学渲染、动效引擎、状态与 DOM 增强组件（如 `motion-engine.js`、`ripple-core.js`、`vial-core.js`、`settings-panel.js`、`style.css`）。
-   - **`L2` 浏览器运行期编排与按需通道客户端层**：主运行期入口（`ui-runtime.js`）与按需延迟注入的各通道客户端（`vendor/**/*-client.js`、`vendor/**/*-settings-ui.js`、`vendor/periodic-picker/*.js`、`vendor/host-i18n/*.js`）。
-   - **`L3` 本地守护、服务与编译胶水层**：`cdp.js`、`sidecars/daemon/*`、`vendor/**/*-service.mjs`、`vendor/**/*-server.mjs`、`vendor/pulse-dashboard/sidecars/*`。
+2. **严格分层单向依赖（`L0 → L4`）与 `src/` 内部四级分层 DAG**：
+   - **`L0` 纯叶子 / 契约层**：无副作用纯函数、静态常量、词典、配置 Schema 与安全基础工具（如 `i18n-core.js`、`i18n-locales.js`、`vendor/pulse-dashboard/sidecars/panel/usage-keys.mjs`、`src/config/*.cjs`、`src/utils/*.cjs`）。
+   - **`L1` 浏览器核心组件与编排原语层**：光学渲染、动效引擎、状态与 DOM 增强组件（如 `motion-engine.js`、`ripple-core.js`、`vial-core.js`、`settings-panel.js`、`style.css`），以及 Node 侧 `src/cdp/*.cjs`、`src/compat/*.cjs`、`src/compiler/*.cjs`、`src/channels/*.cjs`（含 `src/channels/registry.cjs`）。
+   - **`L2` 浏览器按需通道客户端与平台适配层**：主运行期入口（`ui-runtime.js`）、按需延迟注入的各通道客户端（`vendor/**/*-client.js`、`vendor/**/*-settings-ui.js`、`vendor/periodic-picker/*.js`、`vendor/host-i18n/*.js`），以及跨平台安装/同步/快捷方式/重启原语 `src/platform/*.cjs`（含 `src/platform/install-manifest.cjs`、`src/platform/repo-sync.cjs`、`src/platform/run-in-bg-recovery.cjs`）。
+   - **`L3` 本地守护、服务与编译胶水层**：`cdp.js`（薄 Facade）、`sidecars/daemon/*`、`src/daemon/*.mjs`、`vendor/**/*-service.mjs`、`vendor/**/*-server.mjs`、`vendor/pulse-dashboard/sidecars/*`。
    - **`L4` 入口工具、构建器、原生安装器与测试层**：`inject.js`、`remove.js`、`tools/*`、`scripts/*`、`installer/*`、`workbench/*`、`test/*`。
-3. **跨层禁令**：
+3. **跨层禁令与 `src/` 扩展名统一铁律**：
    - `L0`/`L1`/`L2` 浏览器前端模块**严禁**导入 `node:*` 或 `sidecars/`；
    - `L3` 守护与服务层**严禁**反向依赖 `scripts/`、`workbench/` 或 `installer/`；
+   - **`src/` 内部严格单向四级 DAG**：`L0 (src/config, src/utils)` → `L1 (src/cdp, src/compat, src/compiler, src/channels, src/security)` → `L2 (src/platform)` → `L3 (src/daemon)`，**严禁任何下层反向导入上层**（如 `src/platform/* -> src/daemon/*`、`src/config/* -> src/compiler/* | src/platform/*`）；
+   - **`src/` 扩展名统一规范（0 同目录混用，兼容 Node `22.0–24.x` 0 `ERR_REQUIRE_ESM`）**：`src/{utils,config,cdp,compat,compiler,channels,platform}/` 统一使用标准 CommonJS `.cjs`（供 CJS 入口同步 `require()` 与 ESM 模块静态 `import` 双向零摩擦消费）；`src/daemon/` 与 `src/security/` 统一使用 `.mjs`；严禁同目录混用扩展名，严禁任何 `.cjs` 或根级 CJS 入口同步 `require()` `.mjs` 文件；
    - 全仓静态 `import` / `export ... from` / `require` / `new Worker(new URL(...))` 依赖图必须保持 **严格 0 循环依赖**。
 
 ---
@@ -38,17 +40,17 @@
 *Single Source of Truth*
 
 1. **唯一版本源**：`package.json#version` 是全仓唯一版本真相源。Node 侧模块优先动态读取 `package.json#version`；所有静态版本锚点（`plugin.json`、`CITATION.cff`、`installer/setup/app.manifest`、C#/Swift 默认常量与浏览器兜底版本）统一由 `node scripts/bump-version.mjs <newVersion>` 一键同步，并由 `npm run version:check` 校验零漂移。
-2. **唯一配置 / 通道 / 安装清单源**：配置契约（向 `src/config/schema.mjs` 收敛）、通道注册元数据（向 `src/channels/registry.mjs` 收敛）与安装资产清单（`install-manifest.json`）禁止多处手工复制粘贴导致状态漂移。
+2. **唯一配置 / 通道 / 安装清单源**：配置契约（`src/config/schema.cjs`）、通道注册元数据（`src/channels/registry.cjs`）与安装资产清单及原子升级引擎（`src/platform/install-manifest.cjs` / `install-manifest.json`）禁止多处手工复制粘贴导致状态漂移。
 
 ---
 
 ### 铁律 ④ · 声明式微内核扩展原则
 *Declarative Microkernel & On-Demand Lazy Channels*
 
-1. **按需延迟通道优先**：新功能与重型交互能力优先设计为独立按需通道（Channel 2~11 或独立 Sidecar 服务），而非塞入主入口 Channel 1。
+1. **按需延迟通道优先**：新功能与重型交互能力优先设计为独立按需通道（Channel 2~16，含 Phase 3B 下沉的 Telemetry / Effort Slider / Workbench Enhancer / Context Menu 四条延迟通道，或独立 Sidecar 服务），而非塞入主入口 Channel 1。
 2. **开关关闭三零保障**：功能开关处于 `off` 时，必须保证 **0 编译开销、0 页面注入、0 运行期常驻内存**。
 3. **独立字节预算**：
-   - Channel 1 全语种（`auto` + 8 语）编译产物严格 `< 549,500 B`；
+   - Channel 1 全语种（`auto` + 8 语）编译产物严格 `< 390,000 B`（当前实测 `~343 KB`）；
    - `pulse-vial-bridge.js` 严格 `< 31,000 B`；
    - 增量 `configRefresh` 表达式（不含语言包切换）严格 `< 4,096 B`；
    - 任何涉及 Channel 1 的变更须保持字节中性或同步无损瘦身。
@@ -130,10 +132,10 @@
 | 门禁文件 | 守护铁律 | 核心校验内容 |
 | --- | --- | --- |
 | [`repo-hygiene.test.mjs`](../test/gates/repo-hygiene.test.mjs) | ② ⑩ | 目录规范、根目录白名单棘轮、宪法/文档相对链接有效、测试命名棘轮 |
-| [`architecture-fitness.test.mjs`](../test/gates/architecture-fitness.test.mjs) | ① ② ⑥ | 0 外部依赖、0 循环依赖（含 Worker 边）、`L0→L4` 分层、文件行数/体积棘轮、CSS 变量/卫生棘轮、运行期 `innerHTML` 棘轮 |
-| [`bundle-budget.test.mjs`](../test/gates/bundle-budget.test.mjs) | ④ ⑩ | Ch1 (`auto` + 8 语) `< 549,500 B`、`pulse-vial-bridge.js < 31,000 B`、`configRefresh < 4,096 B`、全仓 0 BOM / 0 CRLF |
-| [`security-redteam.test.mjs`](../test/gates/security-redteam.test.mjs) | ⑦ | CDP Domain 永久白名单、宿主 `.db` 物理绝缘、全仓 AV 红线（含临时清零棘轮表）、本地 HTTP 强制 `127.0.0.1` 绑定 |
-| [`i18n-and-version-sync.test.mjs`](../test/gates/i18n-and-version-sync.test.mjs) | ③ ⑨ | 8 语种完整度 + 非 CJK 0 汉字 + 0 `yue` 独立词典、0 禁用词、`bump-version.mjs` 全静态版本锚点与 `CHANGELOG.md` 卫生校验 |
+| [`architecture-fitness.test.mjs`](../test/gates/architecture-fitness.test.mjs) | ① ② ⑥ | 0 外部依赖、0 循环依赖（含 Worker 边）、`L0→L4` 与 `src/` 四级内部单向分层、`src/` 扩展名统一与 Node 22.0 CJS 兼容、文件行数/体积棘轮、CSS 变量/卫生棘轮、运行期 `innerHTML` 棘轮 |
+| [`bundle-budget.test.mjs`](../test/gates/bundle-budget.test.mjs) | ④ ⑩ | Ch1 (`auto` + 8 语) `< 390,000 B`（实测 `~343 KB`）、Ch2~Ch16 分通道预算、`pulse-vial-bridge.js < 31,000 B`、`configRefresh < 4,096 B`、全仓 0 BOM / 0 CRLF |
+| [`security-redteam.test.mjs`](../test/gates/security-redteam.test.mjs) | ⑦ | 全仓严苛 CDP Domain 白名单（仅 `Page.*`/`Runtime.*`/`Target.*`/`Browser.close`，探针仅放行只读 `Performance`）、宿主 `.db` 物理绝缘、全仓 AV 红线（含变量名无关 `-e` 防护）、本地 HTTP 强制 `127.0.0.1` 绑定 |
+| [`i18n-and-version-sync.test.mjs`](../test/gates/i18n-and-version-sync.test.mjs) | ③ ⑨ | 8 语种完整度 + 非 CJK 0 汉字 + 0 `yue` 独立词典、0 禁用词（覆盖文档/UI 运行时/全量 `src/`）、`bump-version.mjs` 全静态版本锚点与 `CHANGELOG.md` 卫生校验 |
 
 ---
 

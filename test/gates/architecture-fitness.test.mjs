@@ -164,6 +164,14 @@ const LEGACY_EMPTY_HTML_CLEARS = Object.freeze({});
 
 const ROOT_NODE_SCRIPTS = new Set(['cdp.js', 'inject.js', 'remove.js']);
 
+function getSrcInternalLayer(rel) {
+  if (/^src\/(?:config|utils)\//.test(rel)) return 0;
+  if (/^src\/(?:cdp|compat|compiler|channels|security)\//.test(rel)) return 1;
+  if (/^src\/platform\//.test(rel)) return 2;
+  if (/^src\/daemon\//.test(rel)) return 3;
+  return -1;
+}
+
 function isBrowserOnlyModule(rel) {
   if (!rel.includes('/') && rel.endsWith('.js') && !ROOT_NODE_SCRIPTS.has(rel)) return true;
   if (/^vendor\/.*(?:-client|-settings-ui)\.js$/.test(rel)) return true;
@@ -188,11 +196,26 @@ test('Law 1: Zero external runtime node_modules dependencies, 0 static/Worker cy
   const graph = new Map();
   const externalDeps = [];
   const layerViolations = [];
+  const extViolations = [];
 
   for (const f of codeFiles) {
+    // Enforce uniform src/ extension conventions (0 mixed extensions per subdir) & Node 22.0-22.11 CJS safety
+    if (f.startsWith('src/')) {
+      if (/^src\/(?:daemon|security)\//.test(f)) {
+        if (!f.endsWith('.mjs')) {
+          extViolations.push(`${f}: src/{daemon,security}/ modules must use .mjs (0 mixed extensions)`);
+        }
+      } else if (/^src\/(?:utils|config|cdp|compat|compiler|channels|platform)\//.test(f)) {
+        if (!f.endsWith('.cjs')) {
+          extViolations.push(`${f}: src/{utils,config,cdp,compat,compiler,channels,platform}/ modules must use .cjs`);
+        }
+      }
+    }
+
     const clean = stripJsComments(fs.readFileSync(path.join(ROOT, f), 'utf8'));
     const deps = new Set();
     const browserOnly = isBrowserOnlyModule(f);
+    const fSrcLayer = getSrcInternalLayer(f);
 
     for (const m of clean.matchAll(importRe)) {
       const spec = m[1];
@@ -208,6 +231,13 @@ test('Law 1: Zero external runtime node_modules dependencies, 0 static/Worker cy
           }
           if (f.startsWith('tools/') && target.startsWith('workbench/')) {
             layerViolations.push(`${f} (tools) -> ${target} (workbench)`);
+          }
+          const tSrcLayer = getSrcInternalLayer(target);
+          if (fSrcLayer >= 0 && tSrcLayer >= 0 && fSrcLayer < tSrcLayer) {
+            layerViolations.push(`${f} (src L${fSrcLayer}) -> ${target} (src L${tSrcLayer}) reverse layer import forbidden`);
+          }
+          if ((f.endsWith('.cjs') || ROOT_NODE_SCRIPTS.has(f)) && m[0].trimStart().startsWith('require') && target.endsWith('.mjs')) {
+            extViolations.push(`${f} synchronously require()s ESM module ${target} (breaks Node 22.0-22.11 ERR_REQUIRE_ESM)`);
           }
         }
       } else if (BUILTINS.has(spec)) {
@@ -236,7 +266,8 @@ test('Law 1: Zero external runtime node_modules dependencies, 0 static/Worker cy
   }
 
   assert.deepEqual(externalDeps, [], `Forbidden external runtime package imports detected:\n${externalDeps.join('\n')}`);
-  assert.deepEqual(layerViolations, [], `L0->L4 layering violations detected:\n${layerViolations.join('\n')}`);
+  assert.deepEqual(layerViolations, [], `L0->L4 / src internal layering violations detected:\n${layerViolations.join('\n')}`);
+  assert.deepEqual(extViolations, [], `src/ extension uniformity & Node 22.0 CJS compatibility violations:\n${extViolations.join('\n')}`);
 
   // 3) Cycle detection via DFS (including Worker edges)
   const visited = new Set();

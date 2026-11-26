@@ -45,44 +45,56 @@ function stripJsComments(src) {
 
 const ALL_FILES = listRepoFiles();
 
-test('Law 7a: CDP domain permanent allowlist (only Page.* / Runtime.* / Target.* / Browser.close)', () => {
-  const FORBIDDEN_CDP_DOMAINS = [
-    'Network',
-    'Fetch',
-    'Debugger',
-    'Input',
-    'Emulation',
-    'DOM',
-    'CSS',
-    'Overlay',
-    'Security',
-    'Storage',
-    'SystemInfo',
-    'Memory',
-    'HeapProfiler',
-    'Profiler',
-    'Tracing',
-    'Inspector',
-    'Performance',
-  ];
-  const cdpCallRe = /['"]([A-Z][A-Za-z]+\.[a-z][A-Za-z0-9]+)['"]/g;
-  const knownDomains = new Set(['Page', 'Runtime', 'Target', 'Browser', ...FORBIDDEN_CDP_DOMAINS]);
-  const violations = [];
+test('Law 7a: CDP domain strict allowlist (only Page.* / Runtime.* / Target.* / Browser.close; probe read-only Performance)', () => {
+  // 1) Strict context-aware allowlist: ANY Domain.method literal in .send/.sendAsync/.on/method: fails unless explicitly allowlisted
+  //    (catches known AND unknown/future CDP domains alike, including Audits.*, DOMStorage.*, IndexedDB.*, ServiceWorker.*, IO.*, Log.*, etc.)
+  const cdpProtocolCallRe =
+    /(?:\.(?:send(?:Async)?|on)\s*\(\s*|['"]?method['"]?\s*[:=]\s*|\[\s*['"]method['"]\s*\]\s*=\s*)['"]([A-Z][A-Za-z0-9]+\.[a-z][A-Za-z0-9]+)['"]/gi;
+  // 2) Comprehensive raw-string backstop across all known non-allowlisted CDP domains (blocks indirect variable passing like const m = 'Audits.enable'; s.send(m))
+  const KNOWN_CDP_DOMAINS = new Set([
+    'Accessibility', 'Animation', 'Audits', 'Autofill', 'BackgroundService', 'Browser',
+    'CSS', 'CacheStorage', 'Cast', 'Console', 'DOM', 'DOMDebugger', 'DOMSnapshot', 'DOMStorage',
+    'Database', 'Debugger', 'DeviceAccess', 'DeviceOrientation', 'Emulation', 'EventBreakpoints',
+    'Extensions', 'FedCm', 'Fetch', 'FileSystem', 'HeadlessExperimental', 'HeapProfiler', 'IO',
+    'IndexedDB', 'Input', 'Inspector', 'LayerTree', 'Log', 'Media', 'Memory', 'Network', 'Overlay',
+    'PWA', 'Page', 'Performance', 'PerformanceTimeline', 'Preload', 'Profiler', 'Runtime', 'Schema',
+    'Security', 'ServiceWorker', 'Storage', 'SystemInfo', 'Target', 'Tethering', 'Tracing',
+    'WebAudio', 'WebAuthn',
+  ]);
+  const rawCdpLiteralRe = /['"]([A-Z][A-Za-z0-9]+\.[a-z][A-Za-z0-9]+)['"]/g;
+  const PROBE_READONLY_METHODS = new Set(['Performance.enable', 'Performance.getMetrics']);
 
+  const isAllowedCdpMethod = (rel, method) => {
+    const domain = method.split('.')[0];
+    if (domain === 'Page' || domain === 'Runtime' || domain === 'Target' || method === 'Browser.close') {
+      return true;
+    }
+    if (rel === 'scripts/probe-host-compat.mjs' && PROBE_READONLY_METHODS.has(method)) {
+      return true;
+    }
+    return false;
+  };
+
+  const violations = [];
   for (const rel of ALL_FILES) {
     if (rel.startsWith('test/') || !/\.(?:mjs|cjs|js|cs|swift)$/.test(rel)) continue;
     const clean = stripJsComments(fs.readFileSync(path.join(ROOT, rel), 'utf8'));
-    for (const m of clean.matchAll(cdpCallRe)) {
+    const seenInFile = new Set();
+
+    for (const m of clean.matchAll(cdpProtocolCallRe)) {
+      const method = m[1];
+      if (!isAllowedCdpMethod(rel, method) && !seenInFile.has(method)) {
+        seenInFile.add(method);
+        violations.push(`${rel}: non-allowlisted CDP call "${method}"`);
+      }
+    }
+    for (const m of clean.matchAll(rawCdpLiteralRe)) {
       const method = m[1];
       const domain = method.split('.')[0];
-      if (!knownDomains.has(domain)) continue;
-      const allowed =
-        domain === 'Page' ||
-        domain === 'Runtime' ||
-        domain === 'Target' ||
-        method === 'Browser.close';
-      if (!allowed) {
-        violations.push(`${rel}: forbidden CDP method "${method}"`);
+      if (!KNOWN_CDP_DOMAINS.has(domain)) continue;
+      if (!isAllowedCdpMethod(rel, method) && !seenInFile.has(method)) {
+        seenInFile.add(method);
+        violations.push(`${rel}: forbidden CDP method literal "${method}"`);
       }
     }
   }
@@ -90,7 +102,7 @@ test('Law 7a: CDP domain permanent allowlist (only Page.* / Runtime.* / Target.*
   assert.deepEqual(
     violations,
     [],
-    `CDP permanent allowlist violation (only Page.*/Runtime.*/Target.*/Browser.close permitted):\n${violations.join('\n')}`
+    `CDP strict allowlist violation (only Page.*/Runtime.*/Target.*/Browser.close permitted):\n${violations.join('\n')}`
   );
 });
 
@@ -130,8 +142,20 @@ test('Law 7c: Repo-wide AV redline gate (including vendor/, src/, installer/ and
     { id: 'wscript', re: /\bWScript\.Shell\b/gi },
     { id: 'emptyWorkingSet', re: /\bEmptyWorkingSet\b/gi },
     { id: 'taskkill', re: /\b(?:taskkill|Stop-Process)\b/gi },
-    { id: 'inlineNodeDashE', re: /\bspawnArgs\s*=\s*\[\s*['"]-e['"]/g },
   ];
+
+  // Hardened variable-name-agnostic inline `node -e` / `--eval` guard:
+  // Blocks passing destructive/self-delete or ad-hoc inline JS code to spawn/execFile regardless of variable naming.
+  const ALLOWED_READONLY_DASH_E_PROBES = new Set([
+    'src/platform/host-relaunch.cjs',
+    'tools/patch-asar.cjs',
+  ]);
+  const DESTRUCTIVE_INLINE_CODE_RE =
+    /\b(?:rmSync|unlinkSync|rmdirSync|writeFileSync|renameSync|chmodSync|child_process)\b|\bfs\.(?:rm|unlink|rmdir)\b/;
+  const NODE_DASH_E_CALL_RE =
+    /\b(?:spawn|spawnSync|execFile|execFileSync)\s*\(\s*(?!['"](?:\/usr\/bin\/)?osascript['"])[^,\n]{1,120},\s*[^;\n]{0,200}['"](?:-e|--eval)['"]/g;
+  const NODE_DASH_E_ARRAY_RE =
+    /=\s*\[\s*['"](?:-e|--eval)['"]\s*,([^\]]{0,600})\]/g;
 
   const violations = [];
 
@@ -145,6 +169,32 @@ test('Law 7c: Repo-wide AV redline gate (including vendor/, src/, installer/ and
       const count = [...text.matchAll(rule.re)].length;
       if (count > 0) {
         violations.push(`${rel}: AV redline "${rule.id}" count=${count} (must be 0)`);
+      }
+    }
+
+    if (/\.(?:mjs|cjs|js)$/.test(rel)) {
+      const hasNodeDashE = NODE_DASH_E_CALL_RE.test(text);
+      NODE_DASH_E_CALL_RE.lastIndex = 0;
+      let hasSuspiciousArrayDashE = false;
+      for (const m of text.matchAll(NODE_DASH_E_ARRAY_RE)) {
+        const rhs = m[1] || '';
+        const isAppleScript = /osascript|on run argv|tell application|MAC_DIALOG_APPLESCRIPT|MAC_PICK_/i.test(rhs);
+        if (!isAppleScript && /\b(?:spawn|spawnSync|execFile|execFileSync)\b/.test(text)) {
+          hasSuspiciousArrayDashE = true;
+          break;
+        }
+      }
+      if (hasNodeDashE || hasSuspiciousArrayDashE) {
+        if (!ALLOWED_READONLY_DASH_E_PROBES.has(rel)) {
+          violations.push(`${rel}: AV redline "inlineNodeDashE" disallowed spawn/execFile -e/--eval invocation`);
+        } else {
+          // Even allowlisted loopback probes must never embed destructive fs/process primitives in their inline script
+          for (const m of text.matchAll(/\bprobe(?:Code|Script)\s*=\s*\[([\s\S]*?)\]\.join/g)) {
+            if (DESTRUCTIVE_INLINE_CODE_RE.test(m[1])) {
+              violations.push(`${rel}: AV redline "inlineNodeDashE" probe contains destructive primitive`);
+            }
+          }
+        }
       }
     }
 

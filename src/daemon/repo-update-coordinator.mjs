@@ -4,7 +4,7 @@ import path from 'node:path';
 import { isBlockedUncPath } from '../../vendor/omni-viewer/omni-server.mjs';
 import { RELEASES_PAGE_URL } from '../../sidecars/daemon/update-service.mjs';
 import { sanitizeSecretText } from '../../sidecars/daemon/redact.mjs';
-import { copyUpdatedRuntimeFromRepo } from '../platform/repo-sync.mjs';
+import { copyUpdatedRuntimeFromRepo } from '../platform/repo-sync.cjs';
 import { PKG_VERSION } from './constants.mjs';
 import { execGit, sanitizeGitRemoteUrl } from './fs-atomic.mjs';
 
@@ -164,7 +164,7 @@ export const repoUpdateMethods = {
           changedFiles = diffOut.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
         } catch {}
       }
-      const needsHardReload = changedFiles.some((f) => /^(?:sidecars\/|src\/daemon\/|installer\/|cdp\.js$)/.test(f));
+      const needsHardReload = changedFiles.some((f) => /^(?:sidecars\/|src\/|installer\/|cdp\.js$)/.test(f));
 
       let hotReloaded = false;
       if (updated) {

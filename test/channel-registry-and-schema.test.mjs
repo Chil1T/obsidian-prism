@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
 import { createRequire } from 'node:module';
-import { PURGE_DATA_FILES as MANIFEST_PURGE_DATA_FILES } from '../src/platform/install-manifest.mjs';
+import { PURGE_DATA_FILES as MANIFEST_PURGE_DATA_FILES } from '../src/platform/install-manifest.cjs';
 import { collectNativePluginEntries, createInstallManifestPayload } from '../scripts/build-common.mjs';
 
 const require = createRequire(import.meta.url);
@@ -240,7 +240,7 @@ test('CHANNEL_REGISTRY contract covers all 16 delayed/on-demand channels with va
   }
 });
 
-test('PURGE_DATA_FILES aligns 100% with src/platform/install-manifest.mjs and cdp.js Facade preserves all 151 legacy exports', () => {
+test('PURGE_DATA_FILES aligns 100% with src/platform/install-manifest.cjs and cdp.js Facade preserves all 151 legacy exports', () => {
   assert.deepEqual([...cdp.PURGE_DATA_FILES], [...MANIFEST_PURGE_DATA_FILES]);
 
   const missing = LEGACY_CDP_EXPORTS.filter((k) => !Object.prototype.hasOwnProperty.call(cdp, k));

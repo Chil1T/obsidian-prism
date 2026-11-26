@@ -20,8 +20,8 @@ import {
   shouldExcludeSyncRelPath,
   buildInstallManifest,
   applyManifestAtomicUpgrade,
-} from '../src/platform/install-manifest.mjs';
-import { copyUpdatedRuntimeFromRepo } from '../src/platform/repo-sync.mjs';
+} from '../src/platform/install-manifest.cjs';
+import { copyUpdatedRuntimeFromRepo, syncPluginDirWithManifest } from '../src/platform/repo-sync.cjs';
 import { collectNativePluginEntries, createInstallManifestPayload } from '../scripts/build-common.mjs';
 import { buildLinuxPortable, parseTarEntries, ARCHIVE_ROOT_PREFIX } from '../scripts/build-linux.mjs';
 import { buildInstaller } from '../scripts/build-installer.mjs';
@@ -577,3 +577,173 @@ test(
     }
   }
 );
+
+test('Rollback failure preserves .rollback-* backup directory on disk and reports backup path clearly in error', () => {
+  const tmpDir = mkTmp('prism-rb-preserve-');
+  try {
+    const targetDir = path.join(tmpDir, 'plugin');
+    fs.mkdirSync(targetDir, { recursive: true });
+    const origA = '// original a.js v1\n';
+    const origB = '// original b.js v1\n';
+    fs.writeFileSync(path.join(targetDir, 'a.js'), origA, 'utf8');
+    fs.writeFileSync(path.join(targetDir, 'b.js'), origB, 'utf8');
+
+    const newA = Buffer.from('// new a.js v2\n', 'utf8');
+    const newB = Buffer.from('// new b.js v2\n', 'utf8');
+    const manifest = buildInstallManifest({
+      version: '1.0.8-beta.3',
+      entries: [
+        { path: 'a.js', scope: 'plugin', data: newA },
+        { path: 'b.js', scope: 'plugin', data: newB },
+      ],
+    });
+
+    let caught = null;
+    try {
+      applyManifestAtomicUpgrade({
+        targetDir,
+        stagedFiles: [
+          { path: 'a.js', data: newA },
+          { path: 'b.js', data: newB },
+        ],
+        manifest,
+        _testHooks: {
+          sleepSync() {},
+          beforeCommitFile(relPath) {
+            if (relPath === 'b.js') {
+              const e = new Error('Simulated commit failure on b.js');
+              e.code = 'EIO';
+              throw e;
+            }
+          },
+          rollbackRenameSync() {
+            const e = new Error('Simulated rollback rename failure');
+            e.code = 'EIO';
+            throw e;
+          },
+          rollbackCopyFileSync() {
+            const e = new Error('Simulated rollback copy failure');
+            e.code = 'EIO';
+            throw e;
+          },
+        },
+      });
+    } catch (err) {
+      caught = err;
+    }
+
+    assert.ok(caught, 'Expected atomic upgrade to throw when commit and rollback fail');
+    assert.equal(caught.rolledBack, false, 'rolledBack must be false when rollback has failed files');
+    assert.equal(caught.rollbackResult?.ok, false);
+    assert.ok(caught.rollbackResult?.failedFiles?.some((f) => f.path === 'a.js'));
+    assert.ok(typeof caught.rollbackBackupDir === 'string' && caught.rollbackBackupDir.length > 0);
+    assert.ok(
+      caught.message.includes(caught.rollbackBackupDir),
+      'Error message must clearly print preserved .rollback-* backup directory path'
+    );
+    assert.equal(fs.existsSync(caught.rollbackBackupDir), true, '.rollback-* directory MUST be preserved when rollback fails');
+    assert.equal(
+      fs.readFileSync(path.join(caught.rollbackBackupDir, 'a.js'), 'utf8'),
+      origA,
+      'Original backup snapshot of a.js must remain intact inside preserved .rollback-* directory'
+    );
+    // Staging dir should still be cleaned up
+    assert.equal(
+      fs.readdirSync(targetDir).some((n) => n.startsWith('.staging-')),
+      false,
+      '.staging-* temp directory should still be cleaned up'
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('Production sync paths (repo-sync.cjs & tools/install-plugin.cjs) execute real applyManifestAtomicUpgrade transactions and protect user data', async () => {
+  const tmpDir = mkTmp('prism-prod-atomic-');
+  try {
+    // 1) copyUpdatedRuntimeFromRepo routes through applyManifestAtomicUpgrade (rolls back mid-commit failure & preserves user files)
+    const fakeRepo = path.join(tmpDir, 'repo');
+    const fakePlugin = path.join(tmpDir, 'plugin-repo-sync');
+    fs.mkdirSync(path.join(fakeRepo, 'src', 'utils'), { recursive: true });
+    fs.mkdirSync(path.join(fakePlugin, 'wallpapers'), { recursive: true });
+    fs.writeFileSync(path.join(fakeRepo, 'style.css'), '/* v2 style */\n', 'utf8');
+    fs.writeFileSync(path.join(fakeRepo, 'ui-runtime.js'), '// v2 runtime\n', 'utf8');
+    fs.writeFileSync(path.join(fakeRepo, 'src', 'utils', 'demo.cjs'), 'module.exports = 2;\n', 'utf8');
+    fs.writeFileSync(path.join(fakePlugin, 'style.css'), '/* v1 style */\n', 'utf8');
+    fs.writeFileSync(path.join(fakePlugin, 'ui-runtime.js'), '// v1 runtime\n', 'utf8');
+    fs.writeFileSync(path.join(fakePlugin, 'config.json'), '{"palette":"warm","userKeep":true}\n', 'utf8');
+    fs.writeFileSync(path.join(fakePlugin, 'custom.css'), '/* user-css-keep */\n', 'utf8');
+    fs.writeFileSync(path.join(fakePlugin, 'wallpapers', 'bg.png'), 'USER-BG-BYTES', 'utf8');
+
+    let sawStagingInRepoSync = false;
+    assert.throws(
+      () =>
+        copyUpdatedRuntimeFromRepo(fakeRepo, fakePlugin, ['style.css', 'ui-runtime.js'], {
+          _testHooks: {
+            afterStage({ stagingDir }) {
+              sawStagingInRepoSync = fs.existsSync(stagingDir);
+            },
+            beforeCommitFile(relPath) {
+              if (relPath === 'ui-runtime.js') {
+                const e = new Error('Simulated failure during repo-sync commit');
+                e.code = 'EIO';
+                throw e;
+              }
+            },
+          },
+        }),
+      (err) => err && err.code === 'EIO' && err.rolledBack === true
+    );
+    assert.equal(sawStagingInRepoSync, true, 'copyUpdatedRuntimeFromRepo must execute Stage 1 staging');
+    assert.equal(fs.readFileSync(path.join(fakePlugin, 'style.css'), 'utf8'), '/* v1 style */\n', 'style.css must roll back to v1');
+    assert.equal(fs.readFileSync(path.join(fakePlugin, 'ui-runtime.js'), 'utf8'), '// v1 runtime\n', 'ui-runtime.js must remain v1');
+    assert.equal(fs.existsSync(path.join(fakePlugin, 'src', 'utils', 'demo.cjs')), false, 'new file must be removed on rollback');
+    assert.equal(fs.readFileSync(path.join(fakePlugin, 'config.json'), 'utf8'), '{"palette":"warm","userKeep":true}\n');
+    assert.equal(fs.readFileSync(path.join(fakePlugin, 'custom.css'), 'utf8'), '/* user-css-keep */\n');
+    assert.equal(fs.readFileSync(path.join(fakePlugin, 'wallpapers', 'bg.png'), 'utf8'), 'USER-BG-BYTES');
+
+    // Successful run updates atomically while still protecting user data
+    const syncedCount = copyUpdatedRuntimeFromRepo(fakeRepo, fakePlugin, ['style.css', 'ui-runtime.js']);
+    assert.equal(syncedCount, 3);
+    assert.equal(fs.readFileSync(path.join(fakePlugin, 'style.css'), 'utf8'), '/* v2 style */\n');
+    assert.equal(fs.readFileSync(path.join(fakePlugin, 'src', 'utils', 'demo.cjs'), 'utf8'), 'module.exports = 2;\n');
+    assert.equal(fs.readFileSync(path.join(fakePlugin, 'config.json'), 'utf8'), '{"palette":"warm","userKeep":true}\n');
+    assert.equal(fs.readFileSync(path.join(fakePlugin, 'custom.css'), 'utf8'), '/* user-css-keep */\n');
+    assert.equal(fs.readFileSync(path.join(fakePlugin, 'wallpapers', 'bg.png'), 'utf8'), 'USER-BG-BYTES');
+
+    // 2) tools/install-plugin.cjs installPlugin & syncPluginDirWithManifest execute real atomic transactions
+    const hostCfgDir = path.join(tmpDir, '.gemini', 'config');
+    const installTarget = path.join(hostCfgDir, 'plugins', 'obsidian-prism');
+    fs.mkdirSync(path.join(installTarget, 'wallpapers'), { recursive: true });
+    fs.writeFileSync(path.join(installTarget, 'config.json'), '{"palette":"nord","keep":42}\n', 'utf8');
+    fs.writeFileSync(path.join(installTarget, 'custom.css'), '/* install user css */\n', 'utf8');
+    fs.writeFileSync(path.join(installTarget, 'wallpapers', 'hero.webp'), 'USER-HERO', 'utf8');
+
+    let sawStagingInInstall = false;
+    let sawVerifyInInstall = false;
+    const installRes = await installPluginMod.installPlugin({
+      sourceDir: ROOT,
+      targetDir: installTarget,
+      hostConfigDir: hostCfgDir,
+      startDaemon: false,
+      syncShortcuts: false,
+      _atomicTestHooks: {
+        afterStage({ stagingDir }) {
+          sawStagingInInstall = fs.existsSync(stagingDir);
+        },
+        beforeVerify({ deployPlan }) {
+          sawVerifyInInstall = Array.isArray(deployPlan) && deployPlan.length > 10;
+        },
+      },
+    });
+    assert.equal(installRes.ok, true);
+    assert.equal(sawStagingInInstall, true, 'installPlugin must run applyManifestAtomicUpgrade staging');
+    assert.equal(sawVerifyInInstall, true, 'installPlugin must run applyManifestAtomicUpgrade post-commit SHA-256 verification');
+    assert.equal(fs.readFileSync(path.join(installTarget, 'config.json'), 'utf8'), '{"palette":"nord","keep":42}\n');
+    assert.equal(fs.readFileSync(path.join(installTarget, 'custom.css'), 'utf8'), '/* install user css */\n');
+    assert.equal(fs.readFileSync(path.join(installTarget, 'wallpapers', 'hero.webp'), 'utf8'), 'USER-HERO');
+    assert.equal(typeof syncPluginDirWithManifest, 'function');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
