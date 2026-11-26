@@ -174,7 +174,6 @@ node tools/install-plugin.cjs --status
 ```bash
 npm run inject                 # 单次实时注入当前已打开的 Antigravity 窗口
 npm run remove                 # 移除全部注入样式与组件，立即恢复宿主原生界面
-npm run clean:legacy           # 清理历史旧版 app.asar 遗留块（保留汉化与外部插件）
 npm run archive:conversations  # 检查本地对话库体积并离线安全归档历史子代理会话（支持无损还原）
 npm test                       # 运行跨模块安全、性能与回归测试套件
 npm run build:installer        # 编译 Windows 独立安装器 (.exe)

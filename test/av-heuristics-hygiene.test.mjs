@@ -316,7 +316,7 @@ test('av-hygiene 5: full-repo runtime scripts have zero -EncodedCommand, -Window
     .readdirSync(daemonDir)
     .filter((f) => f.endsWith('.mjs'))
     .map((f) => `sidecars/daemon/${f}`);
-  const targets = ['cdp.js', 'tools/patch-asar.cjs', 'tools/install-plugin.cjs', ...daemonFiles];
+  const targets = ['cdp.js', 'src/platform/process-probe.cjs', 'tools/install-plugin.cjs', ...daemonFiles];
   const forbidden = [
     ['-Encoded' + 'Command', new RegExp('-Encoded' + 'Command\\b', 'i')],
     ['-WindowStyle Hidden', new RegExp('-WindowStyle\\s+Hidden', 'i')],

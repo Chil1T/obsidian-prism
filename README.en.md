@@ -174,7 +174,6 @@ node tools/install-plugin.cjs --status
 ```bash
 npm run inject                 # One-shot live injection into running Antigravity windows
 npm run remove                 # Cleanly remove all styles/widgets and restore stock UI
-npm run clean:legacy           # Strip legacy blocks from historical app.asar archives
 npm run archive:conversations  # Inspect conversation DB bloat & safely archive old subagent sessions offline (reversible)
 npm test                       # Run cross-module security, bundle & regression tests
 npm run build:installer        # Build standalone Windows installer (.exe)

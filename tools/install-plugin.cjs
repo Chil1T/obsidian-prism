@@ -390,57 +390,6 @@ function atomicWriteFileSync(filePath, content, options = {}) {
   }
 }
 
-function safeCopyFileNoSymlink(src, dst) {
-  const srcStat = assertNotSymbolicLink(src, "source");
-  if (!srcStat || !srcStat.isFile()) {
-    throw new Error(`Refusing non-regular source file: ${src}`);
-  }
-  assertNotSymbolicLink(dst, "destination");
-  const dstDir = path.dirname(dst);
-  assertNotSymbolicLink(dstDir, "destination directory");
-  fs.mkdirSync(dstDir, { recursive: true });
-  assertNotSymbolicLink(dstDir, "destination directory");
-
-  let lastErr = null;
-  for (let attempt = 0; attempt <= FS_RETRY_BACKOFFS_MS.length; attempt++) {
-    assertNotSymbolicLink(dst, "destination");
-    clearReadOnlyIfRegularFile(dst, "destination");
-    try {
-      fs.copyFileSync(src, dst);
-      return;
-    } catch (err) {
-      if (!isTransientFsError(err)) {
-        throw err;
-      }
-      // 遇 Windows 共享读取占用时回退临时文件原子重命名替换
-      const tmpPath = `${dst}.tmp.${process.pid}.${crypto.randomBytes(6).toString("hex")}`;
-      try {
-        fs.copyFileSync(src, tmpPath, fs.constants.COPYFILE_EXCL);
-        assertNotSymbolicLink(dst, "destination");
-        clearReadOnlyIfRegularFile(dst, "destination");
-        fs.renameSync(tmpPath, dst);
-        return;
-      } catch (fallbackErr) {
-        try {
-          fs.unlinkSync(tmpPath);
-        } catch {}
-        lastErr = fallbackErr || err;
-        if (attempt < FS_RETRY_BACKOFFS_MS.length) {
-          sleepSync(FS_RETRY_BACKOFFS_MS[attempt]);
-        }
-      }
-    }
-  }
-  if (lastErr) {
-    const wrapped = new Error(
-      `Failed to copy "${dst}" (${lastErr.code || lastErr.message}); file may be locked by Antigravity or antivirus software`
-    );
-    wrapped.code = lastErr.code;
-    wrapped.cause = lastErr;
-    throw wrapped;
-  }
-}
-
 function syncHostPluginRegistry(configDir, enable) {
   if (!configDir) return false;
   const hostConfigPath = path.join(configDir, "config.json");
@@ -1321,26 +1270,63 @@ function removeLinuxLosslessLauncher(opts = {}) {
 
 const DIRS_TO_SYNC = ["assets", "src", "vendor", "sidecars"];
 
-function copyDirRecursiveSync(srcDir, dstDir, relPrefix = "", prot = im.PROTECTED_USER_PATHS) {
+function copyDirRecursiveSync(srcDir, dstDir, relPrefix = "", prot = im.PROTECTED_USER_PATHS, opts = null) {
   const st = assertNotSymbolicLink(srcDir, "source directory");
   if (!st) return 0;
   if (!st.isDirectory()) throw new Error(`Refusing non-directory source: ${srcDir}`);
-  assertNotSymbolicLink(dstDir, "destination directory");
-  fs.mkdirSync(dstDir, { recursive: true });
-  assertNotSymbolicLink(dstDir, "destination directory");
-  let copied = 0;
-  for (const e of fs.readdirSync(srcDir, { withFileTypes: true })) {
-    const rel = relPrefix ? `${relPrefix}/${e.name}` : e.name;
-    if (im.shouldExcludeSyncRelPath(rel)) continue;
-    const s = path.join(srcDir, e.name), d = path.join(dstDir, e.name);
-    if (e.isSymbolicLink()) throw new Error(`Refusing symbolic link entry: ${s}`);
-    const es = assertNotSymbolicLink(s, "source");
-    assertNotSymbolicLink(d, "destination");
-    if (im.isProtectedUserPath(rel, prot) && fs.existsSync(d)) continue;
-    if (e.isDirectory() || (es && es.isDirectory())) copied += copyDirRecursiveSync(s, d, rel, prot);
-    else if (e.isFile() || (es && es.isFile())) { safeCopyFileNoSymlink(s, d); copied += 1; }
+  const dstSt = assertNotSymbolicLink(dstDir, "destination directory");
+  if (dstSt && !dstSt.isDirectory()) throw new Error(`Refusing non-directory destination: ${dstDir}`);
+
+  const mergedProt = im.mergeProtectedUserPaths(Array.isArray(prot) ? prot : []);
+  const normPrefix = String(relPrefix || "").replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  const stagedEntries = [];
+  const extraProtectedForTarget = [...mergedProt];
+
+  const collect = (curSrc, curDst, subPrefix) => {
+    for (const e of fs.readdirSync(curSrc, { withFileTypes: true })) {
+      const subRel = subPrefix ? `${subPrefix}/${e.name}` : e.name;
+      const checkRel = normPrefix ? `${normPrefix}/${subRel}` : subRel;
+      if (im.shouldExcludeSyncRelPath(checkRel) || im.shouldExcludeSyncRelPath(subRel)) continue;
+      const s = path.join(curSrc, e.name);
+      const d = path.join(curDst, e.name);
+      if (e.isSymbolicLink()) throw new Error(`Refusing symbolic link entry: ${s}`);
+      const es = assertNotSymbolicLink(s, "source");
+      assertNotSymbolicLink(d, "destination");
+      if (im.isProtectedUserPath(checkRel, mergedProt) || im.isProtectedUserPath(subRel, mergedProt)) {
+        extraProtectedForTarget.push(subRel);
+        continue;
+      }
+      if (e.isDirectory() || (es && es.isDirectory())) {
+        collect(s, d, subRel);
+      } else if (e.isFile() || (es && es.isFile())) {
+        stagedEntries.push({ path: subRel, scope: "plugin", data: fs.readFileSync(s) });
+      }
+    }
+  };
+
+  collect(srcDir, dstDir, "");
+
+  if (stagedEntries.length === 0) {
+    fs.mkdirSync(dstDir, { recursive: true });
+    assertNotSymbolicLink(dstDir, "destination directory");
+    return 0;
   }
-  return copied;
+
+  const txManifest = im.buildInstallManifest({
+    version: resolveDefaultPluginVersion(ROOT_DIR),
+    entries: stagedEntries,
+    obsoletePaths: opts && Array.isArray(opts.obsoletePaths) ? opts.obsoletePaths : [],
+    extraProtectedPaths: extraProtectedForTarget,
+  });
+  const res = im.applyManifestAtomicUpgrade({
+    targetDir: dstDir,
+    stagedFiles: stagedEntries,
+    manifest: txManifest,
+    scope: "plugin",
+    allowSeedProtected: false,
+    _testHooks: opts && typeof opts === "object" ? opts._testHooks || null : null,
+  });
+  return res.appliedFiles.length;
 }
 
 const DAEMON_STOP_POLL_MS = 30;
