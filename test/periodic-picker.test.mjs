@@ -7852,7 +7852,7 @@ test('v1.0.8-beta perf-dom-bg: 3D hit-layer pointer isolation, event bubble fire
     ['vendor/wallpaper/wallpaper-client.js', "html.getAttribute('data-ag-pp-open') === '1'"],
     ['conv-aura.js', "const PP_OPEN = 'data-ag-pp-open'"],
     ['home-ripple-host.js', "const PP_OPEN = 'data-ag-pp-open'"],
-    ['style.css', ':is([data-ag-cs-win-blur="1"],[data-ag-pp-open="1"]:is([data-ag-cs-perf-mode="performance"],[data-ag-cs-perf-mode="eco"]))'],
+    ['style.css', ':is([data-ag-cs-win-blur="1"],[data-ag-pp-open="1"]):is([data-ag-cs-perf-mode="performance"],[data-ag-cs-perf-mode="eco"])'],
   ];
   for (const [relFile, needle] of checkSleepFiles) {
     const content = fs.readFileSync(path.join(ROOT_DIR, relFile), 'utf8');

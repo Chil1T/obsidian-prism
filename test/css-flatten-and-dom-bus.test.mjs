@@ -158,7 +158,8 @@ test('Compile-time css-flatten.cjs: semantic equivalence across @media/@supports
   assert.ok(unpackedCss.includes('html[data-ag-cs-style]'), 'Flattened CSS must retain root scope selectors');
   assert.ok(unpackedCss.includes('@keyframes ag-cs-orbit-spin'), 'Flattened CSS must preserve @keyframes verbatim');
   assert.ok(unpackedCss.includes('@property --_fa'), 'Flattened CSS must preserve @property verbatim');
-  assert.ok(unpackedCss.includes('data-ag-perf-busy="1"'), 'Flattened CSS must include transient perf-busy blur rules');
+  assert.ok(unpackedCss.includes('data-ag-cs-perf-mode="performance"'), 'Flattened CSS must include performance-mode blur degradation rules');
+  assert.equal(unpackedCss.includes('data-ag-perf-busy="1"'), false, 'Flattened CSS must not strip overlay blur on transient data-ag-perf-busy');
 });
 
 test('dom-bus.js Read/Write Batcher: Proxy DOM asserts strict 0 Forced Reflow (all reads before any write) + key deduplication', () => {
@@ -511,10 +512,12 @@ test('Issue #97 flexible model selector width, Blink CSS pruning, scoped motion=
   // Narrow collapse guard still intact so telemetry/right buttons never break
   assert.ok(css.includes('&[data-t~="1"] [data-testid="model-selector-trigger"]>span:not(.ag-cs-model-glyph):not(.ag-pp-mini-keycap)'));
 
-  // Blink content-visibility expansion + bleed exemption + busy/performance blur suppression
+  // Blink content-visibility legacy guards + bleed exemption + non-flickering performance/motion=off blur suppression
   assert.ok(css.includes('[data-testid="conversation-row-history"]:not([data-ag-cs-bleed="1"]){content-visibility:auto;contain-intrinsic-size:auto 44px;'));
   assert.ok(/pre:not\(:last-child\):not\(\[data-ag-cs-bleed="1"\]\)\{content-visibility:auto;contain-intrinsic-size:auto 180px;?\}/.test(css));
-  assert.ok(css.includes('[data-ag-perf-busy="1"],[data-ag-cs-perf-mode="performance"],[data-ag-cs-stream-active="1"]'));
+  assert.ok(css.includes(':is([data-ag-cs-perf-mode="performance"],[data-ag-cs-motion="off"])'));
+  assert.equal(css.includes('data-ag-perf-busy="1"'), false, 'style.css must not toggle backdrop-filter on transient perf-busy');
+  assert.equal(css.includes('data-ag-cs-stream-active="1"'), false, 'style.css must not toggle backdrop-filter on transient stream-active');
 
   // ui-runtime.js motion="off" has ZERO universal * wildcard injection
   const uiSrc = fs.readFileSync(path.join(ROOT, 'ui-runtime.js'), 'utf8');
