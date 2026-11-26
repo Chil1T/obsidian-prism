@@ -1,21 +1,23 @@
-// Obsidian Prism 统一安装清单（schemaVersion: 2, layoutVersion: 2）与 4 阶段原子事务升级引擎
+// Obsidian Prism 统一安装清单（schemaVersion: 2, layoutVersion: 2）与 4 阶段原子事务升级引擎（纯 CJS，兼容 Node 22.0+）
 // 零外部依赖（仅 Node.js >= 22 内置模块），全仓受保护用户路径与清理白名单单一真相源。
-import crypto from 'node:crypto';
-import fs from 'node:fs';
-import path from 'node:path';
+'use strict';
 
-export const INSTALL_MANIFEST_FILENAME = 'install-manifest.json';
-export const INSTALL_MANIFEST_SCHEMA_VERSION = 2;
-export const INSTALL_MANIFEST_LAYOUT_VERSION = 2;
-export const VALID_SCOPES = Object.freeze(['install', 'plugin', 'both']);
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const path = require('node:path');
 
-export const PROTECTED_USER_PATHS = Object.freeze([
+const INSTALL_MANIFEST_FILENAME = 'install-manifest.json';
+const INSTALL_MANIFEST_SCHEMA_VERSION = 2;
+const INSTALL_MANIFEST_LAYOUT_VERSION = 2;
+const VALID_SCOPES = Object.freeze(['install', 'plugin', 'both']);
+
+const PROTECTED_USER_PATHS = Object.freeze([
   'config.json', 'custom.css', '.bundle-cache.json', '.daemon.pid', '.watch.pid',
   '.relaunch-prompt-state.json', '.pending-restore-run-in-bg.json', 'repo-meta.json',
   'wallpapers/', 'backups/',
 ]);
-export const USER_OWNED_ASSET_PATHS = Object.freeze(['custom.css', 'wallpapers/', 'backups/']);
-export const PURGE_DATA_FILES = Object.freeze([
+const USER_OWNED_ASSET_PATHS = Object.freeze(['custom.css', 'wallpapers/', 'backups/']);
+const PURGE_DATA_FILES = Object.freeze([
   'obsidian-prism-config.backup.json',
   'obsidian-prism-thought.json',
   'obsidian-prism-thought-cache.json',
@@ -26,22 +28,22 @@ export const PURGE_DATA_FILES = Object.freeze([
   'obsidian-prism-wallpaper.json',
   'obsidian-prism-suggester.json',
 ]);
-export const DEFAULT_OBSOLETE_PATHS = Object.freeze([]);
-export const ATOMIC_UPGRADE_RETRY_BACKOFFS_MS = Object.freeze([100, 250, 500]);
+const DEFAULT_OBSOLETE_PATHS = Object.freeze([]);
+const ATOMIC_UPGRADE_RETRY_BACKOFFS_MS = Object.freeze([100, 250, 500]);
 
 const EXCLUDED_SYNC_PREFIXES = Object.freeze(['assets/screenshots']);
 const EXCLUDED_SYNC_NAMES = new Set(['.ds_store', '__pycache__', '.daemon.pid', '.watch.pid', '.watch.lock']);
 
-export function computeBufferSha256(buf) {
+function computeBufferSha256(buf) {
   const raw = Buffer.isBuffer(buf) ? buf : Buffer.from(String(buf ?? ''), 'utf8');
   return crypto.createHash('sha256').update(raw).digest('hex');
 }
 
-export function computeFileSha256(filePath) {
+function computeFileSha256(filePath) {
   return computeBufferSha256(fs.readFileSync(filePath));
 }
 
-export function isSafeManagedRelPath(relPath, { allowTrailingSlash = false } = {}) {
+function isSafeManagedRelPath(relPath, { allowTrailingSlash = false } = {}) {
   if (typeof relPath !== 'string' || relPath.length === 0 || relPath.trim() !== relPath) return false;
   if (/[\0\r\n]/.test(relPath)) return false;
   const unified = relPath.replace(/\\/g, '/');
@@ -57,7 +59,7 @@ export function isSafeManagedRelPath(relPath, { allowTrailingSlash = false } = {
   return normalized === core && !normalized.startsWith('../') && !normalized.startsWith('/');
 }
 
-export function shouldExcludeSyncRelPath(relPath) {
+function shouldExcludeSyncRelPath(relPath) {
   if (typeof relPath !== 'string' || !relPath.trim()) return true;
   const norm = relPath.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').toLowerCase();
   if (!norm) return true;
@@ -82,7 +84,7 @@ function normalizeProtectedRule(rule) {
   return { canonical: isDir ? `${core}/` : core, lower: core.toLowerCase() };
 }
 
-export function isProtectedUserPath(relPath, protectedPaths = PROTECTED_USER_PATHS) {
+function isProtectedUserPath(relPath, protectedPaths = PROTECTED_USER_PATHS) {
   if (typeof relPath !== 'string' || !relPath.trim()) return false;
   const clean = relPath.trim().replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
   if (!clean) return false;
@@ -95,7 +97,7 @@ export function isProtectedUserPath(relPath, protectedPaths = PROTECTED_USER_PAT
   return false;
 }
 
-export function mergeProtectedUserPaths(extraProtectedPaths = []) {
+function mergeProtectedUserPaths(extraProtectedPaths = []) {
   const seen = new Set();
   const out = [];
   for (const raw of [...PROTECTED_USER_PATHS, ...(Array.isArray(extraProtectedPaths) ? extraProtectedPaths : [])]) {
@@ -107,7 +109,7 @@ export function mergeProtectedUserPaths(extraProtectedPaths = []) {
   return out;
 }
 
-export function classifyObsoleteCandidate(relPath, protectedPaths = PROTECTED_USER_PATHS) {
+function classifyObsoleteCandidate(relPath, protectedPaths = PROTECTED_USER_PATHS) {
   if (!isSafeManagedRelPath(relPath)) return { allowed: false, reason: 'unsafe_path' };
   if (isProtectedUserPath(relPath, mergeProtectedUserPaths(protectedPaths))) {
     return { allowed: false, reason: 'protected_user_path' };
@@ -115,7 +117,7 @@ export function classifyObsoleteCandidate(relPath, protectedPaths = PROTECTED_US
   return { allowed: true, reason: 'ok', normalizedPath: relPath.replace(/\\/g, '/') };
 }
 
-export function buildInstallManifest({
+function buildInstallManifest({
   version = '0.0.0',
   entries = [],
   obsoletePaths = [],
@@ -168,7 +170,7 @@ export function buildInstallManifest({
   };
 }
 
-export function readInstallManifestFromDir(dirPath) {
+function readInstallManifestFromDir(dirPath) {
   if (!dirPath) return null;
   const manifestPath = path.join(dirPath, INSTALL_MANIFEST_FILENAME);
   try {
@@ -274,12 +276,12 @@ function pruneEmptyParentDirs(filePath, stopRoot) {
 
 /**
  * 4 阶段纯 Node 原子事务升级引擎：
- * 1) 同卷 .staging-<pid> 落盘并全量校验 SHA-256；
- * 2) 被覆盖受管文件与待清扫废弃文件快照到 .rollback-<pid>（严禁触碰 protectedUserPaths）；
+ * 1) 同卷 .staging-<token> 落盘并全量校验 SHA-256；
+ * 2) 被覆盖受管文件与待清扫废弃文件快照到 .rollback-<token>（严禁触碰 protectedUserPaths）；
  * 3) 原子替换到位（Windows 锁文件按 100/250/500ms 退避重试）并按 obsoletePaths 精准清扫；
- * 4) 完整性复核，任意步骤失败自动逆序从 .rollback-<pid> 完整回滚并清理暂存目录。
+ * 4) 完整性复核，任意步骤失败自动逆序从 .rollback-<token> 完整回滚；若任一文件回滚恢复失败，严禁删除 .rollback-<token> 并明示现场路径。
  */
-export function applyManifestAtomicUpgrade({
+function applyManifestAtomicUpgrade({
   targetDir,
   stagedFiles,
   manifest,
@@ -299,6 +301,9 @@ export function applyManifestAtomicUpgrade({
   };
   const renameFn = typeof hooks.renameSync === 'function' ? hooks.renameSync : fs.renameSync;
   const unlinkFn = typeof hooks.unlinkSync === 'function' ? hooks.unlinkSync : fs.unlinkSync;
+  const rollbackRenameFn = typeof hooks.rollbackRenameSync === 'function' ? hooks.rollbackRenameSync : fs.renameSync;
+  const rollbackCopyFn = typeof hooks.rollbackCopyFileSync === 'function' ? hooks.rollbackCopyFileSync : fs.copyFileSync;
+  const rollbackUnlinkFn = typeof hooks.rollbackUnlinkSync === 'function' ? hooks.rollbackUnlinkSync : fs.unlinkSync;
 
   const absTarget = path.resolve(targetDir);
   try {
@@ -361,32 +366,53 @@ export function applyManifestAtomicUpgrade({
   const committedOps = [];
   const removedObsolete = [];
 
-  const cleanupTemps = () => {
+  const cleanupTemps = ({ keepRollback = false } = {}) => {
     try { fs.rmSync(stagingDir, { recursive: true, force: true }); } catch {}
-    try { fs.rmSync(rollbackDir, { recursive: true, force: true }); } catch {}
-  };
-
-  const rollbackCommitted = () => {
-    for (let i = committedOps.length - 1; i >= 0; i--) {
-      const op = committedOps[i];
-      try {
-        if (op.existed && op.backupAbs && fs.existsSync(op.backupAbs)) {
-          fs.mkdirSync(path.dirname(op.destAbs), { recursive: true });
-          clearReadOnlyRegularFile(op.destAbs);
-          retryFsOp(() => {
-            try { fs.renameSync(op.backupAbs, op.destAbs); } catch { fs.copyFileSync(op.backupAbs, op.destAbs); }
-          }, retryOpts);
-        } else if (!op.existed) {
-          clearReadOnlyRegularFile(op.destAbs);
-          if (fs.existsSync(op.destAbs)) retryFsOp(() => fs.unlinkSync(op.destAbs), retryOpts);
-          pruneEmptyParentDirs(op.destAbs, absTarget);
-        }
-      } catch {}
+    if (!keepRollback) {
+      try { fs.rmSync(rollbackDir, { recursive: true, force: true }); } catch {}
     }
   };
 
+  const rollbackCommitted = () => {
+    const failedFiles = [];
+    for (let i = committedOps.length - 1; i >= 0; i--) {
+      const op = committedOps[i];
+      try {
+        if (op.existed) {
+          if (!op.backupAbs || !fs.existsSync(op.backupAbs)) {
+            throw new Error(`Missing rollback snapshot for "${op.relPath || op.destAbs}"`);
+          }
+          fs.mkdirSync(path.dirname(op.destAbs), { recursive: true });
+          clearReadOnlyRegularFile(op.destAbs);
+          retryFsOp(() => {
+            try {
+              rollbackRenameFn(op.backupAbs, op.destAbs);
+            } catch (renErr) {
+              if (hooks.rollbackRenameSync && !hooks.rollbackCopyFileSync && renErr && renErr._noCopyFallback) {
+                throw renErr;
+              }
+              rollbackCopyFn(op.backupAbs, op.destAbs);
+            }
+          }, retryOpts);
+        } else {
+          clearReadOnlyRegularFile(op.destAbs);
+          if (fs.existsSync(op.destAbs)) retryFsOp(() => rollbackUnlinkFn(op.destAbs), retryOpts);
+          pruneEmptyParentDirs(op.destAbs, absTarget);
+        }
+      } catch (rbErr) {
+        failedFiles.push({
+          path: op.relPath || op.destAbs,
+          destAbs: op.destAbs,
+          backupAbs: op.backupAbs || null,
+          error: String(rbErr && rbErr.message ? rbErr.message : rbErr),
+        });
+      }
+    }
+    return { ok: failedFiles.length === 0, failedFiles };
+  };
+
   try {
-    // Stage 1: 同卷 .staging-<pid> 落盘并全量校验 SHA-256
+    // Stage 1: 同卷 .staging-<token> 落盘并全量校验 SHA-256
     fs.mkdirSync(stagingDir, { recursive: true });
     for (const item of deployPlan) {
       item.stageAbs = resolveUnderRootStrict(stagingDir, item.entry.path);
@@ -404,7 +430,7 @@ export function applyManifestAtomicUpgrade({
       }
     }
 
-    // Stage 2: 将被覆盖受管文件与待清扫废弃文件快照到 .rollback-<pid>
+    // Stage 2: 将被覆盖受管文件与待清扫废弃文件快照到 .rollback-<token>
     fs.mkdirSync(rollbackDir, { recursive: true });
     for (const item of deployPlan) {
       assertNoSymlinkRelative(absTarget, item.entry.path);
@@ -444,7 +470,7 @@ export function applyManifestAtomicUpgrade({
       fs.mkdirSync(path.dirname(item.destAbs), { recursive: true });
       clearReadOnlyRegularFile(item.destAbs);
       retryFsOp(() => renameFn(item.stageAbs, item.destAbs), retryOpts);
-      committedOps.push({ destAbs: item.destAbs, existed: item.existed, backupAbs: item.backupAbs });
+      committedOps.push({ relPath: item.entry.path, destAbs: item.destAbs, existed: item.existed, backupAbs: item.backupAbs });
     }
     for (const obs of obsoletePlan) {
       if (obs.skip) continue;
@@ -460,7 +486,7 @@ export function applyManifestAtomicUpgrade({
       }
       clearReadOnlyRegularFile(obs.absPath);
       retryFsOp(() => unlinkFn(obs.absPath), retryOpts);
-      committedOps.push({ destAbs: obs.absPath, existed: true, backupAbs: obs.backupAbs });
+      committedOps.push({ relPath: obs.relPath, destAbs: obs.absPath, existed: true, backupAbs: obs.backupAbs });
       removedObsolete.push(obs.relPath);
       pruneEmptyParentDirs(obs.absPath, absTarget);
     }
@@ -476,7 +502,7 @@ export function applyManifestAtomicUpgrade({
       }
     }
 
-    cleanupTemps();
+    cleanupTemps({ keepRollback: false });
     return {
       ok: true,
       appliedFiles: deployPlan.map((d) => d.entry.path),
@@ -486,10 +512,41 @@ export function applyManifestAtomicUpgrade({
       verifiedCount: deployPlan.length,
     };
   } catch (err) {
-    rollbackCommitted();
-    cleanupTemps();
-    if (err && typeof err === 'object') err.rolledBack = true;
+    const rollbackResult = rollbackCommitted();
+    const rollbackOk = rollbackResult.ok;
+    // 任一文件回滚恢复失败时严禁删除 .rollback-<token> 备份目录，保留现场供人工或后续恢复
+    cleanupTemps({ keepRollback: !rollbackOk });
+    if (err && typeof err === 'object') {
+      err.rolledBack = rollbackOk;
+      err.rollbackResult = rollbackResult;
+      if (!rollbackOk) {
+        err.rollbackBackupDir = rollbackDir;
+        const failedNames = rollbackResult.failedFiles.map((f) => f.path).join(', ');
+        err.message = `${err.message} [ROLLBACK INCOMPLETE: failed to restore ${failedNames}; backup preserved at ${rollbackDir}]`;
+      }
+    }
     throw err;
   }
 }
 
+module.exports = {
+  INSTALL_MANIFEST_FILENAME,
+  INSTALL_MANIFEST_SCHEMA_VERSION,
+  INSTALL_MANIFEST_LAYOUT_VERSION,
+  VALID_SCOPES,
+  PROTECTED_USER_PATHS,
+  USER_OWNED_ASSET_PATHS,
+  PURGE_DATA_FILES,
+  DEFAULT_OBSOLETE_PATHS,
+  ATOMIC_UPGRADE_RETRY_BACKOFFS_MS,
+  computeBufferSha256,
+  computeFileSha256,
+  isSafeManagedRelPath,
+  shouldExcludeSyncRelPath,
+  isProtectedUserPath,
+  mergeProtectedUserPaths,
+  classifyObsoleteCandidate,
+  buildInstallManifest,
+  readInstallManifestFromDir,
+  applyManifestAtomicUpgrade,
+};

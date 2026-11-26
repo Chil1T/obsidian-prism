@@ -101,6 +101,7 @@ function compileWatcherBinary({ csc, icoPath, stageDir, watcherOut, verInfo }) {
   }
   const commonMiniJson = path.join(ROOT_DIR, 'installer', 'common', 'MiniJson.cs');
   const commonCdpClient = path.join(ROOT_DIR, 'installer', 'common', 'CdpClient.cs');
+  const commonRuntimeChannels = path.join(ROOT_DIR, 'installer', 'common', 'RuntimeChannels.cs');
   const watcherMain = path.join(ROOT_DIR, 'installer', 'watcher', 'Program.cs');
   const watcherPicker = path.join(ROOT_DIR, 'installer', 'watcher', 'FilePicker.cs');
 
@@ -122,6 +123,7 @@ function compileWatcherBinary({ csc, icoPath, stageDir, watcherOut, verInfo }) {
     watcherAsmInfoPath,
     commonMiniJson,
     commonCdpClient,
+    commonRuntimeChannels,
     watcherMain,
     watcherPicker,
   ], { stdio: 'inherit' });
@@ -246,6 +248,7 @@ function buildInstaller({
     const setupManifest = path.join(ROOT_DIR, 'installer', 'setup', 'app.manifest');
     const commonMiniJson = path.join(ROOT_DIR, 'installer', 'common', 'MiniJson.cs');
     const commonCdpClient = path.join(ROOT_DIR, 'installer', 'common', 'CdpClient.cs');
+    const commonRuntimeChannels = path.join(ROOT_DIR, 'installer', 'common', 'RuntimeChannels.cs');
     const commonInstallManifest = path.join(ROOT_DIR, 'installer', 'common', 'InstallManifest.cs');
     const setupMain = path.join(ROOT_DIR, 'installer', 'setup', 'Program.cs');
     const tempOut = path.join(stageDir, 'installer.exe');
@@ -271,6 +274,7 @@ function buildInstaller({
       installerAsmInfoPath,
       commonMiniJson,
       commonCdpClient,
+      commonRuntimeChannels,
       commonInstallManifest,
       setupMain,
     ], { stdio: 'inherit' });

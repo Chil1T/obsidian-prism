@@ -15,6 +15,7 @@ final class AttachedEntry {
     var omniScriptId: String?
     var thoughtScriptId: String?
     var inlineDiffScriptId: String?
+    var runtimeChannelScriptIds: [String: String] = [:]
     let title: String
     private let ctxLock = NSLock()
     var mainFrameId: String = ""
@@ -186,6 +187,7 @@ final class WatcherApp {
                 ? CdpHelper.buildThoughtExpression(baseDir: baseDir, cfg: onceCfg)
                 : ""
             let inlineDiffExpr = CdpHelper.buildInlineDiffExpression(baseDir: baseDir, cfg: onceCfg)
+            let runtimeChannels = RuntimeChannelFallback.loadEnabledExpressions(baseDir: baseDir, cfg: onceCfg)
             var injectedTitles: [String] = []
             for page in pages {
                 let session = try CdpSession.connect(wsUrl: page.webSocketDebuggerUrl, timeoutMs: 4000)
@@ -200,6 +202,7 @@ final class WatcherApp {
                 if !inlineDiffExpr.isEmpty {
                     _ = try? session.evaluate(inlineDiffExpr, awaitPromise: false)
                 }
+                RuntimeChannelFallback.evaluateOnce(session, enabledExprs: runtimeChannels)
                 injectedTitles.append(CdpHelper.shortTitle(page))
             }
             Self.writeResult(outFile: outFile, ok: true, message: "injected \(injectedTitles.count) page(s)", pages: injectedTitles)
@@ -272,7 +275,7 @@ final class WatcherApp {
             "vendor/thought-translator/thought-client.js",
             "vendor/thought-translator/thought-settings-ui.js",
             "vendor/inline-diff/inline-diff-client.js",
-        ] {
+        ] + RuntimeChannelFallback.watchedRelPaths {
             let vendorFull = (baseDir as NSString).appendingPathComponent(vendorRel)
             if let attrs = try? fm.attributesOfItem(atPath: vendorFull) {
                 let mtime = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
@@ -313,6 +316,7 @@ final class WatcherApp {
         var currentOmniExpr: String
         var currentThoughtExpr: String
         var currentInlineDiffExpr: String
+        var currentRuntimeChannels: [String: String]
         do {
             manifest = try PluginManifest.load(baseDir: baseDir)
             let initCfg = CdpHelper.readConfig(baseDir: baseDir, manifest: manifest)
@@ -322,6 +326,7 @@ final class WatcherApp {
                 ? CdpHelper.buildThoughtExpression(baseDir: baseDir, cfg: initCfg)
                 : ""
             currentInlineDiffExpr = CdpHelper.buildInlineDiffExpression(baseDir: baseDir, cfg: initCfg)
+            currentRuntimeChannels = RuntimeChannelFallback.loadEnabledExpressions(baseDir: baseDir, cfg: initCfg)
         } catch {
             log(InstallerI18n.tr(
                 "[!] 初始化加载失败: \(error.localizedDescription)",
@@ -372,14 +377,8 @@ final class WatcherApp {
         intSource.setEventHandler(handler: requestExit)
         intSource.resume()
 
-        let applyToEntry: (AttachedEntry, String, String, String, String) throws -> JsonValue = { entry, exprToUse, omniExprToUse, thoughtExprToUse, inlineDiffExprToUse in
-            if let oldId = entry.scriptId, !oldId.isEmpty {
-                _ = try? entry.session.send(
-                    "Page.removeScriptToEvaluateOnNewDocument",
-                    params: ["identifier": .string(oldId)],
-                    timeoutMs: 5000
-                )
-            }
+        let applyToEntry: (AttachedEntry, String, String, String, String, [String: String]) throws -> JsonValue = { entry, exprToUse, omniExprToUse, thoughtExprToUse, inlineDiffExprToUse, runtimeChannelsToUse in
+            RuntimeChannelFallback.removeNewDocScript(entry.session, scriptId: entry.scriptId)
             let addRes = try entry.session.send(
                 "Page.addScriptToEvaluateOnNewDocument",
                 params: ["source": .string(exprToUse)],
@@ -390,103 +389,56 @@ final class WatcherApp {
             }
             let mainVal = try entry.session.evaluate(exprToUse, awaitPromise: false)
             if mainVal.objectValue?["status"]?.stringValue == "skipped-non-host" {
-                if let revId = entry.scriptId, !revId.isEmpty {
-                    _ = try? entry.session.send(
-                        "Page.removeScriptToEvaluateOnNewDocument",
-                        params: ["identifier": .string(revId)],
-                        timeoutMs: 5000
-                    )
-                    entry.scriptId = nil
-                }
-                if let oldOmniId = entry.omniScriptId, !oldOmniId.isEmpty {
-                    _ = try? entry.session.send(
-                        "Page.removeScriptToEvaluateOnNewDocument",
-                        params: ["identifier": .string(oldOmniId)],
-                        timeoutMs: 5000
-                    )
-                    entry.omniScriptId = nil
-                }
-                if let oldThoughtId = entry.thoughtScriptId, !oldThoughtId.isEmpty {
-                    _ = try? entry.session.send(
-                        "Page.removeScriptToEvaluateOnNewDocument",
-                        params: ["identifier": .string(oldThoughtId)],
-                        timeoutMs: 5000
-                    )
-                    entry.thoughtScriptId = nil
-                }
-                if let oldInlineId = entry.inlineDiffScriptId, !oldInlineId.isEmpty {
-                    _ = try? entry.session.send(
-                        "Page.removeScriptToEvaluateOnNewDocument",
-                        params: ["identifier": .string(oldInlineId)],
-                        timeoutMs: 5000
-                    )
-                    entry.inlineDiffScriptId = nil
-                }
+                RuntimeChannelFallback.removeNewDocScript(entry.session, scriptId: entry.scriptId)
+                entry.scriptId = nil
+                RuntimeChannelFallback.removeNewDocScript(entry.session, scriptId: entry.omniScriptId)
+                entry.omniScriptId = nil
+                RuntimeChannelFallback.removeNewDocScript(entry.session, scriptId: entry.thoughtScriptId)
+                entry.thoughtScriptId = nil
+                RuntimeChannelFallback.removeNewDocScript(entry.session, scriptId: entry.inlineDiffScriptId)
+                entry.inlineDiffScriptId = nil
+                RuntimeChannelFallback.removeAllScripts(entry.session, scriptIds: &entry.runtimeChannelScriptIds)
                 return mainVal
             }
 
-            if let oldOmniId = entry.omniScriptId, !oldOmniId.isEmpty {
-                _ = try? entry.session.send(
-                    "Page.removeScriptToEvaluateOnNewDocument",
-                    params: ["identifier": .string(oldOmniId)],
-                    timeoutMs: 5000
-                )
-                entry.omniScriptId = nil
-            }
+            RuntimeChannelFallback.removeNewDocScript(entry.session, scriptId: entry.omniScriptId)
+            entry.omniScriptId = nil
             if !omniExprToUse.isEmpty {
-                if let omniRes = try? entry.session.send(
-                    "Page.addScriptToEvaluateOnNewDocument",
-                    params: ["source": .string(omniExprToUse)],
-                    timeoutMs: 15000
-                ), let omniId = omniRes["identifier"]?.stringValue {
-                    entry.omniScriptId = omniId
-                }
+                entry.omniScriptId = RuntimeChannelFallback.addNewDocScript(entry.session, source: omniExprToUse)
                 _ = try? entry.session.evaluate(omniExprToUse, awaitPromise: false)
             }
 
             let hadThought = (entry.thoughtScriptId?.isEmpty == false)
-            if let oldThoughtId = entry.thoughtScriptId, !oldThoughtId.isEmpty {
-                _ = try? entry.session.send(
-                    "Page.removeScriptToEvaluateOnNewDocument",
-                    params: ["identifier": .string(oldThoughtId)],
-                    timeoutMs: 5000
-                )
-                entry.thoughtScriptId = nil
-            }
+            RuntimeChannelFallback.removeNewDocScript(entry.session, scriptId: entry.thoughtScriptId)
+            entry.thoughtScriptId = nil
             if !thoughtExprToUse.isEmpty {
-                if let thoughtRes = try? entry.session.send(
-                    "Page.addScriptToEvaluateOnNewDocument",
-                    params: ["source": .string(thoughtExprToUse)],
-                    timeoutMs: 15000
-                ), let thoughtId = thoughtRes["identifier"]?.stringValue {
-                    entry.thoughtScriptId = thoughtId
-                }
+                entry.thoughtScriptId = RuntimeChannelFallback.addNewDocScript(entry.session, source: thoughtExprToUse)
                 _ = try? entry.session.evaluate(thoughtExprToUse, awaitPromise: false)
             } else if hadThought {
                 _ = try? entry.session.evaluate(CdpHelper.thoughtRemoveExpression, awaitPromise: false)
             }
 
             let hadInlineDiff = (entry.inlineDiffScriptId?.isEmpty == false)
-            if let oldInlineId = entry.inlineDiffScriptId, !oldInlineId.isEmpty {
-                _ = try? entry.session.send(
-                    "Page.removeScriptToEvaluateOnNewDocument",
-                    params: ["identifier": .string(oldInlineId)],
-                    timeoutMs: 5000
-                )
-                entry.inlineDiffScriptId = nil
-            }
+            RuntimeChannelFallback.removeNewDocScript(entry.session, scriptId: entry.inlineDiffScriptId)
+            entry.inlineDiffScriptId = nil
             if !inlineDiffExprToUse.isEmpty {
-                if let inlineRes = try? entry.session.send(
-                    "Page.addScriptToEvaluateOnNewDocument",
-                    params: ["source": .string(inlineDiffExprToUse)],
-                    timeoutMs: 15000
-                ), let inlineId = inlineRes["identifier"]?.stringValue {
-                    entry.inlineDiffScriptId = inlineId
-                }
+                entry.inlineDiffScriptId = RuntimeChannelFallback.addNewDocScript(entry.session, source: inlineDiffExprToUse)
                 _ = try? entry.session.evaluate(inlineDiffExprToUse, awaitPromise: false)
             } else if hadInlineDiff {
                 _ = try? entry.session.evaluate(CdpHelper.inlineDiffRemoveExpression, awaitPromise: false)
             }
+
+            let prevRuntimeIds = RuntimeChannelFallback.syncNewDocScripts(
+                entry.session,
+                scriptIds: &entry.runtimeChannelScriptIds,
+                enabledExprs: runtimeChannelsToUse
+            )
+            RuntimeChannelFallback.evaluateSynced(
+                entry.session,
+                baseDir: self.baseDir,
+                enabledExprs: runtimeChannelsToUse,
+                previouslyMounted: prevRuntimeIds
+            )
             return mainVal
         }
 
@@ -596,6 +548,7 @@ final class WatcherApp {
                 let omniSnap = currentOmniExpr
                 let thoughtSnap = currentThoughtExpr
                 let inlineDiffSnap = currentInlineDiffExpr
+                let runtimeChannelsSnap = currentRuntimeChannels
                 stateLock.unlock()
 
                 _ = try s.send("Runtime.addBinding", params: ["name": .string(bindingName)], timeoutMs: 5000)
@@ -608,7 +561,7 @@ final class WatcherApp {
                 attaching.remove(page.id)
                 stateLock.unlock()
 
-                let evalVal = try applyToEntry(entry, exprSnap, omniSnap, thoughtSnap, inlineDiffSnap)
+                let evalVal = try applyToEntry(entry, exprSnap, omniSnap, thoughtSnap, inlineDiffSnap, runtimeChannelsSnap)
                 let status = evalVal.objectValue?["status"]?.stringValue ?? "ok"
                 self.log(InstallerI18n.tr(
                     "[✓] 已注入 obsidian-prism: \(title) (\(status))",
@@ -658,62 +611,46 @@ final class WatcherApp {
                     ? CdpHelper.buildThoughtExpression(baseDir: self.baseDir, cfg: nextCfg)
                     : ""
                 let nextInlineDiffExpr = CdpHelper.buildInlineDiffExpression(baseDir: self.baseDir, cfg: nextCfg)
+                let nextRuntimeChannels = RuntimeChannelFallback.loadEnabledExpressions(baseDir: self.baseDir, cfg: nextCfg)
                 let fastCfgExpr: String? = ((changedName as NSString).lastPathComponent.caseInsensitiveCompare("config.json") == .orderedSame)
                     ? CdpHelper.buildConfigRefreshExpression(baseDir: self.baseDir, manifest: nextManifest)
                     : nil
                 stateLock.lock()
                 let prevThoughtExpr = currentThoughtExpr
                 let prevInlineDiffExpr = currentInlineDiffExpr
+                let prevRuntimeChannels = currentRuntimeChannels
                 manifest = nextManifest
                 currentExpr = nextExpr
                 currentOmniExpr = nextOmniExpr
                 currentThoughtExpr = nextThoughtExpr
                 currentInlineDiffExpr = nextInlineDiffExpr
+                currentRuntimeChannels = nextRuntimeChannels
                 let entries = Array(attached.values)
                 stateLock.unlock()
 
                 var n = 0
                 for entry in entries {
                     if let fastExpr = fastCfgExpr {
-                        if let oldId = entry.scriptId, !oldId.isEmpty {
-                            _ = try? entry.session.send("Page.removeScriptToEvaluateOnNewDocument", params: ["identifier": .string(oldId)], timeoutMs: 5000)
-                            entry.scriptId = nil
-                        }
-                        if let addRes = try? entry.session.send("Page.addScriptToEvaluateOnNewDocument", params: ["source": .string(nextExpr)], timeoutMs: 15000),
-                           let newId = addRes["identifier"]?.stringValue {
-                            entry.scriptId = newId
-                        }
-                        if let oldOmniId = entry.omniScriptId, !oldOmniId.isEmpty {
-                            _ = try? entry.session.send("Page.removeScriptToEvaluateOnNewDocument", params: ["identifier": .string(oldOmniId)], timeoutMs: 5000)
-                            entry.omniScriptId = nil
-                        }
-                        if !nextOmniExpr.isEmpty,
-                           let omniAdd = try? entry.session.send("Page.addScriptToEvaluateOnNewDocument", params: ["source": .string(nextOmniExpr)], timeoutMs: 15000),
-                           let omniId = omniAdd["identifier"]?.stringValue {
-                            entry.omniScriptId = omniId
-                        }
+                        RuntimeChannelFallback.removeNewDocScript(entry.session, scriptId: entry.scriptId)
+                        entry.scriptId = RuntimeChannelFallback.addNewDocScript(entry.session, source: nextExpr)
+                        RuntimeChannelFallback.removeNewDocScript(entry.session, scriptId: entry.omniScriptId)
+                        entry.omniScriptId = nextOmniExpr.isEmpty ? nil : RuntimeChannelFallback.addNewDocScript(entry.session, source: nextOmniExpr)
                         let hadThought = (entry.thoughtScriptId?.isEmpty == false) || !prevThoughtExpr.isEmpty
-                        if let oldThoughtId = entry.thoughtScriptId, !oldThoughtId.isEmpty {
-                            _ = try? entry.session.send("Page.removeScriptToEvaluateOnNewDocument", params: ["identifier": .string(oldThoughtId)], timeoutMs: 5000)
-                            entry.thoughtScriptId = nil
-                        }
-                        if !nextThoughtExpr.isEmpty,
-                           let thoughtAdd = try? entry.session.send("Page.addScriptToEvaluateOnNewDocument", params: ["source": .string(nextThoughtExpr)], timeoutMs: 15000),
-                           let thoughtId = thoughtAdd["identifier"]?.stringValue {
-                            entry.thoughtScriptId = thoughtId
-                        }
+                        RuntimeChannelFallback.removeNewDocScript(entry.session, scriptId: entry.thoughtScriptId)
+                        entry.thoughtScriptId = nextThoughtExpr.isEmpty ? nil : RuntimeChannelFallback.addNewDocScript(entry.session, source: nextThoughtExpr)
                         let hadInlineDiff = (entry.inlineDiffScriptId?.isEmpty == false) || !prevInlineDiffExpr.isEmpty
-                        if let oldInlineId = entry.inlineDiffScriptId, !oldInlineId.isEmpty {
-                            _ = try? entry.session.send("Page.removeScriptToEvaluateOnNewDocument", params: ["identifier": .string(oldInlineId)], timeoutMs: 5000)
-                            entry.inlineDiffScriptId = nil
-                        }
-                        if !nextInlineDiffExpr.isEmpty,
-                           let inlineAdd = try? entry.session.send("Page.addScriptToEvaluateOnNewDocument", params: ["source": .string(nextInlineDiffExpr)], timeoutMs: 15000),
-                           let inlineId = inlineAdd["identifier"]?.stringValue {
-                            entry.inlineDiffScriptId = inlineId
-                        }
-                        if let fastRes = try? entry.session.evaluate(fastExpr, awaitPromise: false),
-                           fastRes.objectValue?["refreshed"]?.boolValue == true {
+                        RuntimeChannelFallback.removeNewDocScript(entry.session, scriptId: entry.inlineDiffScriptId)
+                        entry.inlineDiffScriptId = nextInlineDiffExpr.isEmpty ? nil : RuntimeChannelFallback.addNewDocScript(entry.session, source: nextInlineDiffExpr)
+                        var prevRuntimeIds = RuntimeChannelFallback.syncNewDocScripts(
+                            entry.session,
+                            scriptIds: &entry.runtimeChannelScriptIds,
+                            enabledExprs: nextRuntimeChannels
+                        )
+                        for k in prevRuntimeChannels.keys { prevRuntimeIds.insert(k) }
+
+                        let fastRefreshed = (try? entry.session.evaluate(fastExpr, awaitPromise: false))?.objectValue?["refreshed"]?.boolValue == true
+                        let mainOk = fastRefreshed || ((try? entry.session.evaluate(nextExpr, awaitPromise: false)) != nil)
+                        if mainOk {
                             if !nextOmniExpr.isEmpty {
                                 _ = try? entry.session.evaluate(nextOmniExpr, awaitPromise: false)
                             }
@@ -727,27 +664,16 @@ final class WatcherApp {
                             } else if hadInlineDiff {
                                 _ = try? entry.session.evaluate(CdpHelper.inlineDiffRemoveExpression, awaitPromise: false)
                             }
-                            n += 1
-                            continue
-                        }
-                        if (try? entry.session.evaluate(nextExpr, awaitPromise: false)) != nil {
-                            if !nextOmniExpr.isEmpty {
-                                _ = try? entry.session.evaluate(nextOmniExpr, awaitPromise: false)
-                            }
-                            if !nextThoughtExpr.isEmpty {
-                                _ = try? entry.session.evaluate(nextThoughtExpr, awaitPromise: false)
-                            } else if hadThought {
-                                _ = try? entry.session.evaluate(CdpHelper.thoughtRemoveExpression, awaitPromise: false)
-                            }
-                            if !nextInlineDiffExpr.isEmpty {
-                                _ = try? entry.session.evaluate(nextInlineDiffExpr, awaitPromise: false)
-                            } else if hadInlineDiff {
-                                _ = try? entry.session.evaluate(CdpHelper.inlineDiffRemoveExpression, awaitPromise: false)
-                            }
+                            RuntimeChannelFallback.evaluateSynced(
+                                entry.session,
+                                baseDir: self.baseDir,
+                                enabledExprs: nextRuntimeChannels,
+                                previouslyMounted: prevRuntimeIds
+                            )
                             n += 1
                         }
                     } else {
-                        if (try? applyToEntry(entry, nextExpr, nextOmniExpr, nextThoughtExpr, nextInlineDiffExpr)) != nil {
+                        if (try? applyToEntry(entry, nextExpr, nextOmniExpr, nextThoughtExpr, nextInlineDiffExpr, nextRuntimeChannels)) != nil {
                             n += 1
                         }
                     }

@@ -107,8 +107,10 @@ test('Law 9a: Full 8-locale completeness, 0 CJK in non-CJK locales, 0 standalone
   assert.equal(/value="yue"/i.test(studioHtml), false, 'workbench/studio.html must not expose yue dropdown option');
 });
 
-test('Law 9b: Zero forbidden third-party game terms across all user-facing docs, metadata, UI copy & locales', () => {
+test('Law 9b: Zero forbidden third-party game terms across all user-facing docs, metadata, UI copy, locales & src/', () => {
   const tracked = listRepoFiles();
+  // Legacy internal physical filename & teardown global bridge symbols preserved solely for backward-compatible loading/cleanup
+  const LEGACY_INTERNAL_SYMBOL_RE = /octopath-stage-webgl\.js|__agOctopath(?:StageWebGL|TavernAtlas)\b/g;
   const userFacingTargets = new Set([
     'README.md',
     'README.en.md',
@@ -118,12 +120,17 @@ test('Law 9b: Zero forbidden third-party game terms across all user-facing docs,
     'plugin.json',
     'i18n-core.js',
     'i18n-locales.js',
+    'settings-panel.js',
+    'ui-runtime.js',
+    'home-studio-panel.js',
+    'context-menu-btw.js',
     'vendor/omni-viewer/workbench-page.mjs',
     'vendor/sidebar-studio/state-machine.mjs',
     'vendor/sidebar-studio/sidebar-client.js',
   ]);
   for (const rel of tracked) {
     if (
+      rel.startsWith('src/') ||
       rel.startsWith('docs/') ||
       rel.startsWith('.github/') ||
       rel.startsWith('installer/') ||
@@ -141,13 +148,14 @@ test('Law 9b: Zero forbidden third-party game terms across all user-facing docs,
     if (!/\.(?:md|json|mjs|cjs|js|html|cff|cs|swift|txt|yml|yaml|manifest)$/i.test(rel)) continue;
     const lines = fs.readFileSync(abs, 'utf8').split(/\r?\n/);
     lines.forEach((line, idx) => {
-      if (FORBIDDEN_TERM_RE.test(line)) {
+      const scrubbed = line.replace(LEGACY_INTERNAL_SYMBOL_RE, '');
+      if (FORBIDDEN_TERM_RE.test(scrubbed)) {
         hits.push(`${rel}:${idx + 1}: ${line.trim().slice(0, 100)}`);
       }
     });
   }
 
-  assert.deepEqual(hits, [], `Forbidden terminology detected in user-facing files:\n${hits.join('\n')}`);
+  assert.deepEqual(hits, [], `Forbidden terminology detected in user-facing/src files:\n${hits.join('\n')}`);
 });
 
 test('Law 3: Single version SSOT (package.json#version) matches all static anchors & CHANGELOG hygiene', () => {

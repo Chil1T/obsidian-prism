@@ -93,7 +93,15 @@ function createMockCdpServer() {
             value: { ok: true, status: 'mounted' },
           },
         };
-      } else if (expr.includes('const targetHash =') && (expr.includes('__agPrismInlineDiff') || expr.includes('__agPrismThoughtSettingsUi'))) {
+      } else if (
+        expr.includes('const targetHash =') &&
+        (expr.includes('__agPrismInlineDiff') ||
+          expr.includes('__agPrismThoughtSettingsUi') ||
+          expr.includes('__agPrismTelemetry') ||
+          expr.includes('__agPrismEffortSlider') ||
+          expr.includes('__agPrismHostEnhancer') ||
+          expr.includes('__agPrismContextMenu'))
+      ) {
         result = {
           result: {
             type: 'object',
@@ -1138,5 +1146,49 @@ test('macOS Swift Setup lossless launcher & Issue #37 100% bilingual i18n contra
       }
     }
     assert.deepEqual(unwrapped, [], `Found unwrapped Chinese strings in ${name}: ${unwrapped.join('; ')}`);
+  }
+});
+
+test('Phase 4A P0: macOS Swift CdpClient fixes bundleUnchanged and integrates static runtime-channels/*.js fallback', async () => {
+  const cdpSwift = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'macos', 'Common', 'CdpClient.swift'), 'utf8');
+  const rtSwift = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'macos', 'Common', 'RuntimeChannels.swift'), 'utf8');
+  const watcherSwift = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'macos', 'Watcher', 'main.swift'), 'utf8');
+  const buildMacosSrc = fs.readFileSync(path.join(ROOT_DIR, 'scripts', 'build-macos.mjs'), 'utf8');
+
+  // 1) Swift bundleUnchanged must NOT require offloaded Ch13/Ch14 globals, and keeps existingPrism?.destroy?.()
+  const unchangedMatch = cdpSwift.match(/const bundleUnchanged = Boolean\([\s\S]*?if \(bundleUnchanged\)[\s\S]*?\} else \{[\s\S]*?globalThis\.__agCsUiMain\(bootCfg\);/);
+  assert.ok(unchangedMatch, 'CdpClient.swift must contain bundleUnchanged block');
+  const unchangedBlock = unchangedMatch[0];
+  const condOnly = unchangedBlock.slice(0, unchangedBlock.indexOf('if (bundleUnchanged)'));
+  assert.equal(condOnly.includes('window.__agPrismTelemetry'), false, 'Swift bundleUnchanged must not check offloaded __agPrismTelemetry');
+  assert.equal(condOnly.includes('window.__agPrismEffortSlider'), false, 'Swift bundleUnchanged must not check offloaded __agPrismEffortSlider');
+  assert.ok(unchangedBlock.includes('existingPrism?.destroy?.()'), 'Swift BuildInjectExpression must destroy existingPrism before remount');
+
+  // 2) RuntimeChannels.swift loads precompiled runtime-channels/<id>.js with zero hand-assembled JS templates
+  for (const id of ['telemetry', 'effortSlider', 'workbenchEnhancer', 'contextMenu']) {
+    assert.ok(rtSwift.includes(`"${id}"`), `RuntimeChannels.swift must register static channel "${id}"`);
+  }
+  assert.ok(rtSwift.includes('runtime-channels/\\(channelId).js'), 'RuntimeChannels.swift must read runtime-channels/<id>.js');
+  assert.equal(rtSwift.includes('(() =>'), false, 'RuntimeChannels.swift must not hand-assemble JS templates');
+  assert.equal(rtSwift.includes('document.createElement'), false, 'RuntimeChannels.swift must not hand-assemble DOM JS');
+  assert.ok(watcherSwift.includes('RuntimeChannelFallback.loadEnabledExpressions'), 'macOS Watcher must load precompiled runtime channels');
+  assert.ok(watcherSwift.includes('RuntimeChannelFallback.watchedRelPaths'), 'macOS Watcher computeDirStamp must watch runtime-channels/*.js');
+  assert.ok(buildMacosSrc.includes('RuntimeChannels.swift'), 'scripts/build-macos.mjs must compile RuntimeChannels.swift into watcher & setup');
+
+  // 3) Static runtime-channels/*.js entries are included in macOS top-level payload & install-manifest.json
+  const buildCommon = await import('../scripts/build-common.mjs');
+  const topEntries = buildCommon.collectOptionalOmniTopEntries();
+  const topNames = new Set(topEntries.map((e) => e.name));
+  for (const id of ['telemetry', 'effortSlider', 'workbenchEnhancer', 'contextMenu']) {
+    assert.equal(topNames.has(`runtime-channels/${id}.js`), true, `macOS top entries must include runtime-channels/${id}.js`);
+  }
+  const { manifest } = buildCommon.createInstallManifestPayload({
+    version: cdp.PLUGIN_VERSION,
+    installEntries: topEntries,
+    pluginEntries: [],
+  });
+  const manifestPaths = new Set(manifest.files.map((f) => f.path));
+  for (const id of ['telemetry', 'effortSlider', 'workbenchEnhancer', 'contextMenu']) {
+    assert.equal(manifestPaths.has(`runtime-channels/${id}.js`), true, `macOS install-manifest.json must include runtime-channels/${id}.js`);
   }
 });

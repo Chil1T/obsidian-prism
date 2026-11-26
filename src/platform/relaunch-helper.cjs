@@ -25,7 +25,7 @@ const {
 
 let _runInBgRec = null;
 try {
-  _runInBgRec = require('../daemon/run-in-bg-recovery.cjs');
+  _runInBgRec = require('./run-in-bg-recovery.cjs');
 } catch {}
 
 // 纯 Node Windows 脱离重启引擎（零 PowerShell/WMI）

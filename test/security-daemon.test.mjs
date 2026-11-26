@@ -1790,7 +1790,7 @@ test('security-daemon 25: app_storage.json pending runInBackground marker recove
     assert.equal(JSON.parse(fs.readFileSync(appStoragePath, 'utf8')).runInBackground, true);
 
     // 4) 拒绝通过 symlink/junction 路径读取恢复标记
-    const recMod = require(path.join(ROOT_DIR, 'src', 'daemon', 'run-in-bg-recovery.cjs'));
+    const recMod = require(path.join(ROOT_DIR, 'src', 'platform', 'run-in-bg-recovery.cjs'));
     const realMarkerDir = path.join(workDir, 'real-marker-dir');
     fs.mkdirSync(realMarkerDir, { recursive: true });
     fs.writeFileSync(

@@ -29,8 +29,8 @@ const {
   detectRunningAntigravityHostSync,
   recordRelaunchPromptState,
 } = require(path.join(ROOT_DIR, "cdp.js"));
-const im = require(path.join(ROOT_DIR, "src", "platform", "install-manifest.mjs"));
-const repoSync = require(path.join(ROOT_DIR, "src", "platform", "repo-sync.mjs"));
+const im = require(path.join(ROOT_DIR, "src", "platform", "install-manifest.cjs"));
+const repoSync = require(path.join(ROOT_DIR, "src", "platform", "repo-sync.cjs"));
 
 function resolveDefaultPluginVersion(sourceDir = ROOT_DIR) {
   try {
@@ -1521,7 +1521,7 @@ async function installPlugin(opts = {}) {
 
   const { copiedFiles: syncedCount, missingOptional } = repoSync.syncPluginDirWithManifest({
     sourceDir, targetDir, rootFiles: ROOT_FILES_TO_SYNC, dirs: DIRS_TO_SYNC,
-    copyFile: safeCopyFileNoSymlink, copyDir: copyDirRecursiveSync, assertNotSymlink: assertNotSymbolicLink,
+    assertNotSymlink: assertNotSymbolicLink, _testHooks: opts._atomicTestHooks || null,
   });
   let copiedFiles = syncedCount;
 

@@ -647,11 +647,81 @@ test('Security & Facade: isTrustedHostContext enforces fail-closed host boundari
     assert.notEqual(daemonFacade[name], undefined, `main.mjs facade export ${name} must not be undefined`);
   }
 
-  // 核对 channel-coordinator 消费 cdp.CHANNEL_REGISTRY 12 通道清单
+  // 核对 channel-coordinator 消费 cdp.CHANNEL_REGISTRY 通道清单
   const daemon = makeMinimalDaemon();
   for (const ch of cdp.CHANNEL_REGISTRY) {
     const found = daemon.getRegisteredChannel(ch.id);
     assert.ok(found, `Channel coordinator must resolve CHANNEL_REGISTRY entry: ${ch.id}`);
     assert.equal(found.channel, ch.channel);
+  }
+});
+
+test('Hot-reload P0: _readCdpTreeSig detects src/**/*.cjs edits, clears src require.cache on reload, exports cdp.CONFIG_PATH, and widens needsHardReload', () => {
+  // 1) cdp.CONFIG_PATH must be exported and match cdp.CONFIG_FILE
+  assert.equal(typeof cdp.CONFIG_PATH, 'string');
+  assert.ok(cdp.CONFIG_PATH.length > 0, 'cdp.CONFIG_PATH must be non-empty');
+  assert.equal(cdp.CONFIG_PATH, cdp.CONFIG_FILE, 'cdp.CONFIG_PATH must match cdp.CONFIG_FILE');
+
+  // 2) repo-update-coordinator needsHardReload must match any file under src/
+  const repoUpdateSrc = fs.readFileSync(
+    path.join(ROOT_DIR, 'src', 'daemon', 'repo-update-coordinator.mjs'),
+    'utf8'
+  );
+  assert.ok(
+    repoUpdateSrc.includes('/^(?:sidecars\\/|src\\/|installer\\/|cdp\\.js$)/'),
+    'needsHardReload regex must cover entire src/ tree'
+  );
+
+  // 3) Isolated directory test: mutating src/utils/fs-safe.cjs changes _readCdpTreeSig and forces fresh CJS require
+  const tmpDir = makeTempDir('prism-hotreload-tree-');
+  try {
+    fs.copyFileSync(path.join(ROOT_DIR, 'cdp.js'), path.join(tmpDir, 'cdp.js'));
+    fs.copyFileSync(path.join(ROOT_DIR, 'package.json'), path.join(tmpDir, 'package.json'));
+    fs.copyFileSync(path.join(ROOT_DIR, 'config.example.json'), path.join(tmpDir, 'config.example.json'));
+    fs.copyFileSync(path.join(ROOT_DIR, 'style.css'), path.join(tmpDir, 'style.css'));
+    fs.cpSync(path.join(ROOT_DIR, 'src'), path.join(tmpDir, 'src'), { recursive: true });
+    for (const part of cdp.RUNTIME_PARTS) {
+      const dst = path.join(tmpDir, part);
+      fs.mkdirSync(path.dirname(dst), { recursive: true });
+      fs.copyFileSync(path.join(ROOT_DIR, part), dst);
+    }
+
+    const daemon = new PrismDaemon({
+      rootDir: tmpDir,
+      silent: true,
+      enableAutoUpdateTimer: false,
+      enableStorageGuardTimer: false,
+      bundleCachePath: false,
+    });
+    daemon.rebuildBundle();
+    const sigBefore = daemon._cdpFileSig;
+    const cdpRefBefore = daemon.cdp;
+    const targetModPath = path.join(tmpDir, 'src', 'config', 'schema.cjs');
+    const resolvedBefore = require.resolve(targetModPath);
+    const modExportsBefore = require.cache[resolvedBefore]?.exports;
+    assert.ok(sigBefore && sigBefore.length > 0, '_readCdpTreeSig must produce non-empty signature');
+    assert.ok(modExportsBefore, 'src/config/schema.cjs must be present in require.cache after initial load');
+    assert.equal(daemon._resolveWatchedConfigPath(), path.resolve(cdpRefBefore.CONFIG_PATH));
+
+    // Modify a nested src/**/*.cjs module (bump size + mtime) without touching top-level cdp.js
+    const origSchema = fs.readFileSync(targetModPath, 'utf8');
+    fs.writeFileSync(targetModPath, `${origSchema}\n// hot-reload-sentinel-v2\n`, 'utf8');
+    const futureTime = new Date(Date.now() + 5000);
+    fs.utimesSync(targetModPath, futureTime, futureTime);
+
+    const sigAfter = daemon._readCdpTreeSig();
+    assert.notEqual(sigAfter, sigBefore, '_readCdpTreeSig must change when src/**/*.cjs is edited');
+
+    daemon.rebuildBundle();
+    assert.notEqual(daemon.cdp, cdpRefBefore, 'rebuildBundle must reload cdp.js when src/**/*.cjs changes');
+    const modExportsAfter = require.cache[resolvedBefore]?.exports;
+    assert.ok(modExportsAfter, 'src/config/schema.cjs must be reloaded into require.cache');
+    assert.notEqual(
+      modExportsAfter,
+      modExportsBefore,
+      'Clearing src/**/*.cjs require.cache must produce a brand-new module reference'
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });

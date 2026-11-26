@@ -2402,6 +2402,7 @@ test('Adversarial follow-up fixes: langProbe auto/html[lang] precedence, collaps
             `/out:${watcherDll}`,
             path.join(ROOT, 'installer/common/MiniJson.cs'),
             path.join(ROOT, 'installer/common/CdpClient.cs'),
+            path.join(ROOT, 'installer/common/RuntimeChannels.cs'),
             path.join(ROOT, 'installer/watcher/Program.cs'),
             path.join(ROOT, 'installer/watcher/FilePicker.cs'),
           ],

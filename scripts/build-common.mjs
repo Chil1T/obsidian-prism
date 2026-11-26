@@ -9,7 +9,7 @@ import {
   INSTALL_MANIFEST_FILENAME,
   buildInstallManifest,
   shouldExcludeSyncRelPath,
-} from '../src/platform/install-manifest.mjs';
+} from '../src/platform/install-manifest.cjs';
 
 const require = createRequire(import.meta.url);
 const __filename = fileURLToPath(import.meta.url);
@@ -239,6 +239,45 @@ function collectOptionalSuggesterTopEntries() {
   return entries;
 }
 
+const STATIC_RUNTIME_CHANNEL_IDS = Object.freeze([
+  'telemetry',
+  'effortSlider',
+  'workbenchEnhancer',
+  'contextMenu',
+]);
+
+// 打包期复用 cdp.CHANNEL_REGISTRY 静态预编译 Ch13-Ch16 兜底表达式至顶层 runtime-channels/<id>.js，
+// 供无 Node 原生 Watcher 按 config.json 开关条件直接读取注入（零 C#/Swift 手拼 JS 模板）。
+function collectStaticRuntimeChannelEntries() {
+  const allEnabledCfg = {
+    ...cdp.DEFAULT_CONFIG,
+    telemetryModule: 'auto',
+    effortSliderModule: 'on',
+    workbenchEnhancer: 'on',
+    sidebarRestyle: true,
+    sidebarNavFold: true,
+    scrollBottomMotion: 'on',
+    motionLevel: 'ultra',
+    contextMenu: true,
+  };
+  const entries = [];
+  for (const id of STATIC_RUNTIME_CHANNEL_IDS) {
+    const ch = typeof cdp.findChannel === 'function' ? cdp.findChannel(id) : null;
+    if (!ch || typeof ch.build !== 'function') {
+      throw new Error(`Missing CHANNEL_REGISTRY entry for static runtime channel: ${id}`);
+    }
+    const expr = String(ch.build(allEnabledCfg, { noDiskCache: true }) || '');
+    if (!expr) {
+      throw new Error(`Static runtime channel "${id}" compiled to empty expression`);
+    }
+    entries.push({
+      name: `runtime-channels/${id}.js`,
+      data: Buffer.from(expr, 'utf8'),
+    });
+  }
+  return entries;
+}
+
 function collectOptionalOffloadedRuntimeTopEntries() {
   const entries = [];
   for (const rel of OFFLOADED_RUNTIME_TOP_FILES) {
@@ -251,6 +290,7 @@ function collectOptionalOffloadedRuntimeTopEntries() {
       });
     } catch {}
   }
+  entries.push(...collectStaticRuntimeChannelEntries());
   return entries;
 }
 
@@ -503,6 +543,8 @@ export {
   collectOptionalInlineDiffTopEntries,
   collectOptionalWallpaperTopEntries,
   collectOptionalSuggesterTopEntries,
+  STATIC_RUNTIME_CHANNEL_IDS,
+  collectStaticRuntimeChannelEntries,
   collectNativePluginEntries,
   createInstallManifestPayload,
   INSTALL_MANIFEST_FILENAME,

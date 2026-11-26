@@ -13,7 +13,7 @@ import {
 } from './session-fsm.mjs';
 
 const require = createRequire(import.meta.url);
-const runInBgRecovery = require('./run-in-bg-recovery.cjs');
+const runInBgRecovery = require('../platform/run-in-bg-recovery.cjs');
 
 export const daemonLoopMethods = {
   _resolveWatchedConfigPath() {
