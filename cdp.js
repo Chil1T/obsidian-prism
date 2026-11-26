@@ -594,6 +594,9 @@ function inspectProcessSync(pid, opts = null) {
           }
         }
       } catch {}
+      if (!processStartMs && n === process.pid && !hasCustomExec) {
+        processStartMs = Math.max(1, Math.round(Date.now() - process.uptime() * 1000));
+      }
       if (!imageName && !commandLine) return null;
       return {
         pid: n,
@@ -603,11 +606,13 @@ function inspectProcessSync(pid, opts = null) {
         commandLine,
       };
     }
-    // macOS / 其他 POSIX：使用 ps 单次读取 args 与 comm
+    // macOS / 其他 POSIX：使用 ps 单次读取 args、comm 与 lstart（UTC）
+    const posixEnv = { ...process.env, LC_ALL: 'C', TZ: 'UTC' };
     const commOut = execFn('ps', ['-p', String(n), '-o', 'comm='], {
       encoding: 'utf8',
       timeout: 2500,
       stdio: ['ignore', 'pipe', 'ignore'],
+      env: posixEnv,
     });
     const imageName = String(commOut || '').trim();
     if (!imageName) return null;
@@ -617,14 +622,35 @@ function inspectProcessSync(pid, opts = null) {
         encoding: 'utf8',
         timeout: 2500,
         stdio: ['ignore', 'pipe', 'ignore'],
+        env: posixEnv,
       });
       commandLine = String(argsOut || '').trim();
     } catch {}
+    let processStartMs = 0;
+    try {
+      const lstartOut = execFn('ps', ['-p', String(n), '-o', 'lstart='], {
+        encoding: 'utf8',
+        timeout: 2500,
+        stdio: ['ignore', 'pipe', 'ignore'],
+        env: posixEnv,
+      });
+      const rawStart = String(lstartOut || '').trim().replace(/\s+/g, ' ');
+      if (rawStart) {
+        const hasTz = /(?:[+-]\d{2}:?\d{2}|UTC|GMT|Z)$/i.test(rawStart);
+        const parsedMs = Date.parse(hasTz ? rawStart : `${rawStart} UTC`);
+        if (Number.isFinite(parsedMs) && parsedMs > 0) {
+          processStartMs = Math.round(parsedMs);
+        }
+      }
+    } catch {}
+    if (processStartMs <= 0 && n === process.pid && !hasCustomExec) {
+      processStartMs = Math.max(1, Math.round(Date.now() - process.uptime() * 1000));
+    }
     return {
       pid: n,
       imageName,
-      startTime: 0,
-      processStartMs: 0,
+      startTime: processStartMs,
+      processStartMs,
       commandLine,
     };
   } catch {

@@ -562,6 +562,24 @@ test('Windows 进程探测去 PowerShell/WMI: tasklist CSV 解析、自身 PID �
     });
     assert.equal(mockInfo.imageName, 'node.exe');
     assert.equal(mockInfo.pid, process.pid);
+
+    const mockDarwinInfo = cdp.inspectProcessSync(process.pid, {
+      platform: 'darwin',
+      execFileSyncFn: (bin, args, opts) => {
+        assert.equal(bin, 'ps');
+        assert.equal(opts?.env?.TZ, 'UTC');
+        assert.equal(opts?.env?.LC_ALL, 'C');
+        const fmt = args[args.length - 1];
+        if (fmt === 'comm=') return 'node\n';
+        if (fmt === 'args=') return '/usr/local/bin/node server.js\n';
+        if (fmt === 'lstart=') return 'Thu Nov 26 01:50:35 2026\n';
+        throw new Error(`Unexpected ps format: ${fmt}`);
+      },
+    });
+    assert.equal(mockDarwinInfo.imageName, 'node');
+    assert.equal(mockDarwinInfo.commandLine, '/usr/local/bin/node server.js');
+    assert.equal(mockDarwinInfo.startTime, Date.parse('Thu Nov 26 01:50:35 2026 UTC'));
+    assert.equal(mockDarwinInfo.processStartMs, mockDarwinInfo.startTime);
   } finally {
     await liveSrv.close();
   }
