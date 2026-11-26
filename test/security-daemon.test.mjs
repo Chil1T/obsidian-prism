@@ -18,6 +18,7 @@ import {
 
 const require = createRequire(import.meta.url);
 const ROOT_DIR = path.resolve(import.meta.dirname, '..');
+const cdpMod = require(path.join(ROOT_DIR, 'cdp.js'));
 const installPluginTool = require(path.join(ROOT_DIR, 'tools', 'install-plugin.cjs'));
 
 function makeTempDir(prefix) {
@@ -1262,7 +1263,7 @@ test('security-daemon 11 (#229 P1-2, P1-4, P2-4): WALLPAPER_BINDING 禁内联 To
             ready: true,
             isHostDom: domAliveIsHost,
             href: 'vscode-file://vscode-app/workbench.html',
-            prismAttr: '1.0.8-beta.3',
+            prismAttr: cdpMod.PLUGIN_VERSION,
             hasPrism: domAliveIsHost,
             hasRepoBridge: domAliveIsHost,
             hasThoughtBridge: domAliveIsHost,

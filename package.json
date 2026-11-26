@@ -29,6 +29,7 @@
     "test": "node --test test/*.test.mjs test/gates/*.test.mjs",
     "test:gates": "node scripts/run-tests.mjs --gates",
     "test:fast": "node scripts/run-tests.mjs --fast",
+    "version:check": "node scripts/bump-version.mjs --check",
     "workbench": "node workbench/server.cjs",
     "inject": "node inject.js",
     "watch": "node inject.js --watch",

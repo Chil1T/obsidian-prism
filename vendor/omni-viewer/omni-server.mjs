@@ -8,7 +8,16 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-export const OMNI_VERSION = '1.0.8-beta.3';
+function readPackageVersion(fallback = '1.0.8-beta.3') {
+  try {
+    const pkgPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'package.json');
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    if (pkg && typeof pkg.version === 'string' && pkg.version.trim()) return pkg.version.trim();
+  } catch {}
+  return fallback;
+}
+
+export const OMNI_VERSION = readPackageVersion();
 export const OMNI_BINDING = '__agPrismOmniCall';
 
 const MAX_TEXT_SLICE_BYTES = 2 * 1024 * 1024;
@@ -30,7 +39,15 @@ const VIEWER_CSP = [
 ].join('; ');
 
 export const SANDBOX_HTML_CSP = "sandbox allow-scripts; connect-src 'none'; form-action 'none'; navigate-to 'none'";
-const SUPPORTED_VIEWER_LANGS = Object.freeze(['zh-CN', 'zh-TW', 'yue', 'en', 'ja', 'ko', 'es', 'fr', 'de']);
+const SUPPORTED_VIEWER_LANGS = Object.freeze(['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de']);
+function normalizeViewerLang(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return 'zh-CN';
+  const lo = s.toLowerCase();
+  if (lo === 'yue' || lo.startsWith('yue-') || lo === 'zh-yue' || lo.includes('cantonese')) return 'zh-CN';
+  if (lo === 'zh-hk' || lo === 'zh-mo' || lo === 'zh-tw' || lo.startsWith('zh-hant')) return 'zh-TW';
+  return SUPPORTED_VIEWER_LANGS.includes(s) ? s : 'zh-CN';
+}
 
 const MIME_BY_EXT = Object.freeze({
   '.mp4': 'video/mp4',
@@ -1087,7 +1104,7 @@ export class OmniServer {
         const rawCorners = u.searchParams.get('corners') || 'balanced';
         const corners = ['sharp', 'balanced', 'soft'].includes(rawCorners) ? rawCorners : 'balanced';
         const rawLang = u.searchParams.get('lang') || 'zh-CN';
-        const lang = SUPPORTED_VIEWER_LANGS.includes(rawLang) ? rawLang : 'zh-CN';
+        const lang = normalizeViewerLang(rawLang);
 
         const ctx = {
           baseUrl: this.baseUrl,

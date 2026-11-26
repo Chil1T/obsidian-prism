@@ -426,7 +426,7 @@
     '<ellipse cx="8" cy="14" rx="5.2" ry="1.1" fill="currentColor" opacity="0.45"/>' +
     '</svg>';
 
-  // ── 《八方旅人》黑曜石星辰酒馆 HD-2D WebGL2 3D 视差选角子面板（仅打开且可见时渲染，关闭/隐藏/脱离 DOM 立即停帧并 0×0 + WEBGL_lose_context 回收显存）──
+  // ── 3D 视差黑曜石星辰酒馆 HD-2D WebGL2 选角子面板（仅打开且可见时渲染，关闭/隐藏/脱离 DOM 立即停帧并 0×0 + WEBGL_lose_context 回收显存）──
   const STAGE_SLOTS = O.freeze([
     { key: 'c', toggleId: 'c', kind: 'clawd', cx: 72, i18nKey: 'mascotSpeciesCrab', fb: 'Claude Crab', hex: '#d97757', rayA: '249,115,22', rayB: '251,146,60', cheerPose: 'happy', cheerSym: 'spark' },
     { key: 'k', toggleId: 'k', kind: 'cat', cx: 196, i18nKey: 'mascotSpeciesCat', fb: 'Gemini Cat', hex: '#947fd6', rayA: '139,92,246', rayB: '56,189,248', cheerPose: 'happy', cheerSym: 'heart' },

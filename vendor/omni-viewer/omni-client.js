@@ -1,4 +1,4 @@
-// Obsidian Prism — Omni Native Browser Router, Context Menu & Streaming Workbench Client (v1.0.8-beta.3)
+// Obsidian Prism — Omni Native Browser Router, Context Menu & Streaming Workbench Client
 // Second-channel runtime (`window.__agPrismOmni`) + CommonJS factory for deterministic unit tests.
 // Engineering & security guarantees:
 // 1. ZERO custom side-dock DOM or rogue `wcvBrowser` calls: 100% native integration with Antigravity's

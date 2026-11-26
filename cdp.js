@@ -6,9 +6,17 @@ const os = require('os');
 const path = require('path');
 const { execFile, execFileSync, spawn } = require('child_process');
 
+function readPackageVersion(fallback = '1.0.8-beta.3') {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
+    if (pkg && typeof pkg.version === 'string' && pkg.version.trim()) return pkg.version.trim();
+  } catch {}
+  return fallback;
+}
+
 const STYLE_ID = 'ag-prism-css';
 const LEGACY_STYLE_ID = 'ag-claude-style-css';
-const PLUGIN_VERSION = '1.0.8-beta.3';
+const PLUGIN_VERSION = readPackageVersion();
 const SETTING_BINDING = '__agPrismSetting';
 const LEGACY_SETTING_BINDING = '__agClaudeStyleSetting';
 const OMNI_BINDING = '__agPrismOmniCall';
@@ -11380,7 +11388,7 @@ function buildPeriodicPickerExpression(config = null, opts = null) {
   })()`;
 }
 
-// ── 第九通道：设置面板 + 全量 8 语言词典 + 八方旅人 WebGL2 选角舞台按需独立注入（不占 Channel 1 体积） ──
+// ── 第九通道：设置面板 + 全量 8 语言词典 + 3D 视差黑曜石星辰酒馆 WebGL2 选角舞台按需独立注入（不占 Channel 1 体积） ──
 let _settingsChannelCache = { sig: '', sourceHash: '', minRuntime: '', codeHash: '', cachedPaths: new Set() };
 
 function readCompiledSettingsChannelAssets(opts = null) {

@@ -1431,8 +1431,8 @@ test('Chat-only move-chat-session (drag/drop into folders, running Knowledge mov
     const s0 = svc.getState().snapshot;
     const storeId = s0.storeId;
 
-    // 1. 5 语随机问候词库校验
-    for (const lang of ['zh-CN', 'zh-TW', 'yue', 'en', 'ja']) {
+    // 1. 8 语随机问候词库校验（移除独立 yue，保留 legacy yue -> zh-CN 迁移）
+    for (const lang of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de']) {
       assert.ok(Array.isArray(GREETING_POOLS[lang].withUser) && GREETING_POOLS[lang].withUser.length > 0);
       assert.ok(Array.isArray(GREETING_POOLS[lang].anonymous) && GREETING_POOLS[lang].anonymous.length > 0);
       const named = formatGreeting(lang, 'Alex', 0);
@@ -1440,10 +1440,16 @@ test('Chat-only move-chat-session (drag/drop into folders, running Knowledge mov
       const anon = formatGreeting(lang, '', 0);
       assert.equal(anon.includes('{user}'), false, `${lang} 无用户名兜底不得残留占位符`);
     }
+    assert.equal(GREETING_POOLS.yue, undefined, 'Legacy yue greeting pool must be removed');
     assert.equal(normalizeGreetingLang('zh-HK'), 'zh-TW');
-    assert.equal(normalizeGreetingLang('zh-yue'), 'yue');
+    assert.equal(normalizeGreetingLang('yue'), 'zh-CN');
+    assert.equal(normalizeGreetingLang('zh-yue'), 'zh-CN');
     assert.equal(normalizeGreetingLang('en-US'), 'en');
     assert.equal(normalizeGreetingLang('ja-JP'), 'ja');
+    assert.equal(normalizeGreetingLang('ko-KR'), 'ko');
+    assert.equal(normalizeGreetingLang('es-ES'), 'es');
+    assert.equal(normalizeGreetingLang('fr-FR'), 'fr');
+    assert.equal(normalizeGreetingLang('de-DE'), 'de');
 
     // 2. 在 Chat 创建 2 个 Knowledge 文件夹 + 1 个独立 Spark 项目，并在 Knowledge 根目录首发会话
     const toChat = await svc.handleRpc({

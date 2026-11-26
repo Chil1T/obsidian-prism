@@ -1,7 +1,7 @@
 // Obsidian Prism Native Sidecar Daemon (sidecars/daemon/main.mjs)
 // - Auto-discovers DevToolsActivePort across Windows/macOS/Linux + fast Target.setDiscoverTargets push
 // - Registers Page.addScriptToEvaluateOnNewDocument + Runtime.evaluate (survives Ctrl+Shift+R reloads with zero app.asar touch!)
-// - Hot-upgrades legacy instances to Obsidian Prism v1.0.8-beta.3
+// - Hot-upgrades legacy instances to the active Obsidian Prism release (package.json#version SSOT)
 // - Lazily serves real MetricsStore + DesktopUsage snapshots over __agPrismMetricsCall only when requested (0 idle CPU)
 // - Registers __agPrismRepoCall (paired with window.__agPrismRepoBridge) for live Git status & safe git pull --ff-only + hot-reload!
 
@@ -28,6 +28,14 @@ import { AddonRegistry, isLabEnabled as isAddonsLabEnabled } from './addon-regis
 import { getGoMemLimitStatus, setGoMemLimit, clearGoMemLimit } from './gomemlimit-service.mjs';
 import { buildStorageGuardBannerExpression, buildStorageGuardDismissExpression } from './storage-guard-ui.mjs';
 import * as conversationArchive from './conversation-archive.mjs';
+
+const PKG_VERSION = (() => {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(new URL('../../package.json', import.meta.url), 'utf8'));
+    if (pkg && typeof pkg.version === 'string' && pkg.version.trim()) return pkg.version.trim();
+  } catch {}
+  return '1.0.8-beta.3';
+})();
 import { sanitizeSecretText } from './redact.mjs';
 
 export { sanitizeSecretText };
@@ -2229,7 +2237,7 @@ export class PrismDaemon {
     this.updateService =
       _testUpdateService ||
       new UpdateService({
-        currentVersion: this.cdp?.PLUGIN_VERSION || '1.0.8-beta.3',
+        currentVersion: this.cdp?.PLUGIN_VERSION || PKG_VERSION,
         channel: initialUpdateChannel,
       });
     if (_testUpdateService && typeof _testUpdateService.setChannel === 'function') {
@@ -3758,7 +3766,7 @@ export class PrismDaemon {
   }
 
   _buildCombinedUpdateStatus({ relState = null, gitState = null, action = 'update-status', channelOverride = null } = {}) {
-    const currentVersion = this.cdp?.PLUGIN_VERSION || this.updateService?.currentVersion || '1.0.8-beta.3';
+    const currentVersion = this.cdp?.PLUGIN_VERSION || this.updateService?.currentVersion || PKG_VERSION;
     const rel = relState || this.updateService?.getStatus?.() || {};
     const autoUpdate = this._getAutoUpdateSetting();
     const explicitChannel = channelOverride === 'beta' || channelOverride === 'stable' ? channelOverride : null;
@@ -4043,7 +4051,7 @@ export class PrismDaemon {
         ...applyRes,
         action: 'apply-update',
         channel,
-        currentVersion: this.cdp?.PLUGIN_VERSION || this.updateService?.currentVersion || '1.0.8-beta.3',
+        currentVersion: this.cdp?.PLUGIN_VERSION || this.updateService?.currentVersion || PKG_VERSION,
       };
     }
 
@@ -5908,7 +5916,7 @@ export class PrismDaemon {
   _getSidebarServerMeta() {
     return {
       binding: SIDEBAR_BINDING,
-      version: this.cdp?.PLUGIN_VERSION || '1.0.8-beta.3',
+      version: this.cdp?.PLUGIN_VERSION || PKG_VERSION,
       schemaVersion: 2,
       serviceReady: !this._sidebarStopped && typeof this.sidebarService?.handleRpc === 'function' &&
         !this.sidebarService.getBootDiagnostic?.(),
