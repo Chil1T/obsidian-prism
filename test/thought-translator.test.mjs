@@ -3059,6 +3059,7 @@ test('Issue #14 end-to-end local proxy transport: HTTP forwarding, SSE streaming
     const svc = new ThoughtTranslatorService({
       configDir: tmpDir,
       proxyEnv: {},
+      allowInsecureHttp: true,
       resolveSystemProxy: () => proxyUrlWithAuth,
     });
 

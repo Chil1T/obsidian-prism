@@ -1576,19 +1576,10 @@
       domTransformSkips: 0,
     };
 
-    // 扩大至 96x84px (32x28 格, PX=3), OX=8, OY=17 -> y=10 脚底在 81px, 头顶留满 51px 放火舌/立麦/节点花!
-    const CANVAS_W = 96;
-    const CANVAS_H = 84;
-    const OX = 8;
-    const OY = 17;
-    const PEEK_Y = 3;
-    const MINI_PEEK_Y = 2;
-
-    if (isFn(hostEl.removeChild)) {
-      while (hostEl.firstChild) hostEl.removeChild(hostEl.firstChild);
-    } else {
-      hostEl.innerHTML = '';
-    }
+    const CANVAS_W = 96, CANVAS_H = 84, OX = 8, OY = 17, PEEK_Y = 3, MINI_PEEK_Y = 2;
+    if (isFn(hostEl.replaceChildren)) hostEl.replaceChildren();
+    else if (isFn(hostEl.removeChild)) { let c; while ((c = hostEl.firstChild || hostEl.children?.[0])) hostEl.removeChild(c); }
+    else if (Array.isArray(hostEl.children)) hostEl.children.length = 0;
 
     const miniGroupEl = markNoTrOwned(doc.createElement('div'));
     miniGroupEl.className = 'ag-v2-mini-pile';

@@ -411,10 +411,8 @@
         sa(spark, 'data-brand', brand);
         sa(spark, 'data-state', st);
         sa(spark, 'data-mono', mv);
-        const svgStr = buildBrandMarkSvg(brand, 13, 'auto', isMono);
-        const cloned = cloneCachedSvgElement(`spark:${brand}:${mv}`, svgStr);
-        if (cloned && typeof spark.replaceChildren === 'function') spark.replaceChildren(cloned);
-        else spark.innerHTML = svgStr;
+        const c = cloneCachedSvgElement(`spark:${brand}:${mv}`, buildBrandMarkSvg(brand, 13, 'auto', isMono));
+        if (c) (G.__agPrismSvgUtil ? G.__agPrismSvgUtil.mount(spark, c) : spark.replaceChildren?.(c));
       }
     };
 

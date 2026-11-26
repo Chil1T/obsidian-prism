@@ -23,6 +23,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import runInBgRecovery from '../../src/daemon/run-in-bg-recovery.cjs';
 
 const GUID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const DB_FILE_RE = /^([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\.db(?:-(wal|shm))?$/i;
@@ -2464,13 +2465,7 @@ export function getDefaultWindowsAppStoragePath({ env = process.env, homeDir = o
   return path.join(appData, 'Antigravity', 'app_storage.json');
 }
 
-/**
- * Windows 托盘防卡死守卫：
- *   在请求 Antigravity 优雅退出前，若 app_storage.json 中开启了 runInBackground="true"，
- *   通过全链路 lstatSync 非符号链接校验 + 原子排他写将其临时挂起为 "false"；
- *   并在调用方 finally 阶段重读磁盘最新 app_storage.json（保留宿主退出期间写入的布局/状态字段），
- *   带 3 次短重试无损恢复原值。
- */
+// Windows 托盘防卡死守卫：临时挂起 runInBackground 并落盘崩溃恢复标记，退出后重试无损恢复。
 export function suspendWindowsRunInBackgroundForQuit(appStoragePath, opts = {}) {
   const platform = opts.platform || process.platform;
   const resolved = appStoragePath ? path.resolve(String(appStoragePath)) : '';
@@ -2486,26 +2481,18 @@ export function suspendWindowsRunInBackgroundForQuit(appStoragePath, opts = {}) 
   const writeFn = typeof opts.writeAtomicFn === 'function' ? opts.writeAtomicFn : atomicWriteTextExclusiveSync;
   const readFn = typeof opts.readFileSyncFn === 'function' ? opts.readFileSyncFn : fs.readFileSync;
   let originalValue;
+  let markerPath = '';
   try {
     const st = assertPathChainNoSymlinks(resolved, 'Antigravity app_storage.json');
-    if (!st || !st.isFile() || st.size > APP_STORAGE_MAX_BYTES) {
-      return { ...noop, reason: 'missing-or-invalid' };
-    }
-    const raw = readFn(resolved, 'utf8');
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return { ...noop, reason: 'invalid-json' };
-    }
+    if (!st || !st.isFile() || st.size > APP_STORAGE_MAX_BYTES) return { ...noop, reason: 'missing-or-invalid' };
+    const parsed = JSON.parse(readFn(resolved, 'utf8'));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { ...noop, reason: 'invalid-json' };
     originalValue = parsed.runInBackground;
-    if (originalValue !== 'true' && originalValue !== true) {
-      return { ...noop, reason: 'not-enabled', originalValue };
-    }
-    const suspendedPayload = {
-      ...parsed,
-      runInBackground: typeof originalValue === 'boolean' ? false : 'false',
-    };
-    writeFn(resolved, JSON.stringify(suspendedPayload, null, 2) + '\n', 0o600);
+    if (originalValue !== 'true' && originalValue !== true) return { ...noop, reason: 'not-enabled', originalValue };
+    markerPath = runInBgRecovery.writePendingRunInBgRestoreMarker(resolved, originalValue, opts);
+    writeFn(resolved, JSON.stringify({ ...parsed, runInBackground: typeof originalValue === 'boolean' ? false : 'false' }, null, 2) + '\n', 0o600);
   } catch (err) {
+    if (markerPath) runInBgRecovery.clearPendingRunInBgRestoreMarker(markerPath);
     return { ...noop, reason: 'error', error: String(err?.message || err) };
   }
 
@@ -2514,46 +2501,26 @@ export function suspendWindowsRunInBackgroundForQuit(appStoragePath, opts = {}) 
     if (restored) return true;
     const maxAttempts = Math.max(1, Math.min(10, Number(retries) || 3));
     const delayMs = Math.max(0, Math.min(2000, Number(retryDelayMs ?? 50)));
-    const wait =
-      typeof sleepFn === 'function'
-        ? sleepFn
-        : typeof opts.sleepFn === 'function'
-          ? opts.sleepFn
-          : (ms) => new Promise((r) => setTimeout(r, ms));
+    const wait = typeof sleepFn === 'function' ? sleepFn : typeof opts.sleepFn === 'function' ? opts.sleepFn : (ms) => new Promise((r) => setTimeout(r, ms));
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         const st = assertPathChainNoSymlinks(resolved, 'Antigravity app_storage.json');
-        if (!st || !st.isFile() || st.size > APP_STORAGE_MAX_BYTES) {
-          throw new Error('Antigravity app_storage.json missing or unsafe during restore');
-        }
-        const latestRaw = readFn(resolved, 'utf8');
-        const latest = JSON.parse(latestRaw);
-        if (!latest || typeof latest !== 'object' || Array.isArray(latest)) {
-          throw new Error('Antigravity app_storage.json contains non-object JSON during restore');
-        }
+        if (!st || !st.isFile() || st.size > APP_STORAGE_MAX_BYTES) throw new Error('Antigravity app_storage.json missing or unsafe during restore');
+        const latest = JSON.parse(readFn(resolved, 'utf8'));
+        if (!latest || typeof latest !== 'object' || Array.isArray(latest)) throw new Error('Antigravity app_storage.json contains non-object JSON during restore');
         latest.runInBackground = originalValue;
         writeFn(resolved, JSON.stringify(latest, null, 2) + '\n', 0o600);
+        if (markerPath) runInBgRecovery.clearPendingRunInBgRestoreMarker(markerPath);
         restored = true;
         return true;
       } catch (err) {
-        if (/symbolic link/i.test(String(err?.message || ''))) {
-          return false;
-        }
-        if (attempt < maxAttempts && delayMs > 0) {
-          await wait(delayMs);
-        }
+        if (/symbolic link/i.test(String(err?.message || ''))) return false;
+        if (attempt < maxAttempts && delayMs > 0) await wait(delayMs);
       }
     }
     return false;
   };
-
-  return {
-    suspended: true,
-    filePath: resolved,
-    originalValue,
-    reason: 'suspended',
-    restore,
-  };
+  return { suspended: true, filePath: resolved, originalValue, markerPath, reason: 'suspended', restore };
 }
 
 export function readLinuxEnvDGoMemLimit(opts = {}) {

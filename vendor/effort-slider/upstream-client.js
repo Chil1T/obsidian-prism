@@ -15,22 +15,10 @@ root.AntigravityCodexEffortSlider = exportsObj;
 // Factory error handled silently
 }
 })(typeof globalThis !== "undefined" ? globalThis : typeof window !== "undefined" ? window : this, function (globalRoot) {
-// ── 常量与默认几何参数 ──────────────────────────────────────────────────────
-var STYLE_ELEMENT_ID = "ag-codex-effort-slider-styles";
-var KNOB_RADIUS = 14;
-var ENERGY_START = 0;
-var ENERGY_END = 0.5;
-// Antigravity 官方推理档位枚举与展示名映射（对应 main.js 中的 DXb / EXb / GXb）
+// 常量与几何参数
+var STYLE_ELEMENT_ID = "ag-codex-effort-slider-styles", KNOB_RADIUS = 14, ENERGY_START = 0, ENERGY_END = 0.5;
 var AG_EFFORT_ORDER = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
-var AG_EFFORT_LABELS = {
-off: "Off",
-minimal: "Minimal",
-low: "Low",
-medium: "Medium",
-high: "High",
-xhigh: "Extra",
-max: "Max"
-};
+var AG_EFFORT_LABELS = { off: "Off", minimal: "Minimal", low: "Low", medium: "Medium", high: "High", xhigh: "Extra", max: "Max" };
 var AG_MODEL_LABEL_RE = /^(.*?)\s*\((off|minimal|low|medium|high|xhigh|extra|max)(?:\s+thinking)?\)\s*$/i;
 var _EFF_ALIAS = Object.create(null);
 "xhigh:xhigh|extra|extra high|超高|极高|極高|特高|很高;high:high|高;medium:medium|med|中|中等;low:low|低;minimal:minimal|极低|極低|最小|最低|极简|極簡;max:max|最高|最大|极限|極限;off:off|关闭|關閉|关|關|不推理|无|無|none|disabled;auto:auto|自动|自動;adaptive:adaptive|自适应|自適應;thinking:thinking|深度思考|思考中|思考;fixed:fixed|固定".split(";").forEach(function (g) {
@@ -66,8 +54,7 @@ function isClaudeModel(name) {
 if (!name || typeof name !== "string") return false;
 return /claude/i.test(name);
 }
-// ── 连续物理运动参数 ────────────────────────────────────────────────────────
-// full: 完整星云阻尼变速动画；fast: 快速 ~70ms 跟手吸附（默认）；quick: 0 动画直接跳格
+// 物理运动参数
 var _F = Object.freeze;
 var MOTION = _F({ maxSpeed: 3.2, accel: 28, decel: 18, snapEps: 0.0015, velEps: 0.01 });
 var MOTION_REDUCED = _F({ maxSpeed: 1e6, accel: 1e9, decel: 1e9, snapEps: 1e-4, velEps: 1e6 });
@@ -148,10 +135,9 @@ var e = Object.assign({ t: Date.now(), type: String(type || "event") }, detail &
 _tr.push(e);
 if (_tr.length > 200) _tr.splice(0, _tr.length - 200);
 }
-function dumpTrace(win) {
-var w = _win(win);
-return { plugin: "antigravity-codex-effort-slider@1.2.1", time: new Date().toISOString(), ua: w && w.navigator ? w.navigator.userAgent : "node", settings: readSettings(w), events: _tr.slice() };
-}
+var _SAN_HOME_RE = /(?:[A-Za-z]:[\\/]+Users[\\/]+[^\\/\s"'`]+|\/(?:Users|home)\/[^/\s"'`]+)/g;
+function _sanTr(v) { return typeof v === "string" ? v.replace(_SAN_HOME_RE, "<USER_HOME>") : Array.isArray(v) ? v.map(_sanTr) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, _sanTr(x)])) : v; }
+function dumpTrace(win) { var w = _win(win); return _sanTr({ plugin: "antigravity-codex-effort-slider@1.2.1", time: new Date().toISOString(), ua: w?.navigator ? w.navigator.userAgent : "node", settings: readSettings(w), events: _tr.slice() }); }
 function clamp01(v) { var n = Number(v); return !Number.isFinite(n) || n <= 0 ? 0 : n >= 1 ? 1 : n; }
 function clampAbs(v, l) { var m = Math.max(0, Number(l) || 0), n = Number(v) || 0; return n > m ? m : n < -m ? -m : n; }
 function pctFromIndex(i, c) { var n = Number(c) || 0; return n <= 1 ? 0 : Math.max(0, Math.min(n - 1, Math.round(Number(i) || 0))) / (n - 1); }
@@ -208,11 +194,8 @@ var v = decayPointerSpeed(rawSpeed, idleSeconds);
 var projected = clamp01((Number(ptrPct) || 0) + v * _REL_PRJ);
 return indexFromPct(projected, count);
 }
-// ── 22 颗黄金分割确定性星尘与色彩引擎（对齐 dsh-codex-effort-slider 右向左横穿星空） ──
-var PARTICLE_COUNT = 22;
-var _SF_MEAN = 1.5;
-var _SF_SPR = 0.08;
-var STARFIELD_MIN = 0.5;
+// 22 颗星尘参数
+var PARTICLE_COUNT = 22, _SF_MEAN = 1.5, _SF_SPR = 0.08, STARFIELD_MIN = 0.5;
 var GOLDEN_RATIO = 0.6180339887498949;
 var MAX_SPEED_FACTOR = 2;
 var _RM_SLOW = 2.6;
@@ -1049,8 +1032,8 @@ if (!container || !doc) {
 return { unmount: function () {}, refresh: function () {} };
 }
 installStyles(doc);
-// 清空宿主容器并构建 DOM 树（对齐 dsh-codex-effort-slider 四层结构：fill / energy+sweep / stars+dot / knob）
-container.innerHTML = "";
+function _clrEl(e){if(!e)return;if(e.replaceChildren)e.replaceChildren();else if(e.removeChild){var c;while((c=e.firstChild||(e.children&&e.children[0])))e.removeChild(c);}else if(Array.isArray(e.children))e.children.length=0;}
+_clrEl(container);
 var _sa = function (el, k, v) { if (el && typeof el.setAttribute === "function" && el.getAttribute(k) !== v) el.setAttribute(k, v); };
 function _ce(tag, cls, part, parent) {
 var el = doc.createElement(tag);
@@ -1239,7 +1222,7 @@ var tickMode = readSettings(win).ticks || "highlight", count = snap.count;
 if (tickMode === "hidden" || count <= 1) { if (ticksEl.style.display !== "none") ticksEl.style.display = "none"; return; }
 if (ticksEl.style.display !== "") ticksEl.style.display = "";
 if (_lastTicks !== count) {
-ticksEl.innerHTML = ""; tickNodes = [];
+_clrEl(ticksEl); tickNodes = [];
 for (var i = 0; i < count; i += 1) {
 var tick = _ce("span", "ces-tick", "tick", ticksEl), tp = pctFromIndex(i, count);
 tick.style.left = knobOffsetOf(tp, KNOB_RADIUS);

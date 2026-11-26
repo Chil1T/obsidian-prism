@@ -2426,7 +2426,7 @@ test('Octopath HD-2D 16:9 Mascot Casting Stage sub-panel: Ch9 fallback when masc
     assert.equal(presetBtns.length, 4, 'Mascot row must present 4 quick preset buttons');
     const openStageBtn = mascotRow.querySelector('button[data-ag-mascot-stage-open="1"]');
     assert.ok(openStageBtn, 'Mascot row must render Open Casting Stage button');
-    assert.ok(openStageBtn.children[0]?.innerHTML?.includes('<svg'), 'Stage entry button must render built-in SVG spotlight icon (no emoji)');
+    assert.equal(openStageBtn.children[0]?.children?.[0]?.tagName, 'SVG', 'Stage entry button must render built-in SVG spotlight icon (no emoji)');
 
     // Before opening stage: 0 CPU / 0 VRAM invariant
     assert.equal(stageApi.isOpen(), false);

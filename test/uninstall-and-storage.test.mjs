@@ -484,7 +484,7 @@ test('PrismDaemon executeRepoAction uninstall enforces confirm:true, symlink che
     assert.equal(srcSpawns[0].opts.cwd, os.tmpdir());
     assert.equal(srcSpawns[0].opts.env.AG_PRISM_PURGE_DATA, '0');
 
-    // 5) Fallback inlineRunner without external installer or installScriptPath hardens target path, cleans sidecar, uses atomic rename, and calls stop(true)
+    // 5) Fallback uses standalone src/daemon/uninstall-runner.mjs (zero -e inline code), enforces redline guard, cleans sidecar & atomically replaces config.json
     const fbSpawns = [];
     const stopArgs = [];
     const origStop = daemon.stop.bind(daemon);
@@ -507,13 +507,52 @@ test('PrismDaemon executeRepoAction uninstall enforces confirm:true, symlink che
     assert.equal(fbRes.ok, true);
     assert.equal(fbRes.engine, 'source-script');
     assert.equal(fbSpawns.length, 1);
-    const fbScript = fbSpawns[0].args[1] || '';
-    assert.ok(fbScript.includes('conversations_archive'), 'Fallback inlineRunner must enforce redline path guard');
-    assert.ok(fbScript.includes("obsidian-prism/daemon"), 'Fallback inlineRunner must clean sidecars entry');
-    assert.ok(fbScript.includes('renameSync'), 'Fallback inlineRunner must atomically replace config.json');
+    assert.equal(fbSpawns[0].args.includes('-e'), false, 'Uninstall runner must NEVER use inline node -e');
+    const runnerPath = fbSpawns[0].args[0] || '';
+    assert.match(runnerPath.replace(/\\/g, '/'), /src\/daemon\/uninstall-runner\.mjs$/);
+    const runnerSrc = fs.readFileSync(runnerPath, 'utf8');
+    assert.ok(runnerSrc.includes('conversations_archive'), 'uninstall-runner.mjs must enforce redline path guard');
+    assert.ok(runnerSrc.includes('obsidian-prism/daemon'), 'uninstall-runner.mjs must clean sidecars entry');
+    assert.ok(runnerSrc.includes('renameSync'), 'uninstall-runner.mjs must atomically replace config.json');
     await new Promise((r) => setTimeout(r, 30));
     assert.deepEqual(stopArgs, [true], 'Must call this.stop(true) to clean open page DOM when no external installer is used');
     daemon.stop = origStop;
+
+    // 6) Direct execution of runUninstallFromEnv removes normal target, refuses redline path, and atomically cleans config.json
+    const { runUninstallFromEnv } = await import('../src/daemon/uninstall-runner.mjs');
+    const fakeHome = path.join(tmpDir, 'fake-home');
+    const fakeCfgDir = path.join(fakeHome, '.gemini', 'config');
+    const fakePlugin = path.join(fakeCfgDir, 'plugins', 'obsidian-prism');
+    const redlineDir = path.join(fakeHome, 'conversations_archive');
+    fs.mkdirSync(fakePlugin, { recursive: true });
+    fs.mkdirSync(redlineDir, { recursive: true });
+    fs.writeFileSync(path.join(fakePlugin, 'dummy.txt'), 'bye', 'utf8');
+    fs.writeFileSync(path.join(redlineDir, 'keep.txt'), 'safe', 'utf8');
+    const fakeCfg = path.join(fakeCfgDir, 'config.json');
+    fs.writeFileSync(
+      fakeCfg,
+      JSON.stringify({ plugins: { 'obsidian-prism': true, other: true }, sidecars: { 'obsidian-prism/daemon': true } }),
+      'utf8'
+    );
+    const runRes = await runUninstallFromEnv(
+      { AG_PRISM_UNINSTALL_TARGET: fakePlugin, AG_PRISM_PURGE_DATA: '0' },
+      { homeDir: fakeHome, configDir: fakeCfgDir }
+    );
+    assert.equal(runRes.ok, true);
+    assert.equal(runRes.removedTarget, true);
+    assert.equal(runRes.updatedConfig, true);
+    assert.equal(fs.existsSync(fakePlugin), false);
+    const updatedCfg = JSON.parse(fs.readFileSync(fakeCfg, 'utf8'));
+    assert.equal(updatedCfg.plugins['obsidian-prism'], undefined);
+    assert.equal(updatedCfg.plugins.other, true);
+    assert.equal(updatedCfg.sidecars['obsidian-prism/daemon'], undefined);
+
+    const redlineRes = await runUninstallFromEnv(
+      { AG_PRISM_UNINSTALL_TARGET: redlineDir },
+      { homeDir: fakeHome, configDir: fakeCfgDir }
+    );
+    assert.equal(redlineRes.removedTarget, false);
+    assert.equal(fs.existsSync(path.join(redlineDir, 'keep.txt')), true);
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

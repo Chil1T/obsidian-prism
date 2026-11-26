@@ -36,9 +36,11 @@ const PKG_VERSION = (() => {
   } catch {}
   return '1.0.8-beta.3';
 })();
-import { sanitizeSecretText } from './redact.mjs';
-
-export { sanitizeSecretText };
+import { sanitizeSecretText, sanitizeLogLine } from './redact.mjs';
+import { QuotaForceRefreshGuard } from '../../src/daemon/quota-guard.mjs';
+import { resolveUninstallRunnerPath } from '../../src/daemon/uninstall-runner.mjs';
+import runInBgRecovery from '../../src/daemon/run-in-bg-recovery.cjs';
+export { sanitizeSecretText, sanitizeLogLine };
 
 const require = createRequire(import.meta.url);
 const __filename = fileURLToPath(import.meta.url);
@@ -611,6 +613,7 @@ export function copyUpdatedRuntimeFromRepo(repoDir, pluginDir, syncFilesList) {
     }
   };
   syncSubDir('assets');
+  syncSubDir('src');
   syncSubDir('vendor');
   syncSubDir('sidecars');
   return synced;
@@ -2087,6 +2090,8 @@ export class PrismDaemon {
     storageGuardIntervalMs = 300000,
     enableStorageGuardTimer = true,
     silent = false,
+    quotaCooldownNow = null,
+    pendingRunInBgMarkerPath = '',
   } = {}) {
     this.rootDir = path.resolve(rootDir);
     this.gitRepoDir = gitRepoDir ? path.resolve(gitRepoDir) : null;
@@ -2125,36 +2130,16 @@ export class PrismDaemon {
     this.busy = false;
     this.timer = null;
     this.fsw = null;
-    this.injectExpr = '';
-    this.omniExpr = '';
-    this.sidebarExpr = '';
-    this.hostI18nExpr = '';
-    this.swarmI18nExpr = '';
-    this.swarmI18nCodeHash = '';
-    this.thoughtExpr = '';
-    this.thoughtCodeHash = '';
-    this._thoughtHashSource = '';
-    this.inlineDiffExpr = '';
-    this.inlineDiffCodeHash = '';
-    this._inlineDiffHashSource = '';
-    this.wallpaperExpr = '';
-    this.wallpaperCodeHash = '';
-    this._wallpaperHashSource = '';
-    this.suggesterExpr = '';
-    this.suggesterCodeHash = '';
-    this._suggesterHashSource = '';
-    this.periodicPickerExpr = '';
-    this.periodicPickerCodeHash = '';
-    this._periodicPickerHashSource = '';
-    this.settingsExpr = '';
-    this.settingsCodeHash = '';
-    this._settingsHashSource = '';
-    this.mascotExpr = '';
-    this.mascotCodeHash = '';
-    this._mascotHashSource = '';
-    this.homeStudioExpr = '';
-    this.homeStudioCodeHash = '';
-    this._homeStudioHashSource = '';
+    this.injectExpr = ''; this.omniExpr = ''; this.sidebarExpr = ''; this.hostI18nExpr = '';
+    this.swarmI18nExpr = ''; this.swarmI18nCodeHash = '';
+    this.thoughtExpr = ''; this.thoughtCodeHash = ''; this._thoughtHashSource = '';
+    this.inlineDiffExpr = ''; this.inlineDiffCodeHash = ''; this._inlineDiffHashSource = '';
+    this.wallpaperExpr = ''; this.wallpaperCodeHash = ''; this._wallpaperHashSource = '';
+    this.suggesterExpr = ''; this.suggesterCodeHash = ''; this._suggesterHashSource = '';
+    this.periodicPickerExpr = ''; this.periodicPickerCodeHash = ''; this._periodicPickerHashSource = '';
+    this.settingsExpr = ''; this.settingsCodeHash = ''; this._settingsHashSource = '';
+    this.mascotExpr = ''; this.mascotCodeHash = ''; this._mascotHashSource = '';
+    this.homeStudioExpr = ''; this.homeStudioCodeHash = ''; this._homeStudioHashSource = '';
     this.codeHash = '';
     this.ownerToken = `${process.pid}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
     this.pidFile = path.join(this.rootDir, '.daemon.pid');
@@ -2245,6 +2230,10 @@ export class PrismDaemon {
         _testUpdateService.setChannel(initialUpdateChannel);
       } catch {}
     }
+    this._quotaForceRefreshGuard = new QuotaForceRefreshGuard({
+      ...(typeof quotaCooldownNow === 'function' ? { now: quotaCooldownNow } : {}),
+    });
+    this._pendingRunInBgMarkerPath = typeof pendingRunInBgMarkerPath === 'string' ? pendingRunInBgMarkerPath : '';
     this.addonRegistry =
       _testAddonRegistry ||
       new AddonRegistry({
@@ -2257,18 +2246,14 @@ export class PrismDaemon {
     if (!this.silent) {
       try {
         if (this._logBytes < 0) {
-          try {
-            this._logBytes = fs.statSync(this.logFile).size;
-          } catch {
-            this._logBytes = 0;
-          }
+          try { this._logBytes = fs.statSync(this.logFile).size; } catch { this._logBytes = 0; }
         }
         if (this._logBytes > 512 * 1024) {
-          fs.writeFileSync(this.logFile, '', 'utf8');
+          fs.writeFileSync(this.logFile, '', { encoding: 'utf8', mode: 0o600 });
           this._logBytes = 0;
         }
-        const line = `[${new Date().toISOString()}] ${sanitizeSecretText(msg)}\n`;
-        fs.appendFileSync(this.logFile, line, 'utf8');
+        const line = `[${new Date().toISOString()}] ${sanitizeLogLine(msg)}\n`;
+        fs.appendFileSync(this.logFile, line, { encoding: 'utf8', mode: 0o600 });
         this._logBytes += Buffer.byteLength(line, 'utf8');
       } catch {}
     }
@@ -3491,11 +3476,8 @@ export class PrismDaemon {
         }
       }
 
-      const inlineRunner = scriptPath
-        ? "setTimeout(async()=>{try{const m=require(process.env.AG_PRISM_UNINSTALL_SCRIPT);await m.uninstallPlugin({targetDir:process.env.AG_PRISM_UNINSTALL_TARGET,purgeData:process.env.AG_PRISM_PURGE_DATA==='1',cdpPort:Number(process.env.AG_PRISM_CDP_PORT)||undefined});}catch{}process.exit(0);},400);"
-        : "setTimeout(()=>{try{const fs=require('fs'),path=require('path'),os=require('os');const t=process.env.AG_PRISM_UNINSTALL_TARGET;if(t){const r=path.resolve(t),h=path.resolve(os.homedir()),segs=r.split(/[\\\\/]+/).map(s=>s.toLowerCase()),rl=['conversations_archive','prism-knowledge-space','antigravity-spark'],prot=[path.parse(r).root,h,path.join(h,'.gemini'),path.join(h,'.gemini','config'),path.join(h,'.gemini','antigravity')].map(p=>p.toLowerCase());if(!prot.includes(r.toLowerCase())&&!rl.some(k=>segs.includes(k))&&fs.existsSync(r)&&!fs.lstatSync(r).isSymbolicLink())fs.rmSync(r,{recursive:true,force:true});}const cfgDir=path.join(os.homedir(),'.gemini','config'),cfg=path.join(cfgDir,'config.json');if(fs.existsSync(cfg)&&!fs.lstatSync(cfg).isSymbolicLink()){const d=JSON.parse(fs.readFileSync(cfg,'utf8'));if(d&&typeof d==='object'){if(d.plugins)delete d.plugins['obsidian-prism'];if(d.sidecars)delete d.sidecars['obsidian-prism/daemon'];const tmp=cfg+'.tmp.'+process.pid;fs.writeFileSync(tmp,JSON.stringify(d,null,2)+'\\n',{mode:0o600});fs.renameSync(tmp,cfg);}}}catch{}process.exit(0);},400);";
       spawnCmd = process.execPath;
-      spawnArgs = ['-e', inlineRunner];
+      spawnArgs = [resolveUninstallRunnerPath(this.rootDir, DEFAULT_ROOT_DIR, lstatFn)];
       spawnEnv = {
         ...process.env,
         AG_PRISM_UNINSTALL_TARGET: this.rootDir,
@@ -6356,13 +6338,19 @@ export class PrismDaemon {
   }
 
   async _invokeRendererLsRpc(method, body = {}, opts = null) {
+    let effectiveBody = body;
+    if (method === 'RetrieveUserQuotaSummary' && this._quotaForceRefreshGuard) {
+      const decision = this._quotaForceRefreshGuard.prepare(body);
+      if (decision.action === 'cached') return decision.result;
+      effectiveBody = decision.body;
+    }
     const asyncCtx = RPC_ROUTE_STORAGE.getStore();
     const routeOpts = opts || (asyncCtx && asyncCtx.daemon === this ? asyncCtx : null);
     const candidates = this._getRendererRpcCandidates(routeOpts);
     if (!candidates.length) {
       throw new Error('等待 Antigravity 主窗口连接');
     }
-    const expr = buildRendererRpcExpression(method, body);
+    const expr = buildRendererRpcExpression(method, effectiveBody);
     const timeoutMs = method === 'Probe' ? 2600 : 12000;
     let lastErr = null;
     for (const entry of candidates) {
@@ -6387,7 +6375,9 @@ export class PrismDaemon {
           return normalized;
         }
         if (method === 'RetrieveUserQuotaSummary') {
-          return normalizeRendererQuotaSummary(raw);
+          const normalized = normalizeRendererQuotaSummary(raw);
+          this._quotaForceRefreshGuard?.recordSuccess(normalized);
+          return normalized;
         }
         if (method === 'GetAllCascadeTrajectories') {
           const scopeHint = normalizeUsageScopeKey(raw?.scopeHint || '');
@@ -11689,6 +11679,10 @@ export class PrismDaemon {
     } catch {}
   }
 
+  _recoverPendingRunInBackgroundOnBoot() {
+    runInBgRecovery.recoverPendingForDaemonBoot({ rootDir: this.rootDir, defaultRootDir: DEFAULT_ROOT_DIR, extraMarkerPath: this._pendingRunInBgMarkerPath, getDefaultAppStoragePath: conversationArchive.getDefaultAntigravityAppStoragePath, log: (m) => this.log(m) });
+  }
+
   start({ claimPid = true, watchFiles = true } = {}) {
     if (this.running) return;
     this._sidebarStopped = false;
@@ -11696,6 +11690,7 @@ export class PrismDaemon {
     this._suggesterStopped = false;
     this.running = true;
     if (claimPid) this.claimOwnership();
+    this._recoverPendingRunInBackgroundOnBoot();
     const initialPort = discoverActivePort(this.overridePort, this.portFile);
     this.log(`[boot] PrismDaemon started (pid=${process.pid}, activePort=${initialPort || 'none'}, root=${this.rootDir})`);
     this.rebuildBundle();

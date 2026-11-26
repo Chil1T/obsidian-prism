@@ -1,10 +1,5 @@
-// Inject Obsidian Prism (obsidian-prism) into every open Antigravity window over CDP.
-//
-//   node inject.js           one-shot: inject now and exit
-//   node inject.js --watch   daemon mode: auto-inject into new/reloaded windows
-//                            and hot-reload style.css / *.js / config.json
-const fs = require('fs');
-const path = require('path');
+// Inject Obsidian Prism into Antigravity windows over CDP (--watch for daemon hot-reload).
+const fs = require('fs'), path = require('path');
 const {
   PORT_FILE,
   PID_FILE,
@@ -57,50 +52,30 @@ const INLINE_DIFF_MAX_URI_LENGTH = 2048;
 function isThoughtEnabledForConfig(cfg, checker = shouldEnableThought) {
   try {
     if (typeof checker === 'function') return Boolean(checker(cfg));
-    const mode = typeof cfg?.thoughtTranslate === 'string' ? cfg.thoughtTranslate.trim().toLowerCase() : 'off';
-    return Boolean(mode && mode !== 'off');
-  } catch {
-    return false;
-  }
+    const m = typeof cfg?.thoughtTranslate === 'string' ? cfg.thoughtTranslate.trim().toLowerCase() : 'off';
+    return Boolean(m && m !== 'off');
+  } catch { return false; }
 }
-
-const WATCH = process.argv.includes('--watch');
-const LOG_FILE = path.join(__dirname, 'watch.log');
-const BUNDLE_CACHE_PATH = path.join(__dirname, '.bundle-cache.json');
-const PERIODIC_PICKER_CACHE_OPTS = Object.freeze({ cachePath: BUNDLE_CACHE_PATH });
+const WATCH = process.argv.includes('--watch'), LOG_FILE = path.join(__dirname, 'watch.log'), BUNDLE_CACHE_PATH = path.join(__dirname, '.bundle-cache.json'), PERIODIC_PICKER_CACHE_OPTS = Object.freeze({ cachePath: BUNDLE_CACHE_PATH });
 
 const SECRET_TOKEN_RE =
   /(sk-[A-Za-z0-9_\-]{6,}|AIza[A-Za-z0-9_\-]{12,}|xai-[A-Za-z0-9_\-]{8,}|ghp_[A-Za-z0-9]{12,}|github_pat_[A-Za-z0-9_]{12,}|Bearer\s+[A-Za-z0-9._\-]{8,})/gi;
 const URL_SECRET_QUERY_RE = /([?&](?:token|auth|signature|key|secret)=)[^&\s#"']+/gi;
 
-function sanitizeSecretText(text) {
-  return String(text || '')
-    .replace(/https?:\/\/[^/\s:@]+:[^/\s@]+@/gi, 'https://***@')
-    .replace(URL_SECRET_QUERY_RE, '$1<REDACTED>')
-    .replace(SECRET_TOKEN_RE, '***REDACTED***');
+function sanitizeSecretText(t) {
+  let o = String(t || '').replace(/https?:\/\/[^/\s:@]+:[^/\s@]+@/gi, 'https://***@').replace(URL_SECRET_QUERY_RE, '$1<REDACTED>').replace(SECRET_TOKEN_RE, '***REDACTED***');
+  const h = String(process.env?.USERPROFILE || process.env?.HOME || '').replace(/[\\/]+$/, '');
+  if (h.length > 3) o = o.replace(new RegExp([...new Set([h.replace(/\//g, '\\'), h.replace(/\\/g, '/')])].map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), process.platform === 'win32' ? 'gi' : 'g'), '<USER_HOME>');
+  return o;
+}
+function log(...a) {
+  const l = sanitizeSecretText(a.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join(' '));
+  console.log(l);
+  if (WATCH) try { fs.appendFileSync(LOG_FILE, `[${new Date().toISOString()}] ${l}\n`, { encoding: 'utf8', mode: 0o600 }); } catch {}
 }
 
-function log(...args) {
-  const line = sanitizeSecretText(args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' '));
-  console.log(line);
-  if (WATCH) {
-    try {
-      fs.appendFileSync(LOG_FILE, `[${new Date().toISOString()}] ${line}\n`);
-    } catch {}
-  }
-}
-
-function shortTitle(page) {
-  const t = sanitizeSecretText(page.title || page.url || '');
-  return t.length > 60 ? t.slice(0, 57) + '...' : t;
-}
-
-function serializeJsonForEval(val) {
-  const raw = JSON.stringify(val === undefined ? null : val);
-  return String(raw).replace(/[<>/\u2028\u2029]/g, (ch) =>
-    `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`
-  );
-}
+const shortTitle = (p) => { const t = sanitizeSecretText(p.title || p.url || ''); return t.length > 60 ? t.slice(0, 57) + '...' : t; };
+const serializeJsonForEval = (v) => String(JSON.stringify(v === undefined ? null : v)).replace(/[<>/\u2028\u2029]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
 
 function updateConfigBatch(entriesObj) {
   if (!entriesObj || typeof entriesObj !== 'object' || Array.isArray(entriesObj)) return false;

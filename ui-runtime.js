@@ -848,11 +848,9 @@
       })
     : noopStub();
 
-  const iconPendSig = new WeakMap();
-  const A_IC = 'data-ag-cs-icon-injected', A_OS = 'data-ag-cs-orig-svg', A_OD = 'data-ag-cs-orig-disp';
+  const iconPendSig = new WeakMap(), A_IC = 'data-ag-cs-icon-injected', A_OS = 'data-ag-cs-orig-svg', A_OD = 'data-ag-cs-orig-disp';
   const applySingleHostIcon = (btn, iconName, origSvg, size, eqSig) => {
-    if (!btn || btn[K_IC] === false || !origSvg || !origSvg.parentNode || !animatedIcons) return;
-    if (ga(btn, A_IC) || qs(btn, '.ag-anim-icon')) return;
+    if (!btn || btn[K_IC] === false || !origSvg?.parentNode || !animatedIcons || ga(btn, A_IC) || qs(btn, '.ag-anim-icon')) return;
     const htmlStr = animatedIcons.renderIcon(iconName, { size });
     if (!htmlStr) return;
 
@@ -863,11 +861,10 @@
 
     let animSvg = modelGlyphCtl.cloneCachedSvgElement(`icon:${iconName}:${size}`, htmlStr);
     if (!animSvg) {
-      animSvg = D.createElement('svg');
+      animSvg = D.createElementNS ? D.createElementNS('http://www.w3.org/2000/svg', 'svg') : D.createElement('svg');
       animSvg.className = `ag-anim-icon ag-icon-${iconName}`;
       for (const [k, v] of [['data-anim-icon', iconName], ['width', size], ['height', size], ['viewBox', '0 0 24 24'], ['aria-hidden', 'true']]) sa(animSvg, k, v);
       if (iconName === 'copy-check') sa(animSvg, 'data-icon-state', 'copy');
-      animSvg.innerHTML = htmlStr;
     }
     sa(animSvg, 'data-ag-owned', '1');
     origSvg.parentNode.insertBefore(animSvg, origSvg);

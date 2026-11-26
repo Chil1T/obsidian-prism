@@ -158,22 +158,9 @@ const LEGACY_SHORT_OR_UNDERSCORE_CSS_VARS = new Set([
   '--card', '--link',
 ]);
 
-// Runtime non-empty innerHTML / outerHTML / insertAdjacentHTML write ratchet (Phase 1 target: 0).
-// Core runtime files hold 9 non-empty writes + 1 upstream fallback in inline-widget.cjs.
-const LEGACY_NON_EMPTY_HTML_WRITES = Object.freeze({
-  'model-glyph-crystal.js': 4,
-  'settings-panel.js': 3,
-  'stream-choreography.js': 1,
-  'ui-runtime.js': 1,
-  'vendor/pulse-dashboard/compat/inline-widget.cjs': 1,
-});
-
-// Runtime empty-string innerHTML clears (`el.innerHTML = ''`), also strictly non-growing.
-const LEGACY_EMPTY_HTML_CLEARS = Object.freeze({
-  'dual-mascot-rig.js': 1,
-  'home-studio-panel.js': 2,
-  'vendor/effort-slider/upstream-client.js': 2,
-});
+// Runtime innerHTML / outerHTML / insertAdjacentHTML write ratchet: permanently locked to 0 (Trusted Types safe).
+const LEGACY_NON_EMPTY_HTML_WRITES = Object.freeze({});
+const LEGACY_EMPTY_HTML_CLEARS = Object.freeze({});
 
 const ROOT_NODE_SCRIPTS = new Set(['cdp.js', 'inject.js', 'remove.js']);
 
@@ -326,7 +313,7 @@ test('Law 6a: style.css anti-rot gate (0 :has(, 100% ASCII, balanced delimiters,
   );
 });
 
-test('Law 6b: Runtime innerHTML / outerHTML / insertAdjacentHTML write ratchet (0 new sites; legacy list <= 9 core + 1 compat)', () => {
+test('Law 6b: Runtime innerHTML / outerHTML / insertAdjacentHTML write ratchet permanently locked to 0', () => {
   const violations = [];
   let coreNonEmptyTotal = 0;
 
@@ -349,9 +336,7 @@ test('Law 6b: Runtime innerHTML / outerHTML / insertAdjacentHTML write ratchet (
     if (nonEmptyCount > allowedNonEmpty) {
       violations.push(`${f}: ${nonEmptyCount} non-empty innerHTML/outerHTML/insertAdjacentHTML write(s) (allowed <= ${allowedNonEmpty})`);
     }
-    if (!f.startsWith('vendor/pulse-dashboard/compat/')) {
-      coreNonEmptyTotal += nonEmptyCount;
-    }
+    coreNonEmptyTotal += nonEmptyCount;
 
     const allowedEmpty = LEGACY_EMPTY_HTML_CLEARS[f] || 0;
     if (emptyCount > allowedEmpty) {
@@ -359,6 +344,6 @@ test('Law 6b: Runtime innerHTML / outerHTML / insertAdjacentHTML write ratchet (
     }
   }
 
-  assert.ok(coreNonEmptyTotal <= 9, `Core runtime non-empty innerHTML writes must stay <= 9 (got ${coreNonEmptyTotal})`);
+  assert.equal(coreNonEmptyTotal, 0, `Runtime non-empty innerHTML writes must be 0 (got ${coreNonEmptyTotal})`);
   assert.deepEqual(violations, [], `Runtime HTML-sink ratchet violations:\n${violations.join('\n')}`);
 });

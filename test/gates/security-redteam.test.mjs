@@ -116,32 +116,8 @@ test('Law 7b: Host SQLite database physical isolation (never open state.vscdb or
   assert.deepEqual(violations, [], `Host database isolation violations:\n${violations.join('\n')}`);
 });
 
-test('Law 7c: Repo-wide AV redline gate (including vendor/ and scripts/win/) with explicit Phase 1 debt ratchet', () => {
-  // TEMPORARY Phase 1 debt ratchet: remove each entry and lock to 0 once cleared in Phase 1!
-  // No other file in the repository may introduce ANY of these patterns.
-  const PHASE1_TEMP_DEBT = Object.freeze({
-    'vendor/pulse-dashboard/sidecars/panel/discovery.mjs': {
-      addType: 1,
-      wmi: 2,
-      openProcessNonReadOnly: 3,
-    },
-    'vendor/wallpaper/wallpaper-service.mjs': {
-      addType: 1,
-      hiddenPs: 1,
-      encodedCmd: 1,
-    },
-    'vendor/sidebar-studio/sidebar-service.mjs': {
-      addType: 1,
-      encodedCmd: 1,
-    },
-    'scripts/win/watch.bat': {
-      hiddenPs: 2,
-    },
-    'sidecars/daemon/main.mjs': {
-      inlineNodeDashE: 1,
-    },
-  });
-
+test('Law 7c: Repo-wide AV redline gate (including vendor/, src/, installer/ and scripts/win/) locked to strict 0 debt', () => {
+  // Permanently locked to 0 across the entire repository (Phase 1A zero-AV clearance).
   const RULES = [
     {
       id: 'encodedCmd',
@@ -150,6 +126,7 @@ test('Law 7c: Repo-wide AV redline gate (including vendor/ and scripts/win/) wit
     { id: 'hiddenPs', re: /-WindowStyle(?:\s+|['"]\s*,\s*['"])Hidden\b/gi },
     { id: 'addType', re: /\bAdd-Type\b/gi },
     { id: 'wmi', re: /\b(?:Win32_Process|Get-CimInstance|Get-WmiObject)\b/gi },
+    { id: 'getNetTcp', re: /\bGet-NetTCPConnection\b/gi },
     { id: 'wscript', re: /\bWScript\.Shell\b/gi },
     { id: 'emptyWorkingSet', re: /\bEmptyWorkingSet\b/gi },
     { id: 'taskkill', re: /\b(?:taskkill|Stop-Process)\b/gi },
@@ -163,13 +140,11 @@ test('Law 7c: Repo-wide AV redline gate (including vendor/ and scripts/win/) wit
     if (!/\.(?:mjs|cjs|js|bat|sh|ps1|cs|swift|cmd)$/i.test(rel)) continue;
     const raw = fs.readFileSync(path.join(ROOT, rel), 'utf8');
     const text = rel.endsWith('.bat') || rel.endsWith('.cmd') ? raw : stripJsComments(raw);
-    const debt = PHASE1_TEMP_DEBT[rel] || {};
 
     for (const rule of RULES) {
       const count = [...text.matchAll(rule.re)].length;
-      const allowed = debt[rule.id] || 0;
-      if (count > allowed) {
-        violations.push(`${rel}: AV redline "${rule.id}" count=${count} exceeds ratchet cap=${allowed}`);
+      if (count > 0) {
+        violations.push(`${rel}: AV redline "${rule.id}" count=${count} (must be 0)`);
       }
     }
 
@@ -183,11 +158,8 @@ test('Law 7c: Repo-wide AV redline gate (including vendor/ and scripts/win/) wit
         (expr.includes('PROCESS_QUERY_LIMITED_INFORMATION') || expr.includes('uint dwDesiredAccess'));
       if (!isCdpReadOnly) nonReadOnlyOpenProc += 1;
     }
-    const allowedOpenProc = debt.openProcessNonReadOnly || 0;
-    if (nonReadOnlyOpenProc > allowedOpenProc) {
-      violations.push(
-        `${rel}: non-allowlisted OpenProcess count=${nonReadOnlyOpenProc} exceeds cap=${allowedOpenProc}`
-      );
+    if (nonReadOnlyOpenProc > 0) {
+      violations.push(`${rel}: non-allowlisted OpenProcess count=${nonReadOnlyOpenProc} (must be 0)`);
     }
   }
 

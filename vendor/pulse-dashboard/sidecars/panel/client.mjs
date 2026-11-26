@@ -8,6 +8,7 @@ import { platformPaths } from '../../compat/platform.mjs';
 import { discoverProcesses, httpLogPorts, extractHubPort } from './discovery.mjs';
 import { TrajectoryJson } from './trajectory-json.mjs';
 import { TrajectoryReader } from './trajectory-reader.mjs';
+import { QuotaForceRefreshGuard } from '../../../../src/daemon/quota-guard.mjs';
 
 const SERVICE = '/exa.language_server_pb.LanguageServerService/';
 
@@ -68,6 +69,7 @@ export class AntigravityClient {
     this._proxyTrajInFlight = new Map();
     this.agent = new HttpAgent({ keepAlive: true, keepAliveMsecs: 15000, maxSockets: 2, maxFreeSockets: 2, timeout: 25000 });
     this.reader = new TrajectoryReader(this);
+    this._quotaForceRefreshGuard = new QuotaForceRefreshGuard({ now: this.now });
   }
   server = null;
   discoveredAt = 0;
@@ -436,12 +438,20 @@ export class AntigravityClient {
   }
 
   async call(method, body = {}, retry = true) {
+    let effectiveBody = body;
+    if (method === 'RetrieveUserQuotaSummary' && this._quotaForceRefreshGuard && retry) {
+      const decision = this._quotaForceRefreshGuard.prepare(body);
+      if (decision.action === 'cached') return decision.result;
+      effectiveBody = decision.body;
+    }
     const scope = this._resolveScopeKey();
     const slot = this._discoverySlot(scope);
     const server = await this.discover(false, scope);
     if (server && server.mode === 'renderer-proxy') {
       try {
-        return await this._callRendererProxy(method, body);
+        const res = await this._callRendererProxy(method, effectiveBody);
+        if (method === 'RetrieveUserQuotaSummary') this._quotaForceRefreshGuard?.recordSuccess(res);
+        return res;
       } catch (error) {
         if (slot.server === server) {
           slot.server = null;
@@ -450,17 +460,17 @@ export class AntigravityClient {
         }
         if (retry) {
           await this.discover(true, scope);
-          return this.call(method, body, false);
+          return this.call(method, effectiveBody, false);
         }
         throw error;
       }
     }
     try {
-      return await new Promise((resolve, reject) => {
+      const result = await new Promise((resolve, reject) => {
         const reqBody =
-          method === 'GetCascadeTrajectoryGeneratorMetadata' && body && typeof body === 'object' && body.includeMessages === undefined
-            ? { ...body, includeMessages: false }
-            : body;
+          method === 'GetCascadeTrajectoryGeneratorMetadata' && effectiveBody && typeof effectiveBody === 'object' && effectiveBody.includeMessages === undefined
+            ? { ...effectiveBody, includeMessages: false }
+            : effectiveBody;
         const data = JSON.stringify(reqBody);
         const projection = ['GetCascadeTrajectory', 'GetCascadeTrajectorySteps', 'GetCascadeTrajectoryGeneratorMetadata', 'GetAllCascadeTrajectories'].includes(method);
         const started = this.now();
@@ -523,6 +533,8 @@ export class AntigravityClient {
         req.once('close', () => clearTimeout(deadline));
         req.end(data);
       });
+      if (method === 'RetrieveUserQuotaSummary') this._quotaForceRefreshGuard?.recordSuccess(result);
+      return result;
     } catch (error) {
       const endpointLost = [401, 403].includes(error.status) || ['ECONNREFUSED', 'ECONNRESET', 'EPIPE', 'ENOTCONN'].includes(error.code);
       if (!endpointLost) throw error;

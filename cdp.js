@@ -3169,11 +3169,8 @@ async function executeHostRelaunchSequence(task, hooks = {}) {
   return { relaunched: true, exePath, args: [CDP_OPT_IN_SWITCH] };
 }
 
-// 纯 Node Windows 脱离重启引擎：优雅处理 app_storage.json runInBackground 托盘陷阱 + loopback CDP Browser.close + 零 PowerShell/WMI
-const APP_STORAGE_MAX_BYTES = 8 * 1024 * 1024;
-const APP_STORAGE_RESTORE_RETRIES = 3;
-const APP_STORAGE_RESTORE_RETRY_DELAY_MS = 50;
-const RELAUNCH_TASK_MAX_BYTES = 1024 * 1024;
+// 纯 Node Windows 脱离重启引擎（零 PowerShell/WMI）
+const APP_STORAGE_MAX_BYTES = 8 * 1024 * 1024, APP_STORAGE_RESTORE_RETRIES = 3, APP_STORAGE_RESTORE_RETRY_DELAY_MS = 50, RELAUNCH_TASK_MAX_BYTES = 1024 * 1024;
 
 function getAntigravityAppStoragePath(opts = {}) {
   if (opts && typeof opts.appStoragePath === 'string' && opts.appStoragePath.trim()) {
@@ -3186,99 +3183,53 @@ function getAntigravityAppStoragePath(opts = {}) {
   return path.join(baseAppData, 'Antigravity', 'app_storage.json');
 }
 
+let _runInBgRec = null;
+try { _runInBgRec = require('./src/daemon/run-in-bg-recovery.cjs'); } catch {}
+
 function suspendAntigravityRunInBackground(appStoragePath, opts = {}) {
   const targetPath = getAntigravityAppStoragePath({ appStoragePath });
-  if (!fs.existsSync(targetPath)) {
-    return { modified: false, originalValue: undefined, path: targetPath, skippedReason: 'not-found' };
-  }
-  let resolved;
-  try {
-    ({ resolved } = assertSafeRegularFileSync(targetPath, APP_STORAGE_MAX_BYTES));
-  } catch (err) {
-    return {
-      modified: false,
-      originalValue: undefined,
-      path: targetPath,
-      skippedReason: String(err && err.message ? err.message : err),
-    };
+  if (!fs.existsSync(targetPath)) return { modified: false, originalValue: undefined, path: targetPath, skippedReason: 'not-found' };
+  let resolved, markerPath = '';
+  try { ({ resolved } = assertSafeRegularFileSync(targetPath, APP_STORAGE_MAX_BYTES)); } catch (err) {
+    return { modified: false, originalValue: undefined, path: targetPath, skippedReason: String(err && err.message ? err.message : err) };
   }
   try {
-    const raw = fs.readFileSync(resolved, 'utf8').replace(/^\uFEFF/, '');
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return { modified: false, originalValue: undefined, path: resolved, skippedReason: 'invalid-json-object' };
-    }
+    const parsed = JSON.parse(fs.readFileSync(resolved, 'utf8').replace(/^\uFEFF/, ''));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { modified: false, originalValue: undefined, path: resolved, skippedReason: 'invalid-json-object' };
     const cur = parsed.runInBackground;
-    if (cur !== 'true' && cur !== true) {
-      return { modified: false, originalValue: cur, path: resolved };
-    }
-    const nextVal = typeof cur === 'boolean' ? false : 'false';
-    parsed.runInBackground = nextVal;
-    const writeFn =
-      typeof opts.writeFileSync === 'function'
-        ? opts.writeFileSync
-        : (p, data) => writeFileAtomicallyNoSymlinkSync(p, data, { maxBytes: APP_STORAGE_MAX_BYTES });
-    writeFn(resolved, JSON.stringify(parsed, null, 2) + '\n');
-    return { modified: true, originalValue: cur, path: resolved };
+    if (cur !== 'true' && cur !== true) return { modified: false, originalValue: cur, path: resolved };
+    if (_runInBgRec) markerPath = _runInBgRec.writePendingRunInBgRestoreMarker(resolved, cur, opts);
+    parsed.runInBackground = typeof cur === 'boolean' ? false : 'false';
+    const wf = typeof opts.writeFileSync === 'function' ? opts.writeFileSync : (p, d) => writeFileAtomicallyNoSymlinkSync(p, d, { maxBytes: APP_STORAGE_MAX_BYTES });
+    wf(resolved, JSON.stringify(parsed, null, 2) + '\n');
+    return { modified: true, originalValue: cur, path: resolved, markerPath };
   } catch (err) {
-    return {
-      modified: false,
-      originalValue: undefined,
-      path: resolved,
-      skippedReason: String(err && err.message ? err.message : err),
-    };
+    if (markerPath && _runInBgRec) _runInBgRec.clearPendingRunInBgRestoreMarker(markerPath);
+    return { modified: false, originalValue: undefined, path: resolved, skippedReason: String(err && err.message ? err.message : err) };
   }
 }
 
 async function restoreAntigravityRunInBackground(appStoragePath, suspendState, opts = {}) {
-  if (!suspendState || !suspendState.modified) {
-    return { restored: false, skipped: true, attempts: 0 };
-  }
+  if (!suspendState || !suspendState.modified) return { restored: false, skipped: true, attempts: 0 };
   const targetPath = suspendState.path || getAntigravityAppStoragePath({ appStoragePath });
-  const retries =
-    Number.isInteger(opts.retries) && opts.retries > 0 ? opts.retries : APP_STORAGE_RESTORE_RETRIES;
-  const retryDelayMs =
-    Number.isFinite(Number(opts.retryDelayMs)) && Number(opts.retryDelayMs) >= 0
-      ? Number(opts.retryDelayMs)
-      : APP_STORAGE_RESTORE_RETRY_DELAY_MS;
-  const sleepFn =
-    typeof opts.sleep === 'function' ? opts.sleep : (ms) => new Promise((r) => setTimeout(r, ms));
-  const readFn = typeof opts.readFileSync === 'function' ? opts.readFileSync : (p) => fs.readFileSync(p, 'utf8');
-  const writeFn =
-    typeof opts.writeFileSync === 'function'
-      ? opts.writeFileSync
-      : (p, data) => writeFileAtomicallyNoSymlinkSync(p, data, { maxBytes: APP_STORAGE_MAX_BYTES });
-
+  const retries = Number.isInteger(opts.retries) && opts.retries > 0 ? opts.retries : APP_STORAGE_RESTORE_RETRIES;
+  const retryDelayMs = Number.isFinite(Number(opts.retryDelayMs)) && Number(opts.retryDelayMs) >= 0 ? Number(opts.retryDelayMs) : APP_STORAGE_RESTORE_RETRY_DELAY_MS;
+  const sleepFn = typeof opts.sleep === 'function' ? opts.sleep : (ms) => new Promise((r) => setTimeout(r, ms));
+  const rf = typeof opts.readFileSync === 'function' ? opts.readFileSync : (p) => fs.readFileSync(p, 'utf8');
+  const wf = typeof opts.writeFileSync === 'function' ? opts.writeFileSync : (p, d) => writeFileAtomicallyNoSymlinkSync(p, d, { maxBytes: APP_STORAGE_MAX_BYTES });
   let lastErr = null;
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       const { resolved } = assertSafeRegularFileSync(targetPath, APP_STORAGE_MAX_BYTES);
-      const latestRaw = String(readFn(resolved) || '').replace(/^\uFEFF/, '');
-      const latestObj = JSON.parse(latestRaw);
-      if (!latestObj || typeof latestObj !== 'object' || Array.isArray(latestObj)) {
-        throw new Error('Invalid app_storage.json root object');
-      }
+      const latestObj = JSON.parse(String(rf(resolved) || '').replace(/^\uFEFF/, ''));
+      if (!latestObj || typeof latestObj !== 'object' || Array.isArray(latestObj)) throw new Error('Invalid app_storage.json root object');
       latestObj.runInBackground = suspendState.originalValue;
-      writeFn(resolved, JSON.stringify(latestObj, null, 2) + '\n');
-      return {
-        restored: true,
-        attempts: attempt,
-        path: resolved,
-        restoredValue: suspendState.originalValue,
-      };
-    } catch (err) {
-      lastErr = err;
-      if (attempt < retries && retryDelayMs > 0) {
-        await sleepFn(retryDelayMs);
-      }
-    }
+      wf(resolved, JSON.stringify(latestObj, null, 2) + '\n');
+      if (_runInBgRec) _runInBgRec.clearPendingRunInBgRestoreMarker(suspendState.markerPath || _runInBgRec.resolvePendingRestoreMarkerPath(resolved, opts));
+      return { restored: true, attempts: attempt, path: resolved, restoredValue: suspendState.originalValue };
+    } catch (err) { lastErr = err; if (attempt < retries && retryDelayMs > 0) await sleepFn(retryDelayMs); }
   }
-  return {
-    restored: false,
-    attempts: retries,
-    path: targetPath,
-    error: String(lastErr && lastErr.message ? lastErr.message : lastErr),
-  };
+  return { restored: false, attempts: retries, path: targetPath, error: String(lastErr && lastErr.message ? lastErr.message : lastErr) };
 }
 
 function isAntigravityCdpCloseTarget(target) {

@@ -755,6 +755,37 @@ test('wallpaper-service: atomic config persistence, lazy 127.0.0.1 HTTP 206 Rang
     assert.equal(evilOriginRes.statusCode, 403);
     assert.equal(evilOriginRes.headers['access-control-allow-origin'], undefined);
 
+    // DNS Rebinding Host spoofing -> 403 Forbidden (only exact 127.0.0.1:<port> accepted)
+    const spoofHostRes = await httpRequestRaw(mediaUrl, {
+      headers: { Host: `rebind.evil.test:${parsedUrl.port}` },
+    });
+    assert.equal(spoofHostRes.statusCode, 403);
+    const wrongPortHostRes = await httpRequestRaw(mediaUrl, {
+      headers: { Host: '127.0.0.1:1' },
+    });
+    assert.equal(wrongPortHostRes.statusCode, 403);
+
+    // Sec-Fetch-Site: cross-site without trusted desktop origin -> 403; same-origin/none/trusted vscode-file -> 200
+    const crossSiteRes = await httpRequestRaw(mediaUrl, {
+      headers: { 'Sec-Fetch-Site': 'cross-site' },
+    });
+    assert.equal(crossSiteRes.statusCode, 403);
+    const sameOriginFetchRes = await httpRequestRaw(mediaUrl, {
+      method: 'HEAD',
+      headers: { 'Sec-Fetch-Site': 'same-origin' },
+    });
+    assert.equal(sameOriginFetchRes.statusCode, 200);
+    const noneFetchRes = await httpRequestRaw(mediaUrl, {
+      method: 'HEAD',
+      headers: { 'Sec-Fetch-Site': 'none' },
+    });
+    assert.equal(noneFetchRes.statusCode, 200);
+    const extCrossSiteRes = await httpRequestRaw(mediaUrl, {
+      method: 'HEAD',
+      headers: { Origin: 'vscode-file://vscode-app', 'Sec-Fetch-Site': 'cross-site' },
+    });
+    assert.equal(extCrossSiteRes.statusCode, 200);
+
     // HTTP 206 Range streaming (start-end, suffix, and invalid 416)
     const rangeRes = await httpRequestRaw(mediaUrl, { headers: { Range: 'bytes=10-49' } });
     assert.equal(rangeRes.statusCode, 206);
@@ -850,11 +881,14 @@ test('wallpaper-service: get-media-blob supports <= 8 MB images, rejects > 8 MB 
     await svc.dispose();
   }
 
-  // Native picker: Windows parameterized powershell.exe -EncodedCommand
+  // Native picker: Windows zero-PowerShell compiled obsidian-prism-watcher.exe --pick-file
+  const fakeWatcherExe = path.join(tmpDir, 'obsidian-prism-watcher.exe');
+  fs.writeFileSync(fakeWatcherExe, 'stub-exe', 'utf8');
   const winCalls = [];
   const winSvc = createWallpaperService({
     configPath: path.join(tmpDir, 'win.json'),
     platform: 'win32',
+    watcherExePath: fakeWatcherExe,
     execFileImpl(file, args, opts, cb) {
       winCalls.push({ file, args, opts });
       cb(null, `${smallPng}\r\n`, '');
@@ -866,17 +900,40 @@ test('wallpaper-service: get-media-blob supports <= 8 MB images, rejects > 8 MB 
     assert.equal(picked.config.enabled, true);
     assert.equal(picked.mediaType, 'image');
     assert.equal(winCalls.length, 1);
-    assert.equal(winCalls[0].file, 'powershell.exe');
-    assert.ok(winCalls[0].args.includes('-EncodedCommand'));
-    assert.ok(winCalls[0].args.includes('-STA'));
+    assert.equal(winCalls[0].file, fakeWatcherExe);
+    assert.ok(winCalls[0].args.includes('--pick-file'));
+    assert.ok(winCalls[0].args.includes('--filter'));
+    assert.equal(/powershell/i.test(winCalls[0].file), false, 'Windows picker must never invoke PowerShell');
   } finally {
     await winSvc.dispose();
+  }
+
+  // Native picker: Windows dev fallback (missing watcher exe) gracefully returns manual-input-required with 0 subprocesses
+  const winNoExeCalls = [];
+  const winNoExeSvc = createWallpaperService({
+    configPath: path.join(tmpDir, 'win-no-exe.json'),
+    platform: 'win32',
+    watcherExePath: null,
+    execFileImpl(file, args, opts, cb) {
+      winNoExeCalls.push({ file, args, opts });
+      cb(null, '', '');
+    },
+  });
+  try {
+    const fallbackRes = await winNoExeSvc.handleAction('pick-media');
+    assert.equal(fallbackRes.ok, false);
+    assert.equal(fallbackRes.manualRequired, true);
+    assert.equal(fallbackRes.code, 'manual-input-required');
+    assert.equal(winNoExeCalls.length, 0);
+  } finally {
+    await winNoExeSvc.dispose();
   }
 
   // Native picker: Windows selecting disallowed .svg gets blocked by post-pick validation
   const winSvgSvc = createWallpaperService({
     configPath: path.join(tmpDir, 'winsvg.json'),
     platform: 'win32',
+    watcherExePath: fakeWatcherExe,
     execFileImpl(_file, _args, _opts, cb) {
       cb(null, badSvg, '');
     },
@@ -1349,8 +1406,9 @@ test('red-team #229 [P0-1, P1-1, P2-1, P2-3]: NTFS 8.3 short paths, AppData/Loca
 
     // 3) ReDoS hygiene: zero polynomial /.replace(\/\/+\$/, '')/ in wallpaper-service.mjs + fast linear handling of 40k trailing slashes
     const svcSrc = fs.readFileSync(path.join(ROOT, 'vendor', 'wallpaper', 'wallpaper-service.mjs'), 'utf8');
+    const pickerCsSrc = fs.readFileSync(path.join(ROOT, 'installer', 'watcher', 'FilePicker.cs'), 'utf8');
     assert.equal(svcSrc.includes(".replace(/\\/+$/, '')"), false, 'Must not contain polynomial trailing-slash regex');
-    assert.equal(svcSrc.includes('$dlg.DereferenceLinks = $true'), true, 'Windows OpenFileDialog must set DereferenceLinks = $true');
+    assert.equal(pickerCsSrc.includes('dlg.DereferenceLinks = true;'), true, 'Windows C# OpenFileDialog must set DereferenceLinks = true');
 
     const t0 = Date.now();
     const slashDir = 'C:/safe-dir' + '/'.repeat(40000);

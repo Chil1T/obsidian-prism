@@ -688,10 +688,7 @@ export class OmniServer {
       return false;
     }
     const lowOrigin = origin.toLowerCase();
-    if (/^(?:vscode-file|app):\/\/[a-z0-9._-]+(?:\/[^\s]*)?$/.test(lowOrigin)) {
-      return true;
-    }
-    if (/^file:\/\/[^\s]*$/.test(lowOrigin)) {
+    if (/^(?:vscode-file|app):\/\/[a-z0-9._-]+$/.test(lowOrigin)) {
       return true;
     }
     return /^https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d{1,5})?$/.test(lowOrigin);
