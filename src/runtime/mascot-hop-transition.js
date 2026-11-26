@@ -18,10 +18,13 @@ const IGNORE_RM_ATTR = 'data-ag-cs-ignore-rm';
 const MOTION_ATTR = 'data-ag-cs-motion';
 
 const IGNORED_SCOPE_SEL = '#ag-cs-settings-sec, #ag-prism-periodic-picker-root, [role="dialog"]';
-const COMPOSER_BOX_SEL = '.surface-composer-card, [data-testid="agent-input-box"], #antigravity\\.agentSidePanelInputBox, [data-composer-input]';
+/* @host-compat host-selectors.cjs#HOST_INTERACTION_SELECTORS */
+const TAKEOVER_BOX_SEL = '[data-testid="interaction-takeover-card"], .agy-takeover-frame, [data-testid="side-question-panel"]';
+const COMPOSER_BOX_SEL = '.surface-composer-card, [data-testid="agent-input-box"], #antigravity\\.agentSidePanelInputBox, [data-composer-input], ' + TAKEOVER_BOX_SEL;
 const INPUT_FIELD_SEL = '[contenteditable="true"], [contenteditable=""], [data-lexical-editor], textarea, input, [role="textbox"]';
 const SIDE_PANEL_SEL = '#antigravity\\.agentSidePanelInputBox, [data-side-panel-focus-scope="true"], [data-side-panel-body], [data-side-panel-strip], [data-testid="side-question-panel"], [data-testid="agent-side-panel"], .agent-side-panel, .aux-drawer';
-const SUBAGENT_SEL = '[data-testid="subagent-tab-conversation"]';
+const SUBAGENT_SEL = '[data-testid="subagent-tab-conversation"], [data-testid="side-question-tab-conversation"]';
+const PANE_SCOPE_SEL = '[data-testid="conversation-view"], [data-tiling-pane], [data-side-panel-body], [data-side-panel-focus-scope="true"]';
 
 const HOP_CSS = [
 ':is(.ag-cs-dual-stage,.ag-cs-crab):is([data-ag-mascot-hop="dive-out"],[data-ag-mascot-hop="pop-in"]){clip-path:inset(-120px -72px 0 -72px);overflow:visible!important;pointer-events:none!important}',
@@ -155,21 +158,34 @@ if (kids.length >= 2 && cur !== kids[0] && !safeClosest(start, '[data-main-conte
 return false;
 }
 
-// 判定目标是否位于指定窗格的输入框 / composer 交互区域内
+// 判定 takeover/side-question 卡片是否与 targetCard 同对话/同窗格
+function isSamePaneTakeover(tkEl, targetCard) {
+if (!tkEl || !targetCard || safeClosest(tkEl, SUBAGENT_SEL) !== safeClosest(targetCard, SUBAGENT_SEL)) return false;
+const ts = safeClosest(tkEl, PANE_SCOPE_SEL), cs = safeClosest(targetCard, PANE_SCOPE_SEL);
+if (ts || cs) return Boolean(ts && cs && (ts === cs || (safeContains(ts, targetCard) && safeContains(cs, tkEl))));
+for (let c = tkEl.parentElement, d = 0; c && c.nodeType === 1 && d < 5; c = c.parentElement, d++) {
+const t = safeAttr(c, 'data-testid') || '';
+if (t === 'aux-pane-split' || t === 'sidebar-split') break;
+if (safeContains(c, targetCard)) return true;
+}
+return false;
+}
+
 function isComposerInputTarget(target, targetCard = null) {
 if (!target) return false;
 const el = target.nodeType === 1 ? target : target.parentElement || target.parentNode || null;
 if (!el) return false;
+const tk = safeClosest(el, TAKEOVER_BOX_SEL);
 if (targetCard) {
 if (safeContains(targetCard, el)) return true;
-const cardBox = safeClosest(targetCard, '[data-testid="agent-input-box"]') || safeClosest(targetCard, '#antigravity\\.agentSidePanelInputBox');
-if (cardBox && safeContains(cardBox, el)) return true;
-const inputEl = safeClosest(el, INPUT_FIELD_SEL);
-return Boolean(inputEl && (safeContains(targetCard, inputEl) || (cardBox && safeContains(cardBox, inputEl))));
+const box = safeClosest(targetCard, '[data-testid="agent-input-box"]') || safeClosest(targetCard, '#antigravity\\.agentSidePanelInputBox');
+if ((box && safeContains(box, el)) || (tk && isSamePaneTakeover(tk, targetCard))) return true;
+const inp = safeClosest(el, INPUT_FIELD_SEL);
+return Boolean(inp && (safeContains(targetCard, inp) || (box && safeContains(box, inp))));
 }
 if (safeClosest(el, COMPOSER_BOX_SEL)) return true;
-const inputEl = safeClosest(el, INPUT_FIELD_SEL);
-return Boolean(inputEl && safeClosest(inputEl, '[data-testid="agent-input-box"], .surface-composer-card, #antigravity\\.agentSidePanelInputBox, [data-side-panel-focus-scope="true"]'));
+const inp = safeClosest(el, INPUT_FIELD_SEL);
+return Boolean(inp && safeClosest(inp, '[data-testid="agent-input-box"], .surface-composer-card, #antigravity\\.agentSidePanelInputBox, [data-side-panel-focus-scope="true"]'));
 }
 
 function filterLiveMainCards(cards) {
@@ -205,8 +221,8 @@ const rawCards = Array.isArray(ctx.cards)
 const liveCards = filterLiveMainCards(rawCards);
 if (!liveCards.includes(targetCard) && targetCard.isConnected !== false) liveCards.push(targetCard);
 
-const targetIsSide = isSidePanelElement(targetCard) || isSidePanelElement(target);
 const inComposer = isComposerInputTarget(target, targetCard);
+const targetIsSide = isSidePanelElement(targetCard) || (!inComposer && isSidePanelElement(target));
 const isSameCard = Boolean(currentCard && currentCard === targetCard);
 if (liveCards.length <= 1 && !targetIsSide) {
 return { allow: true, transfer: Boolean(currentCard && !isSameCard), reason: 'single-main-pane' };
@@ -440,114 +456,84 @@ state.stageEl = stageEl; state.fromAnchor = effectiveFrom; state.toAnchor = toAn
 state.fromRect = { ...fromRect }; state.toRect = { ...toRect };
 state.onCommitAnchor = onCommitAnchor; state.onComplete = onComplete;
 
-    const diveMeta = applyPhaseToStage(stageEl, 'dive-out', profile, dir);
-    state.touchedNodes = diveMeta.touched;
+const diveMeta = applyPhaseToStage(stageEl, 'dive-out', profile, dir);
+state.touchedNodes = diveMeta.touched;
+scheduleTimer(win, profile.diveMs + diveMeta.maxDelayMs, () => {
+if (state.gen !== myGen) return;
+clearStageHopStyles(stageEl, state.touchedNodes);
+state.touchedNodes = [];
+if (toAnchor.isConnected === false) { resetStateToIdle(); return; }
+const commitCb = state.onCommitAnchor;
+let committed = true;
+if (isFn(commitCb)) { try { committed = commitCb() !== false; } catch { committed = false; } }
+else if (isFn(toAnchor.appendChild)) { try { toAnchor.appendChild(stageEl); } catch { committed = false; } }
+if (!committed || state.gen !== myGen) { if (state.gen === myGen) resetStateToIdle(); return; }
+state.phase = 'hop-pop-in';
+const popMeta = applyPhaseToStage(stageEl, 'pop-in', profile, dir);
+state.touchedNodes = popMeta.touched;
+scheduleTimer(win, profile.popMs + popMeta.maxDelayMs, () => {
+if (state.gen !== myGen) return;
+const doneCb = state.onComplete;
+resetStateToIdle();
+try { doneCb?.({ completed: true, gen: myGen }); } catch {}
+});
+});
+return { animated: true, gen: myGen, phase: 'dive-flip-out', mode: profile.mode, dir, diveMs: profile.diveMs, popMs: profile.popMs, fromRect: { ...fromRect }, toRect: { ...toRect } };
+}
 
-    scheduleTimer(win, profile.diveMs + diveMeta.maxDelayMs, () => {
-      if (state.gen !== myGen) return;
-      clearStageHopStyles(stageEl, state.touchedNodes);
-      state.touchedNodes = [];
-      if (toAnchor.isConnected === false) { resetStateToIdle(); return; }
+// 排队窗口屋顶垂直升降动画：纯 GPU transform（hop-up / gravity-land，0 rAF、连点安全取消）
+function runVerticalRoofTransition(opts = {}) {
+const { stageEl, direction = 'gravity-land', deltaPx = 48, toAnchor = null, onComplete = null } = opts;
+const doc = getDoc(stageEl || toAnchor, opts.doc);
+const win = getWin(doc, opts.win);
+if (!stageEl) { cancelActiveTransition(); return { animated: false, reason: 'missing-stage' }; }
+const phaseAttr = direction === 'hop-up' ? 'hop-up' : 'gravity-land';
+const profile = resolveHopMotionProfile({ win, doc, motionLevel: opts.motionLevel, reducedMotion: opts.reducedMotion });
+if (!profile.enabled) { cancelForStage(stageEl); return { animated: false, reason: 'motion-disabled' }; }
+const dyNum = Number(deltaPx), clampedDy = Math.round(Math.max(24, Math.min(128, Number.isFinite(dyNum) && dyNum > 0 ? dyNum : 48)));
+const durMs = phaseAttr === 'hop-up' ? profile.hopUpMs : profile.landMs, myGen = ++state.gen;
+clearAllTimers();
+clearStageHopStyles(state.stageEl, state.touchedNodes);
+if (state.stageEl && state.stageEl !== stageEl) clearStageHopStyles(stageEl, []);
+ensureStyle(doc);
+state.phase = phaseAttr; state.mode = profile.mode; state.dir = phaseAttr === 'hop-up' ? -1 : 1;
+state.stageEl = stageEl; state.fromAnchor = opts.fromAnchor || null; state.toAnchor = toAnchor || stageEl.parentElement || null;
+state.fromRect = state.toRect = state.onCommitAnchor = null; state.onComplete = onComplete;
+setCssVar(stageEl, '--ag-prism-roof-dy', `${clampedDy}px`);
+const meta = applyPhaseToStage(stageEl, phaseAttr, profile, state.dir, durMs);
+state.touchedNodes = meta.touched;
+scheduleTimer(win, durMs + meta.maxDelayMs, () => {
+if (state.gen !== myGen) return;
+const doneCb = state.onComplete;
+resetStateToIdle();
+try { doneCb?.({ completed: true, gen: myGen, phase: phaseAttr }); } catch {}
+});
+return { animated: true, gen: myGen, phase: phaseAttr, mode: profile.mode, dir: state.dir, deltaPx: clampedDy, durationMs: durMs, maxDelayMs: meta.maxDelayMs };
+}
 
-      const commitCb = state.onCommitAnchor;
-      let committed = true;
-      if (isFn(commitCb)) {
-        try { committed = commitCb() !== false; } catch { committed = false; }
-      } else if (isFn(toAnchor.appendChild)) {
-        try { toAnchor.appendChild(stageEl); } catch { committed = false; }
-      }
-      if (!committed || state.gen !== myGen) { if (state.gen === myGen) resetStateToIdle(); return; }
+function getTransitionState() {
+return {
+gen: state.gen, phase: state.phase, mode: state.mode, dir: state.dir, active: state.phase !== 'idle',
+fromRect: state.fromRect ? { ...state.fromRect } : null, toRect: state.toRect ? { ...state.toRect } : null,
+toAnchor: state.toAnchor, timersCount: activeTimers.size,
+};
+}
 
-      state.phase = 'hop-pop-in';
-      const popMeta = applyPhaseToStage(stageEl, 'pop-in', profile, dir);
-      state.touchedNodes = popMeta.touched;
+function dispose(doc) {
+cancelActiveTransition();
+const d = doc || (typeof document !== 'undefined' ? document : null);
+if (!d) return;
+try { isFn(d.getElementById) && d.getElementById(STYLE_ID)?.remove?.(); } catch {}
+cleanupOrphanLayers(d);
+for (const node of safeQsa(d, `[${ATTR_HOP}], [${ATTR_HOP_MODE}], [${ATTR_HOP_SELF}]`)) {
+clearStageHopStyles(node, [...safeQsa(node, '.ag-v2-mascot-canvas'), ...safeQsa(node, '.ag-v2-mini-crab-canvas')]);
+}
+}
 
-      scheduleTimer(win, profile.popMs + popMeta.maxDelayMs, () => {
-        if (state.gen !== myGen) return;
-        const doneCb = state.onComplete;
-        resetStateToIdle();
-        try { doneCb?.({ completed: true, gen: myGen }); } catch {}
-      });
-    });
-
-    return {
-      animated: true, gen: myGen, phase: 'dive-flip-out', mode: profile.mode, dir,
-      diveMs: profile.diveMs, popMs: profile.popMs, fromRect: { ...fromRect }, toRect: { ...toRect },
-    };
-  }
-
-  // 排队窗口弹出/消失引发的屋顶垂直升降动画：纯 GPU transform（hop-up 上跳 / gravity-land 重力落地微压缩回弹，0 rAF、连点安全取消）
-  function runVerticalRoofTransition(opts = {}) {
-    const { stageEl, direction = 'gravity-land', deltaPx = 48, toAnchor = null, onComplete = null } = opts;
-    const doc = getDoc(stageEl || toAnchor, opts.doc);
-    const win = getWin(doc, opts.win);
-    if (!stageEl) { cancelActiveTransition(); return { animated: false, reason: 'missing-stage' }; }
-    const phaseAttr = direction === 'hop-up' ? 'hop-up' : 'gravity-land';
-    const profile = resolveHopMotionProfile({ win, doc, motionLevel: opts.motionLevel, reducedMotion: opts.reducedMotion });
-    if (!profile.enabled) { cancelForStage(stageEl); return { animated: false, reason: 'motion-disabled' }; }
-
-    const dyNum = Number(deltaPx);
-    const clampedDy = Math.round(Math.max(24, Math.min(128, Number.isFinite(dyNum) && dyNum > 0 ? dyNum : 48)));
-    const durMs = phaseAttr === 'hop-up' ? profile.hopUpMs : profile.landMs;
-    const myGen = ++state.gen;
-    clearAllTimers();
-    clearStageHopStyles(state.stageEl, state.touchedNodes);
-    if (state.stageEl && state.stageEl !== stageEl) clearStageHopStyles(stageEl, []);
-    ensureStyle(doc);
-
-    state.phase = phaseAttr;
-    state.mode = profile.mode;
-    state.dir = phaseAttr === 'hop-up' ? -1 : 1;
-    state.stageEl = stageEl;
-    state.fromAnchor = opts.fromAnchor || null;
-    state.toAnchor = toAnchor || stageEl.parentElement || null;
-    state.fromRect = null;
-    state.toRect = null;
-    state.onCommitAnchor = null;
-    state.onComplete = onComplete;
-
-    setCssVar(stageEl, '--ag-prism-roof-dy', `${clampedDy}px`);
-    const meta = applyPhaseToStage(stageEl, phaseAttr, profile, state.dir, durMs);
-    state.touchedNodes = meta.touched;
-
-    scheduleTimer(win, durMs + meta.maxDelayMs, () => {
-      if (state.gen !== myGen) return;
-      const doneCb = state.onComplete;
-      resetStateToIdle();
-      try { doneCb?.({ completed: true, gen: myGen, phase: phaseAttr }); } catch {}
-    });
-
-    return {
-      animated: true, gen: myGen, phase: phaseAttr, mode: profile.mode, dir: state.dir,
-      deltaPx: clampedDy, durationMs: durMs, maxDelayMs: meta.maxDelayMs,
-    };
-  }
-
-  function getTransitionState() {
-    return {
-      gen: state.gen, phase: state.phase, mode: state.mode, dir: state.dir,
-      active: state.phase !== 'idle',
-      fromRect: state.fromRect ? { ...state.fromRect } : null,
-      toRect: state.toRect ? { ...state.toRect } : null,
-      toAnchor: state.toAnchor, timersCount: activeTimers.size,
-    };
-  }
-
-  function dispose(doc) {
-    cancelActiveTransition();
-    const d = doc || (typeof document !== 'undefined' ? document : null);
-    if (!d) return;
-    try { isFn(d.getElementById) && d.getElementById(STYLE_ID)?.remove?.(); } catch {}
-    cleanupOrphanLayers(d);
-    for (const node of safeQsa(d, `[${ATTR_HOP}], [${ATTR_HOP_MODE}], [${ATTR_HOP_SELF}]`)) {
-      clearStageHopStyles(node, [...safeQsa(node, '.ag-v2-mascot-canvas'), ...safeQsa(node, '.ag-v2-mini-crab-canvas')]);
-    }
-  }
-
-  return {
-    STYLE_ID, HOP_LAYER_CLASS, HOP_CSS,
-    isReducedMotionActive, resolveHopMotionProfile,
-    isSidePanelElement, isComposerInputTarget, isMainPrimaryCard, shouldTransferMascotFocus,
-    runMascotHopTransition, runVerticalRoofTransition, getTransitionState, cancelForStage, cancelActiveTransition, ensureStyle, dispose,
-  };
+return {
+STYLE_ID, HOP_LAYER_CLASS, HOP_CSS,
+isReducedMotionActive, resolveHopMotionProfile,
+isSidePanelElement, isComposerInputTarget, isMainPrimaryCard, shouldTransferMascotFocus,
+runMascotHopTransition, runVerticalRoofTransition, getTransitionState, cancelForStage, cancelActiveTransition, ensureStyle, dispose,
+};
 });

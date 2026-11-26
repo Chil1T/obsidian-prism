@@ -1049,13 +1049,13 @@ test('v1.0.7 / Issue #58: full-body gentle crouch peek (no hard bottom clip) + p
   });
 
   try {
-    // Enter peek mode: actor gently crouches (+3px) at zIndex 8 with data-ag-mascot-peek="1" and ZERO hard bottom clip()
+    // Enter peek mode: actor crouches deeper (+7px) at zIndex 8 with data-ag-mascot-peek="1" and ZERO Canvas ctx.clip()
     clipCalls = 0;
     rig.setState({ yieldMode: 'peek' });
     const peekSnap = rig.getLayoutSnapshot();
     assert.equal(host.getAttribute('data-ag-mascot-peek'), '1', 'peek must preserve data-ag-mascot-peek="1" contract');
     assert.equal(peekSnap.perf.timerIntervalMs, 0, 'reducedMotion must keep 0fps sleep');
-    assert.equal(peekSnap.actors[0].renderCache.lastY, 3, 'gentle crouch peek must lower actor by +3px without hard clipping');
+    assert.equal(peekSnap.actors[0].renderCache.lastY, 7, 'deepened peek crouch must lower actor by +7px without Canvas ctx.clip()');
     assert.equal(clipCalls, 0, 'Issue #58 Bug 1: peek mode must NOT hard-clip lower body via ctx.clip()');
     assert.equal(host.querySelector('.ag-v2-mascot-actor')?.style?.zIndex, '8', 'peek actor z-index must sit at 8 above rim (7) and below cards (12)');
     assert.equal(host.querySelector('.ag-v2-mascot-actor')?.getAttribute('tabindex'), '-1', 'peek actor must keep tabindex="-1"');

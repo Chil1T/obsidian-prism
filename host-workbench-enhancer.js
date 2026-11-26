@@ -23,8 +23,10 @@
     '--background,--content,--shell,--body-background,--sidebar,--sidebar-muted,--sidebar-secondary,--card,--card-border,--border,--secondary,--secondary-foreground,--muted,--muted-foreground,--foreground,--placeholder,--primary,--primary-foreground,--accent,--link,--error,--warning,--success,--scrim,--ag-cs-tonal-0,--ag-cs-tonal-1,--ag-cs-tonal-2,--ag-cs-tonal-3,--ag-cs-tonal-4,--font-sans'.split(',');
   const S_VP = '[data-testid="autoscroll-viewport"]';
   const S_CV = '[data-testid="conversation-view"]';
+  /* @host-compat host-selectors.cjs#HOST_INTERACTION_SELECTORS */
   const S_PANE_STOP = '[data-testid="aux-pane-split"],[data-tiling-pane],[data-split-panes],[data-testid="sidebar-split"]';
-  const S_PANE_SCOPE = `${S_CV},[data-testid="subagent-tab-conversation"],[data-testid="side-question-panel"],[data-side-panel-body]`;
+  const S_SUB_SC = '[data-testid="subagent-tab-conversation"],[data-testid="side-question-tab-conversation"],[data-testid="side-question-panel"]';
+  const S_PANE_SCOPE = `${S_CV},${S_SUB_SC},[data-side-panel-body]`;
   const S_NT = '[data-testid="conversation-navigator-turn"]';
   const S_NG = '[data-testid="conversation-navigator-group"]';
   const S_TRIG = '.ag-cs-nav-outline-trigger';
@@ -1539,10 +1541,10 @@ if (isM(cur, S_PANE_STOP)) break;
 if (isM(cur, S_VP) || ga(cur, 'data-testid') === 'autoscroll-viewport') return cur;
 for (const cand of qa(cur, S_VP)) {
 let crossed = false;
-for (let p = cand.parentElement; p && p !== cur; p = p.parentElement) { if (isM(p, S_PANE_STOP) || (isM(cur, S_CV) && isM(p, '[data-testid="subagent-tab-conversation"],[data-testid="side-question-panel"]'))) { crossed = true; break; } }
+for (let p = cand.parentElement; p && p !== cur; p = p.parentElement) { if (isM(p, S_PANE_STOP) || (!isM(cur, S_SUB_SC) && isM(p, S_SUB_SC))) { crossed = true; break; } }
 if (!crossed) return cand;
 }
-if (isM(cur, S_PANE_SCOPE)) break;
+if (ha(cur, 'data-autoscroll-overlay-host') || isM(cur, S_PANE_SCOPE)) break;
 }
 return null;
 }

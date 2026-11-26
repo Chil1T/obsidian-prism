@@ -3192,3 +3192,39 @@ test('Issue #109 (PR #111): whale and cat keep eyes closed (loafShut) without 40
     stage.dispose();
   }
 });
+
+test('peek 探头姿态深度（PEEK_Y=7）与输入框顶边裁切保护（不露腿穿帮、保留 z-index 8 与 pointer-events none）', () => {
+  const { doc } = createRigMockDom(760);
+  const hostEl = doc.createElement('div');
+  doc.body.appendChild(hostEl);
+  const stage = rig.mountDualMascotStage(hostEl, {
+    mascot: 'quad-minis',
+    camp: 'claude',
+    reducedMotion: true,
+  });
+  try {
+    stage.setState({ yieldMode: 'peek' });
+    const actors = hostEl.querySelectorAll('.ag-v2-mascot-actor');
+    assert.ok(actors.length >= 2, 'dual-minis 应渲染双主宠');
+    for (const a of actors) {
+      assert.equal(a.style.zIndex, '8', 'peek 态主宠应保持 z-index 8');
+      assert.equal(a.style.pointerEvents, 'none', 'peek 态主宠应保持 pointer-events none');
+      assert.match(a.style.transform || '', /translate3d\([^,]+,\s*7px,\s*0\)/, 'peek 态主宠应下沉 7px 仅露半张脸与前爪');
+    }
+    const minis = hostEl.querySelectorAll('.ag-v2-mini-crab-canvas');
+    assert.ok(minis.length > 0, '应渲染迷你螃蟹');
+    for (const mc of minis) {
+      assert.equal(mc.style.zIndex, '8');
+      assert.equal(mc.style.pointerEvents, 'none');
+      assert.match(mc.style.transform || '', /translate3d\([^,]+,\s*2px,\s*0\)/, '迷你螃蟹应保持 +2px 轻量下沉');
+    }
+  } finally {
+    stage.dispose();
+  }
+
+  const css = require('node:fs').readFileSync(new URL('../style.css', import.meta.url), 'utf8');
+  const peekLine = css.split('\n').find((l) => l.startsWith('.ag-cs-crab[data-ag-mascot-peek="1"],')) || '';
+  assert.ok(peekLine.includes('z-index:8 !important;'), 'peek 规则必须保留 z-index:8 !important');
+  assert.ok(peekLine.includes('pointer-events:none !important;'), 'peek 规则必须保留 pointer-events:none !important');
+  assert.ok(peekLine.includes('clip-path:inset(-48px -24px 8px -24px)!important;'), 'peek 规则必须通过底部 clip-path 裁切防止压过输入框顶边穿帮');
+});

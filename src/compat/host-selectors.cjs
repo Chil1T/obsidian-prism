@@ -243,10 +243,24 @@ function buildLiveProbeExpression(contracts = HOST_SELECTOR_CONTRACTS, opts = {}
 })()`;
 }
 
+// 跨模块交互与侧栏滚动选择器共享契约（@host-compat，与 ui-runtime / mascot-hop-transition / host-workbench-enhancer 对齐）
+const HOST_INTERACTION_SELECTORS = Object.freeze({
+  takeoverCard: '[data-testid="interaction-takeover-card"]',
+  takeoverFrame: '.agy-takeover-frame',
+  sideQuestionPanel: '[data-testid="side-question-panel"]',
+  takeoverSurface: '[data-testid="interaction-takeover-card"], .agy-takeover-frame, [data-testid="side-question-panel"]',
+  subagentConversation: '[data-testid="subagent-tab-conversation"]',
+  sideQuestionTabConversation: '[data-testid="side-question-tab-conversation"]',
+  scrollToBottomButton: '.agy-scroll-bottom',
+  autoscrollOverlayHost: '[data-autoscroll-overlay-host]',
+  auxPaneSplit: '[data-testid="aux-pane-split"]',
+});
+
 module.exports = {
   CONTRACT_TIERS,
   PROBE_STATUSES,
   HOST_SELECTOR_CONTRACTS,
+  HOST_INTERACTION_SELECTORS,
   evaluateSelectorsInDoc,
   buildLiveProbeExpression,
 };

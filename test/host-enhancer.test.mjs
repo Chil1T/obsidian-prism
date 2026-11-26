@@ -1966,7 +1966,7 @@ test('Wave D20: ui-runtime mounts bottom prism-reflect on interaction-takeover-c
     flushRaf();
 
     assert.equal(takeoverCard.getAttribute('data-ag-cs-prism-box'), '1', 'Takeover card popup must mount data-ag-cs-prism-box="1"');
-    assert.equal(takeoverCard.getAttribute('data-ag-cs-prism-reflect'), 'bottom', 'Takeover card popup must mount data-ag-cs-prism-reflect="bottom"');
+    assert.equal(takeoverCard.hasAttribute('data-ag-cs-prism-reflect'), false, 'Takeover card popup must use full-perimeter prism rim without bottom-only reflect');
     assert.equal(subTakeover.hasAttribute('data-ag-cs-prism-box'), false, 'Subagent takeover card must still be excluded');
 
     // Switching to chat mode (data-ag-prism-mode="chat") symmetrically strips prism-box/reflect and cleans --ag-px/--ag-py
@@ -1980,11 +1980,12 @@ test('Wave D20: ui-runtime mounts bottom prism-reflect on interaction-takeover-c
     assert.equal(takeoverCard.style.getPropertyValue('--ag-px'), '', 'Chat mode teardown must clear --ag-px');
     assert.equal(takeoverCard.style.getPropertyValue('--ag-py'), '', 'Chat mode teardown must clear --ag-py');
 
-    // Returning to code mode restores bottom prism reflection; disabling composerRestyle cleans it up again
+    // Returning to code mode restores full-perimeter prism rim; disabling composerRestyle cleans it up again
     env.html.setAttribute('data-ag-prism-mode', 'code');
     mainMo.cb([{ type: 'attributes', target: env.html, attributeName: 'data-ag-prism-mode' }]);
     flushRaf();
-    assert.equal(takeoverCard.getAttribute('data-ag-cs-prism-reflect'), 'bottom', 'Code mode must restore data-ag-cs-prism-reflect="bottom"');
+    assert.equal(takeoverCard.getAttribute('data-ag-cs-prism-box'), '1', 'Code mode must restore data-ag-cs-prism-box="1"');
+    assert.equal(takeoverCard.hasAttribute('data-ag-cs-prism-reflect'), false, 'Code mode must keep takeover card on full-perimeter rim');
 
     takeoverCard.style.setProperty('--ag-px', '64px');
     takeoverCard.style.setProperty('--ag-py', '8px');
@@ -2324,5 +2325,94 @@ test('Dual-pane .agy-scroll-bottom strict local viewport isolation (subagent/sid
     assert.equal(sideQ.hasAttribute('data-ag-scrolling'), false);
     assert.equal(subTab.hasAttribute('data-ag-scrolling'), false);
     assert.equal(mainConv.hasAttribute('data-ag-scrolling'), false);
+  }
+});
+
+test('侧栏出现时 .agy-scroll-bottom 层级/过渡/分屏宽度防裁切与 side-question-tab-conversation 独立滚动隔离', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
+
+  // 1) style.css 静态契约：移除压低英文按钮的 z-index:9、提升 .agy-scroll-bottom z-index:26、保留宿主过渡与分屏内层宽约束
+  assert.equal(
+    css.includes('button[aria-label="Scroll to Bottom"]{z-index:9!important}'),
+    false,
+    '不得再把英文 Scroll to Bottom 按钮压低至 z-index:9'
+  );
+  const scrollRule = css.split('\n').find((l) => l.includes('& .agy-scroll-bottom{')) || '';
+  assert.ok(scrollRule.includes('z-index:26!important;'), '.agy-scroll-bottom 必须位于 z-index:26 高于输入层(25)与底部渐隐层(10)');
+  assert.equal(scrollRule.includes('position:relative'), false, '.agy-scroll-bottom 严禁覆盖宿主 position:absolute');
+  assert.ok(
+    scrollRule.includes('opacity .3s var(--ease-expo-out),transform .3s var(--ease-expo-out),margin-left .5s var(--ease-expo-out)'),
+    '.agy-scroll-bottom 必须保留宿主 opacity / transform / margin-left 侧栏联动过渡'
+  );
+  const auxRule = css.split('\n').find((l) => l.includes('[data-testid="aux-pane-split"][data-ag-cs-aux-dual="1"]{')) || '';
+  assert.ok(
+    auxRule.includes('&>div:last-child>[data-split-sized]{max-width:100%!important}'),
+    'aux-pane-split 双栏夹紧右侧栏宽度时，内层绝对定位 [data-split-sized] 必须限制 max-width:100% 防止按钮右偏裁切'
+  );
+  assert.ok(
+    css.includes(':is([data-testid="conversation-view"],[data-side-panel-body]) div.pointer-events-none[class*="bottom-0"]'),
+    '侧栏底部 pointer-events-none 渐隐遮罩必须透明化避免压暗按钮'
+  );
+
+  // 2) 运行时隔离：主对话 + subagent-tab-conversation + side-question-tab-conversation 共存，均包在 data-autoscroll-overlay-host 中，点击各滚各的视口
+  const env = createMockEnv();
+  const split = env.createElement('div', { 'data-testid': 'aux-pane-split' });
+  const mainPane = env.createElement('div', { 'data-main-content-body': 'true' });
+  const mainConv = env.createElement('div', { 'data-testid': 'conversation-view' });
+  const mainHost = env.createElement('div', { 'data-autoscroll-overlay-host': 'true' });
+  const mainVp = env.createElement('div', { 'data-testid': 'autoscroll-viewport' });
+  mainVp.scrollHeight = 2000; mainVp.clientHeight = 500; mainVp.scrollTop = 100;
+  const mainBtn = env.createElement('button', { class: 'agy-scroll-bottom', 'aria-label': 'Scroll to Bottom' });
+  mainHost.appendChild(mainVp);
+  mainHost.appendChild(mainBtn);
+  mainConv.appendChild(mainHost);
+  mainPane.appendChild(mainConv);
+
+  const sideBody = env.createElement('div', { 'data-side-panel-body': 'true' });
+  const sqTab = env.createElement('div', { 'data-testid': 'side-question-tab-conversation' });
+  const sqHost = env.createElement('div', { 'data-autoscroll-overlay-host': 'true' });
+  const sqVp = env.createElement('div', { 'data-testid': 'autoscroll-viewport' });
+  sqVp.scrollHeight = 1400; sqVp.clientHeight = 400; sqVp.scrollTop = 30;
+  const sqBtn = env.createElement('button', { class: 'agy-scroll-bottom', 'aria-label': 'Scroll to Bottom' });
+  sqHost.appendChild(sqVp);
+  sqHost.appendChild(sqBtn);
+  sqTab.appendChild(sqHost);
+  sideBody.appendChild(sqTab);
+
+  split.appendChild(mainPane);
+  split.appendChild(sideBody);
+  env.body.appendChild(split);
+
+  const rafQueue = [];
+  let nowMs = 0;
+  env.win.performance = { now: () => nowMs };
+  env.win.requestAnimationFrame = (cb) => { rafQueue.push(cb); return rafQueue.length; };
+  env.win.cancelAnimationFrame = () => {};
+
+  const ctl = enhancerMod.createHostEnhancerController({
+    doc: env.doc,
+    win: env.win,
+    getLang: () => 'en',
+    getConfig: () => ({ scrollBottomMotion: 'smooth', motionLevel: 'standard' }),
+  });
+
+  try {
+    // 点右侧 side-question-tab-conversation 的按钮：只滚右侧视口，主对话不动
+    assert.equal(ctl.runFastScrollToBottom(sqBtn), true);
+    nowMs = 700;
+    while (rafQueue.length) rafQueue.shift()();
+    assert.equal(sqVp.scrollTop, 1000, 'side-question-tab-conversation 按钮应只滚自己视口到底部');
+    assert.equal(mainVp.scrollTop, 100, '右侧栏滚到底部不得影响主对话视口');
+
+    // 点主对话按钮：只滚主对话视口，右侧栏不动
+    sqVp.scrollTop = 60;
+    nowMs = 900;
+    assert.equal(ctl.runFastScrollToBottom(mainBtn), true);
+    nowMs = 1600;
+    while (rafQueue.length) rafQueue.shift()();
+    assert.equal(mainVp.scrollTop, 1500, '主对话按钮应只滚主对话视口到底部');
+    assert.equal(sqVp.scrollTop, 60, '主对话滚到底部不得影响右侧栏视口');
+  } finally {
+    ctl.destroy();
   }
 });
