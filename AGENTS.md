@@ -1,95 +1,88 @@
-# AGENTS.md — Obsidian Prism 变更黄金路径与防篡改合同
+# AGENTS.md — Obsidian Prism 实战开发合同与防腐化红线
 
 > **定位 / Role**
-> 本文件是所有 AI 编码代理（Claude Code / Codex / Cursor / Antigravity / Swarm Workers）在 **Obsidian Prism（黑曜棱镜）** 仓库执行新功能开发、Bug 修复与重构时必须遵守的**不可违变更合同（Immutable Change Contract）**。
+> 本文件是所有 AI 代理（Antigravity 主脑 / Swarm Workers / Claude Code / Codex / Cursor）在 **Obsidian Prism（黑曜棱镜）** 仓库执行开发、修复、优化与审查时必须遵守的**现行实战合同**。
 >
-> - 最高架构宪法与十条工程铁律：[`.github/ARCHITECTURE.md`](./.github/ARCHITECTURE.md)
+> - 最高架构宪法与工程铁律：[`.github/ARCHITECTURE.md`](./.github/ARCHITECTURE.md)
 > - 不可回退架构决策卡（ADR）：[`docs/adr/README.md`](./docs/adr/README.md)
 
 ---
 
-## 一、黄金路径手册 / Golden Paths
+## 一、四态真交付铁律（严禁虚报「已完成」）
 
-### ① 新增通道或交互功能（Microkernel Channel）
+**任何改动必须严格区分以下 4 个阶段，未走完全部必要阶段严禁向维护者汇报「已完成」**：
 
-1. **唯一登记入口**：仅在 [`src/channels/registry.cjs`](./src/channels/registry.cjs) 的 `CHANNEL_REGISTRY` 注册新通道，配齐 `configKeys`、`files`、独立 `budgetBytes`、`shouldEnable()`、`build()`、`teardown`（登记于 [`src/channels/channel-teardowns.cjs`](./src/channels/channel-teardowns.cjs)）及探针字段。
-2. **配置契约同步**：在 [`src/config/schema.cjs`](./src/config/schema.cjs) 声明配置键、默认值与校验器，并 100% 同步 [`config.example.json`](./config.example.json)。
-3. **8 语种一等公民**：补齐 `zh-CN` / `zh-TW` / `en` / `ja` / `ko` / `es` / `fr` / `de`（非 CJK 语种 **0 汉字**，严禁新增 `yue` 独立词典或选项）。
-4. **硬性禁令**：
-   - 严禁向 Channel 1（[`ui-runtime.js`](./ui-runtime.js) 首屏主包）硬塞非首屏大模块；
-   - 严禁在守护进程、[`inject.js`](./inject.js) 或 [`scripts/build-common.mjs`](./scripts/build-common.mjs) 中新增平行通道表；
-   - 开关处于 `off` 时必须保持 **0 编译、0 页面注入、0 运行期常驻内存**。
+1. **已进仓**：代码已合入唯一集成仓，跑通 `npm run test:gates`（28/28）与全量单元测试（`0 fail`）；
+2. **已热同步实机**：通过 [`src/platform/install-manifest.cjs`](./src/platform/install-manifest.cjs) 或全量扫描实现实机目录 **0-DIFF 同步**（严禁手写易漏白名单、严禁留死文件、100% 校验受保护用户配置与壁纸 SHA-256 未变），清空 `.bundle-cache` 并仅重启 `.daemon.pid`；
+3. **原生二进制已重编**：凡改动 `installer/` 下 C# / Swift 源码（Watcher / Installer），必须重新编译并替换实机可执行文件后才算生效，否则一律标注「**实机仍失效（旧二进制）**」；
+4. **实机真验通过**：在真实 Antigravity 窗口通过 CDP DOM/CSSOM 读取与肉眼/2x 截图核验效果（`profile-live-perf.mjs` 为 `HEALTHY` 且 `probe-host-compat.mjs --live` `brokenCritical=0`）。
 
-### ② 修复 Antigravity 宿主兼容性（Host Compatibility）
-
-1. 先运行兼容性诊断探针定位断裂选择器与影响面：
-   - 在线探测：`node scripts/probe-host-compat.mjs --live`
-   - 离线快照：`node scripts/probe-host-compat.mjs --snapshot`
-2. 所有跨模块宿主 UI 选择器统一收口至 [`src/compat/host-selectors.cjs`](./src/compat/host-selectors.cjs)（主锚点 → `.agy-*` 语义降级 → 标注 `fragile: true` 的结构兜底），并在对应调用点标注 `@host-compat`。
-
-### ③ 升级、写盘与热同步（Atomic Persistence & Hot-Sync）
-
-1. 安装、热同步与增量升级必须经由 [`src/platform/install-manifest.cjs`](./src/platform/install-manifest.cjs) 四阶段原子事务引擎（同目录临时文件 + 校验 + 原子替换）落盘。
-2. **严禁**使用裸 `fs.copyFileSync`、`fs.writeFileSync` 直覆或 `rm -rf` 覆盖/删除用户目录受保护资产（`config.json`、`custom.css`、`wallpapers/`、`backups/`、`*cache*.json`）。
-
-### ④ 后台守护、模块化与扩展名纪律（Daemon, Composition & Module Discipline）
-
-1. **扩展名不可混用**：`src/{utils,config,cdp,compat,compiler,channels,platform}/` 统一 `.cjs`；`src/daemon/` 与 `src/security/` 统一 `.mjs`；严禁 `.cjs` 同步 `require('*.mjs')`（保障 Node `22.0–22.11` 零 `ERR_REQUIRE_ESM`）。
-2. **严禁原型混入与裸布尔死循环**：
-   - 严禁 `Object.assign(*.prototype, ...)` 上帝对象与散落布尔轮询自愈；
-   - 统一使用 [`SessionRegistry`](./src/daemon/session-registry.mjs)、[`ChannelOrchestrator`](./src/daemon/channel-orchestrator.mjs)、[`TelemetrySubsystem`](./src/daemon/telemetry-subsystem.mjs)、[`UpdateStorageSubsystem`](./src/daemon/update-storage-subsystem.mjs) 显式组合，以及 [`session-fsm.mjs`](./src/daemon/session-fsm.mjs) 显式有限状态机（FSM + 3 次熔断 + SHA-256 内容指纹）。
-3. **四防安全红线**：0 运行期 npm 依赖、0 `innerHTML` 写入、0 隐藏 PowerShell/WMI/`Add-Type`/`WScript.Shell`/大段 `node -e`、CDP 严格白名单（仅 `Page.*` / `Runtime.*` / `Target.*` / `Browser.close`）、严禁触碰 `app.asar` 与宿主 `.db`、本地 HTTP 严格绑定 `127.0.0.1`。
-
-### ⑤ 发版与版本同步（Version SSOT）
-
-- 唯一版本真相源为 [`package.json`](./package.json) 的 `version` 字段；
-- 发版升版统一执行 `node scripts/bump-version.mjs <ver>`，并运行 `npm run version:check` 校验全仓静态版本锚点零漂移。
+> **阶段备份与边界**：每轮大合入后必查 `RMvdesi/obsidian-prism-dev` 备份落差并主动呈报（只从集成仓推 `HEAD:refs/heads/main`，不碰本地 `obsidian-prism-dev` 未提交草稿）；一切公开云端写操作（push / tag / Release / 评论 / 关单）必须获维护者明示批准。
 
 ---
 
-## 二、门禁不可篡改铁律 / Immutable Gates Lock
+## 二、300Hz 体验与视觉质感红线（禁绝 C 类负优化）
 
-> **红线指令 / HARD LOCK**
->
-> **在任何新功能开发、Bug 修复或常规重构任务中，AI 编码代理绝对禁止擅自放宽 `test/gates/*` 的字节/行数阈值、删除安全或架构断言、降低棘轮上限，或往任何豁免白名单（`LEGACY_*` / `ALLOWED_*`）中新增条目！**
->
-> 若确遇极端例外（如无法绕过的平台约束或确需调整门禁规则），AI **必须立刻停手**，向人类维护者提交原因、影响评估与替代方案，待**人类维护者显式审批**并在 [`docs/adr/`](./docs/adr/README.md) 新增对应 ADR 决策卡后，方可变更门禁。
+**性能优化只做真减负（A 类：编译期扁平化、按需通道、OffscreenCanvas Worker、WebGL Shader 去开销、DOM 读写分离、热路径剪枝），严禁通过砍画质和破坏交互来凑跑分**：
 
----
-
-## 三、写/审分离 6 项变更影响核验表 / Change Impact Checklist
-
-提交或交卷前，编写代理与审查代理必须逐项核对以下 6 项（任一失败即退回整改）：
-
-- [ ] **1. 边界与分层（DAG & Extensions）**：是否保持 `0` 外部 npm 依赖、`L0 → L4` 与 `src/` 四级单向无环、`src/` 扩展名规范及新建文件 `<= 800` 行 / `<= 40 KB`？
-- [ ] **2. 通道与预算（Channels & Ch1 Budget）**：新增逻辑是否走按需通道而非塞入 Ch1？Ch1 全 8 语（+ `auto`）是否 `< 390,000 B`、`configRefresh < 4,096 B`、开关 `off` 时 `0 B`？
-- [ ] **3. 契约与语种（Schema, I18n & Copy）**：`src/config/schema.cjs` 与 `config.example.json` 是否 100% 对齐？8 语种是否完整、非 CJK 0 汉字、0 `yue` 独立词典、0 禁用词？
-- [ ] **4. 宿主与安全（Safety & AV Redlines）**：是否 0 `innerHTML`、0 `:has(`、100% ASCII CSS？是否零新增 AV 红线词条、CDP 严守白名单、100% `127.0.0.1` 回环绑定？
-- [ ] **5. 状态与落盘（FSM & Atomic I/O）**：是否避开原型混入与墙钟防抖、使用显式 FSM/内容哈希，且写盘走 `install-manifest.cjs` 原子事务不覆写用户数据？
-- [ ] **6. 测试与卫生（Tests & Hygiene）**：是否按模块域命名测试（严禁 `v10x-*`/`issueXX-*`）、所有文本为 **UTF-8 无 BOM + LF**、Markdown 相对链接全部有效？
+1. **禁止低帧 `steps()` 破坏 GPU 合成动画**：加载环、思考火花、推理滑块扫光、侧栏呼吸球、骨架屏等 `transform`/`opacity` 合成动画在默认档（`balanced`/`quality`）一律保持丝滑 `linear`/`ease-in-out`，绝不允许砍成 6–15fps 跳格；
+2. **禁止默认档砍核心浮层毛玻璃及滚动闪屏**：Overview / Drawer / Toast / SideQuestion / Fastpick / SlashMenu / PeekSurface 默认档保留质感毛玻璃（仅 `performance` 省电档或 `motion="off"` 关闭），禁止借 `data-ag-perf-busy` / `stream-active` 在滚动或流式时反复开关 `backdrop-filter` 造成剧烈闪屏；
+3. **禁止默认档切窗 `win-blur` 冻死宿主运行指示器**：双屏或切窗看后台 Agent 执行时，宿主加载环、流光与运行态指示器必须保持鲜活（仅 `performance` 省电档与门禁要求休眠的自研 Canvas 在失焦时休眠）；
+4. **禁止粗暴使用破坏布局的 `content-visibility: auto`**：不得对对话消息或代码块直接套用隐含 `contain: paint` 且估算高度失真的 `content-visibility: auto`，避免破坏代码块 `position: sticky` 吸顶或引发长对话滚动跳动。
 
 ---
 
-## 四、必跑验证命令 / Mandatory Verification Commands
+## 三、变更黄金路径（Golden Paths）
 
-每次修改完成后，必须按顺序实跑以下三条命令并确认全部通过（`0 fail` / `exit 0`）：
+### ① 新增功能、按需通道与配置契约
+- **唯一通道注册**：仅在 [`src/channels/registry.cjs`](./src/channels/registry.cjs) 注册新通道（配齐 `configKeys`、`files`、`budgetBytes`、`shouldEnable()`、`build()` 及 [`src/channels/channel-teardowns.cjs`](./src/channels/channel-teardowns.cjs) 清理函数）；开关 `off` 时必须 **0 编译、0 注入、0 常驻内存**；严禁把非首屏重模块硬塞进 Channel 1（[`ui-runtime.js`](./ui-runtime.js)）。
+- **配置单源同步**：在 [`src/config/schema.cjs`](./src/config/schema.cjs) 声明键、默认值与校验器，同步更新 [`config.example.json`](./config.example.json)，并检查原生端 [`installer/common/CdpClient.cs`](./installer/common/CdpClient.cs) 与 [`installer/macos/Common/CdpClient.swift`](./installer/macos/Common/CdpClient.swift) 配置同步状态，防止漂移扩大。
+- **9 语种一等公民**：完整覆盖 `zh-CN` / `zh-TW` / `en` / `ja` / `ko` / `es` / `fr` / `de` / `tr`（非 CJK 语种 **0 汉字**，严禁新增 `yue` 独立词典或语言选项，严禁出现禁用项目外游戏术语）。
+
+### ② 宿主兼容性修复
+- 改动前先跑 `node scripts/probe-host-compat.mjs --live`（或 `--snapshot`）定位真实 DOM 锚点，**禁止凭猜想写选择器**；
+- 跨模块宿主 UI 选择器优先收口至 [`src/compat/host-selectors.cjs`](./src/compat/host-selectors.cjs) 并在调用点标注 `@host-compat`，防止多处散落硬编码造成改一漏三。
+
+### ③ 原子落盘与热同步
+- 安装、升级与热同步遵循 [`src/platform/install-manifest.cjs`](./src/platform/install-manifest.cjs) 原子事务规范，严禁裸写直覆或误删用户受保护资产（`config.json`、`obsidian-prism-*.json`、`custom.css`、`vendor/wallpaper/*` 媒体、`backups/`）。
+
+### ④ 模块纪律与四防安全红线
+- **扩展名纪律**：`src/{utils,config,cdp,compat,compiler,channels,platform}/` 统一 `.cjs`；`src/daemon/` 与 `src/security/` 统一 `.mjs`；严禁 `.cjs` 同步 `require('*.mjs')`（守住 Node 22.0–22.11 兼容）；0 循环依赖、0 原型混入、采用显式组合与 [`session-fsm.mjs`](./src/daemon/session-fsm.mjs) 显式状态机。
+- **四防安全红线**：0 运行期 npm 依赖、0 `innerHTML`、0 `:has(`、100% ASCII CSS、0 隐藏 PowerShell/WMI/`Add-Type`/`WScript.Shell`/大段 `node -e`、CDP 严格白名单（`Page.*`/`Runtime.*`/`Target.*`/`Browser.close`）、严禁触碰 `app.asar` 与宿主 `.db`、本地 HTTP 严格绑定 `127.0.0.1`。
+
+### ⑤ 版本真相源
+- 唯一版本真相源为 [`package.json`](./package.json) 的 `version` 字段；升版统一用 `node scripts/bump-version.mjs <ver>` 并跑 `npm run version:check`。
+
+---
+
+## 四、门禁不可篡改锁（Immutable Gates Lock）
+
+> **HARD LOCK**：严禁在任何开发、修补或重构中擅自放宽 `test/gates/*` 字节/行数阈值、删除安全/架构断言、降低棘轮上限或往 `LEGACY_*` / `ALLOWED_*` 白名单塞新条目。确遇不可绕过的平台例外时，**必须先停手呈报原因与替代方案，待人类维护者明示批准并在 [`docs/adr/`](./docs/adr/README.md) 补 ADR 决策卡后方可调整**。
+
+---
+
+## 五、写/审分离 6 项交卷核验表
+
+编写与审查代理交卷前必须逐项核对（任一失败即退回）：
+
+- [ ] **1. 分层与边界**：0 外部依赖、`src/` 单向无环、`.cjs`/`.mjs` 不混用、新建模块 `<= 800` 行 / `<= 40 KB`；
+- [ ] **2. 通道与预算**：`Ch1` 全 9 语（+`auto`）`< 390,000 B`、`configRefresh < 4,096 B`、各通道不破预算、开关 `off` 为 `0 B`；
+- [ ] **3. 体验红线**：无默认档低帧 `steps()`、无默认砍核心毛玻璃/滚轮闪屏、无切窗冻死宿主运行圈、无破 `sticky` 的 `content-visibility: auto`；
+- [ ] **4. 契约与 9 语种**：`schema.cjs` 与 `config.example.json` 100% 对齐、9 语种齐全且非 CJK 0 汉字、0 `yue` 独立词典；
+- [ ] **5. 安全与原子落盘**：0 `innerHTML`、0 `:has(`、0 新增 AV 红线、保护全部用户配置与壁纸资产；
+- [ ] **6. 测试与卫生**：**按模块域命名测试（严禁新增 `v10x-*` / `w5-*` / `w6-*` / `issueXX-*`）**、UTF-8 无 BOM + LF、Markdown 相对链接全部有效。
+
+---
+
+## 六、必跑验证命令与索引
 
 ```bash
-# 1. 秒级架构、安全红线、体积预算、语种版本与仓库卫生门禁
 npm run test:gates
-
-# 2. 单一版本真相源（SSOT）与 CHANGELOG 卫生校验
 npm run version:check
-
-# 3. 全量并发单元测试 + 门禁回归套
-node --test --test-concurrency=4 test/*.test.mjs test/gates/*.test.mjs
+node scripts/run-tests.mjs --all
 ```
 
----
-
-## 五、延伸索引 / References
-
-- 最高架构宪法与十条铁律：[`.github/ARCHITECTURE.md`](./.github/ARCHITECTURE.md)
-- 不可回退架构决策记录（ADR）：[`docs/adr/README.md`](./docs/adr/README.md)
-- 代码签名与发布合规策略：[`docs/CODE_SIGNING_POLICY.md`](./docs/CODE_SIGNING_POLICY.md)
-- 贡献指南与测试夹具约定：[`.github/CONTRIBUTING.md`](./.github/CONTRIBUTING.md)
+- 最高架构宪法：[`.github/ARCHITECTURE.md`](./.github/ARCHITECTURE.md)
+- 架构决策记录（ADR）：[`docs/adr/README.md`](./docs/adr/README.md)
+- 代码签名与发布合规：[`docs/CODE_SIGNING_POLICY.md`](./docs/CODE_SIGNING_POLICY.md)
+- 贡献指南与测试规范：[`.github/CONTRIBUTING.md`](./.github/CONTRIBUTING.md)
