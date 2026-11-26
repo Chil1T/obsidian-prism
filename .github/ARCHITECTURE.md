@@ -3,6 +3,7 @@
 > **最高工程规范 / Supreme Engineering Constitution**
 > 本文件定义 **Obsidian Prism（黑曜棱镜）** 的长期架构边界、十条不可违工程铁律与自动化适应度门禁（Fitness Gates）。
 > 任何功能开发、重构、兼容性适配或社区 Pull Request 均须遵守本宪法，并由 `test/gates/*.test.mjs`（`npm run test:gates`）与 CI Fail-Fast 门禁自动强制执行。
+> AI 编码代理变更黄金路径与防篡改合同见 [`AGENTS.md`](../AGENTS.md)；核心不可回退架构决策卡见 [`docs/adr/README.md`](../docs/adr/README.md)。
 
 ---
 

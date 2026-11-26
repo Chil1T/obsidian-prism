@@ -13,6 +13,7 @@ const ALLOWED_ROOT_FILES = new Set([
   // Repository & package metadata
   '.gitattributes',
   '.gitignore',
+  'AGENTS.md',
   'CHANGELOG.md',
   'CITATION.cff',
   'LICENSE',
@@ -111,15 +112,27 @@ function listTrackedRootFiles() {
   }
 }
 
+const ADR_FILES = [
+  'docs/adr/README.md',
+  'docs/adr/ADR-001-zero-runtime-deps.md',
+  'docs/adr/ADR-002-host-safety-and-cdp-allowlist.md',
+  'docs/adr/ADR-003-anti-av-and-two-step-signing.md',
+  'docs/adr/ADR-004-ch1-budget-and-single-channel-registry.md',
+  'docs/adr/ADR-005-explicit-fsm-and-composition.md',
+  'docs/adr/ADR-006-zero-innerhtml-and-cssom-hygiene.md',
+];
+
 test('Phase 1 directory hygiene: community docs live in .github/, multilingual docs in docs/, Windows bat scripts in scripts/win/, and root stays within allowlist', () => {
   // 1) Relocated & governance files exist at their canonical destinations
   for (const rel of [
+    'AGENTS.md',
     '.github/ARCHITECTURE.md',
     '.github/CONTRIBUTING.md',
     '.github/CODE_OF_CONDUCT.md',
     '.github/SECURITY.md',
     'README.en.md',
     'docs/CONTRIBUTORS.md',
+    ...ADR_FILES,
     'scripts/win/inject.bat',
     'scripts/win/watch.bat',
     'scripts/win/remove.bat',
@@ -130,12 +143,22 @@ test('Phase 1 directory hygiene: community docs live in .github/, multilingual d
     assert.ok(fs.existsSync(path.join(ROOT, rel)), `Expected relocated/new file to exist: ${rel}`);
   }
 
-  // 1b) CONTRIBUTING.md links prominently to ARCHITECTURE.md near the top
+  // 1b) CONTRIBUTING.md links prominently to ARCHITECTURE.md near the top; bidirectional links between AGENTS/ARCHITECTURE/ADR
   const contribTop = fs.readFileSync(path.join(ROOT, '.github/CONTRIBUTING.md'), 'utf8').split(/\r?\n/).slice(0, 12).join('\n');
   assert.ok(
     /ARCHITECTURE\.md/.test(contribTop),
     '.github/CONTRIBUTING.md must link to .github/ARCHITECTURE.md near the top of the document'
   );
+  const archTop = fs.readFileSync(path.join(ROOT, '.github/ARCHITECTURE.md'), 'utf8').split(/\r?\n/).slice(0, 12).join('\n');
+  assert.ok(/AGENTS\.md/.test(archTop), '.github/ARCHITECTURE.md must link to ../AGENTS.md near the top');
+  assert.ok(/docs\/adr\/README\.md/.test(archTop), '.github/ARCHITECTURE.md must link to ../docs/adr/README.md near the top');
+  const agentsText = fs.readFileSync(path.join(ROOT, 'AGENTS.md'), 'utf8');
+  assert.ok(/\.github\/ARCHITECTURE\.md/.test(agentsText), 'AGENTS.md must link to .github/ARCHITECTURE.md');
+  assert.ok(/docs\/adr\/README\.md/.test(agentsText), 'AGENTS.md must link to docs/adr/README.md');
+  for (const rel of ['AGENTS.md', ...ADR_FILES]) {
+    const txt = fs.readFileSync(path.join(ROOT, rel), 'utf8');
+    assert.equal(/八方旅人|octopath/i.test(txt), false, `Forbidden terminology detected in governance doc: ${rel}`);
+  }
 
   // 2) Relocated files must not remain duplicated at repository root
   for (const oldRoot of [
@@ -170,9 +193,11 @@ test('Phase 1 directory hygiene: community docs live in .github/, multilingual d
 
 test('Phase 1 documentation relative links and image assets resolve to real files on disk', () => {
   const docsToCheck = [
+    'AGENTS.md',
     'README.md',
     'README.en.md',
     'docs/CONTRIBUTORS.md',
+    ...ADR_FILES,
     'CHANGELOG.md',
     '.github/ARCHITECTURE.md',
     '.github/CONTRIBUTING.md',
