@@ -398,11 +398,15 @@ async function handleInlineDiffBinding(_rpc, entry, payload, executionContextId)
       ? {
           additions: Number.isSafeInteger(parsed.hints.additions) && parsed.hints.additions >= 0 ? parsed.hints.additions : 0,
           deletions: Number.isSafeInteger(parsed.hints.deletions) && parsed.hints.deletions >= 0 ? parsed.hints.deletions : 0,
+          ...(parsed.hints.isCreated === true ? { isCreated: true } : {}),
         }
       : undefined;
+  const rpcOpts = {};
+  if (hints) rpcOpts.hints = hints;
+  if (parsed.expand === true) rpcOpts.expand = true;
   let resp;
   try {
-    resp = await readSafeInlineDiff(parsed.uri, hints ? { hints } : {});
+    resp = await readSafeInlineDiff(parsed.uri, rpcOpts);
   } catch {
     resp = { ok: false, error: 'internal_error' };
   }

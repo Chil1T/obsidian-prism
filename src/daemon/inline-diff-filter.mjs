@@ -9,6 +9,9 @@ export const INLINE_DIFF_MAX_DIFF_LINES = 120;
 export const INLINE_DIFF_MAX_SNAPSHOT_LINES = 80;
 export const INLINE_DIFF_MAX_LINE_CHARS = 240;
 export const INLINE_DIFF_MAX_READ_BYTES = 24 * 1024;
+export const INLINE_DIFF_EXPAND_MAX_DIFF_LINES = 1200;
+export const INLINE_DIFF_EXPAND_MAX_SNAPSHOT_LINES = 1000;
+export const INLINE_DIFF_EXPAND_MAX_READ_BYTES = 128 * 1024;
 export const INLINE_DIFF_GIT_MAX_BUFFER = 512 * 1024;
 export const INLINE_DIFF_REV_PARSE_TIMEOUT_MS = 3000;
 export const INLINE_DIFF_GIT_DIFF_TIMEOUT_MS = 4500;
@@ -59,12 +62,19 @@ export function hasDotDotPathSegment(rawPath) {
   return parts.some((seg) => seg === '..');
 }
 
+const ARCHIVE_TOPLEVEL_SCRIPT_EXTS = new Set(['.mjs', '.js', '.cmd', '.sh', '.md']);
+
 function isAllowedGeminiSubpath(segs, geminiIdx) {
   if (geminiIdx + 3 >= segs.length) return false;
   const s1 = segs[geminiIdx + 1];
   const s2 = segs[geminiIdx + 2];
   if (s1 === 'config' && (s2 === 'skills' || s2 === 'rules' || s2 === 'plugins')) return true;
   if (s1 === 'antigravity' && (s2 === 'worktrees' || s2 === 'brain')) return true;
+  if (s1 === 'antigravity' && s2 === 'conversations_archive' && segs.length === geminiIdx + 4) {
+    const leaf = String(segs[geminiIdx + 3] || '').replace(/[. ]+$/, '');
+    const ext = path.posix.extname(leaf);
+    if (ext && ARCHIVE_TOPLEVEL_SCRIPT_EXTS.has(ext)) return true;
+  }
   return false;
 }
 
@@ -339,6 +349,7 @@ function makeBlockedDiffParseResult() {
     deletions: 0,
     truncated: false,
     focusedByHint: false,
+    totalLines: 0,
     lines: [],
   };
 }
@@ -466,7 +477,7 @@ export function parseInlineUnifiedDiff(
   }
 
   if (isBinary) {
-    return { blocked: false, isBinary: true, additions: 0, deletions: 0, truncated: false, focusedByHint: false, lines: [] };
+    return { blocked: false, isBinary: true, additions: 0, deletions: 0, truncated: false, focusedByHint: false, totalLines: 0, lines: [] };
   }
 
   let totalRowCount = 0;
@@ -482,7 +493,7 @@ export function parseInlineUnifiedDiff(
       const rows = hunks[i].rows;
       for (let j = 0; j < rows.length && lines.length < maxLines; j += 1) lines.push(rows[j]);
     }
-    return { blocked: false, isBinary: false, additions, deletions, truncated: totalRowCount > maxLines, focusedByHint: false, lines };
+    return { blocked: false, isBinary: false, additions, deletions, truncated: totalRowCount > maxLines, focusedByHint: false, totalLines: totalRowCount, lines };
   }
 
   const scored = hunks.map((h) => {
@@ -526,6 +537,7 @@ export function parseInlineUnifiedDiff(
     deletions,
     truncated: totalRowCount > lines.length,
     focusedByHint: skippedLeading || (hintDel > 0 && lines.some((r) => r.kind === 'del')),
+    totalLines: totalRowCount,
     lines,
   };
 }

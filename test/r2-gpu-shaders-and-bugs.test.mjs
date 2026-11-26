@@ -26,19 +26,23 @@ function assertBalancedDelimiters(src, label) {
   assert.equal(brackets, 0, `${label}: unbalanced []`);
 }
 
-test('Issue #109: DeepSeek whale keeps eyes closed (loafShut) across all loaf/sleep ticks with 0 blinking', () => {
+test('Issue #109 & PR #111: DeepSeek whale & cat keep eyes closed (loafShut) across all loaf/sleep ticks with 0 blinking', () => {
   const rig = require(path.join(ROOT, 'dual-mascot-rig.js'));
   const rigSrc = fs.readFileSync(path.join(ROOT, 'dual-mascot-rig.js'), 'utf8');
-  assert.ok(rigSrc.includes("poseKey === 'sleep' || isWhale || phase4 === 3 ? 'loafShut' : 'loafHalf'"), 'POSE_RECIPES.loaf must force loafShut for isWhale');
+  const loafBlock = /loaf\s*\([^)]*\)\s*\{[\s\S]*?\n\s*\},/.exec(rigSrc);
+  assert.ok(loafBlock && loafBlock[0].includes("s.eyes = 'loafShut';"), 'POSE_RECIPES.loaf must force s.eyes = \'loafShut\'');
 
-  // Compare whale loaf & sleep eye layer rows across all 32 ticks (all phase4 = 0,1,2,3) -> strictly identical to closed-eye sleep baseline!
-  const sleepBase = rig.buildClipLayers('whale', 'sleep', 0, {}).map((l) => JSON.stringify(l.rows));
-  for (let tick = 0; tick < 32; tick++) {
-    const loafRows = rig.buildClipLayers('whale', 'loaf', tick, {}).map((l) => JSON.stringify(l.rows));
-    const sleepRows = rig.buildClipLayers('whale', 'sleep', tick, {}).map((l) => JSON.stringify(l.rows));
-    // All 4 phase4 ticks must share identical eye sprite rows (0 blinking between loafHalf and loafShut)
-    assert.deepEqual(loafRows[1], sleepBase[1], `Issue #109: whale loaf at tick=${tick} must keep loafShut eyes without blinking`);
-    assert.deepEqual(sleepRows[1], sleepBase[1], `Issue #109: whale sleep at tick=${tick} must keep loafShut eyes without blinking`);
+  // Compare whale & cat loaf/sleep eye layer rows across all 32 ticks -> strictly identical to closed-eye sleep baseline (0 blinking)
+  for (const [species, layerIndices] of [['whale', [1, 3]], ['cat', [4]]]) {
+    const sleepBase = rig.buildClipLayers(species, 'sleep', 0, {}).map((l) => JSON.stringify(l.rows));
+    for (let tick = 0; tick < 32; tick++) {
+      const loafRows = rig.buildClipLayers(species, 'loaf', tick, {}).map((l) => JSON.stringify(l.rows));
+      const sleepRows = rig.buildClipLayers(species, 'sleep', tick, {}).map((l) => JSON.stringify(l.rows));
+      for (const idx of layerIndices) {
+        assert.deepEqual(loafRows[idx], sleepBase[idx], `${species} loaf layer[${idx}] at tick=${tick} must keep loafShut eyes without blinking`);
+        assert.deepEqual(sleepRows[idx], sleepBase[idx], `${species} sleep layer[${idx}] at tick=${tick} must keep loafShut eyes without blinking`);
+      }
+    }
   }
 });
 
