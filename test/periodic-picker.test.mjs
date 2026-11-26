@@ -8028,3 +8028,133 @@ test('W6 PP-UX: (1) wallpaper/conv-aura stay alive under balanced pp-open & paus
   );
   drInst.destroy();
 });
+
+test('Stub SPA re-badge: auto-paints left-pinned [10Ne] on new trigger after SPA navigation without hover/click, throttles mutations, and cleans up 100% on full bundle load or destroy', () => {
+  const stubPath = path.join(PERIODIC_PICKER_DIR, 'periodic-picker-stub.js');
+  const stubBytes = fs.statSync(stubPath).size;
+  assert.ok(stubBytes < 2048, `periodic-picker-stub.js must stay strictly < 2048 B (got ${stubBytes} B)`);
+  const stubMod = require(stubPath);
+
+  // 1) Mount on home view (no trigger initially), settle initial follow-up timer
+  const env = createPeriodicSandbox();
+  const stub = stubMod.mountPeriodicPickerStub({ root: env.window, doc: env.document });
+  assert.deepEqual(stub.getStatus(), { status: 'stub', mode: 'stub' });
+  assert.ok(env.getCounts().activeObservers >= 1, 'Stub should attach a lightweight MutationObserver for SPA DOM return');
+  env.advanceTime(120);
+  assert.equal(env.getCounts().activeTimers, 0, 'Initial follow-up timer should settle cleanly');
+
+  // 2) SPA navigates back to conversation via DOM insertion (NO hover / NO click) -> trigger WITHOUT glyph
+  const spaBtnNoGlyph = env.makeElement('button', {
+    attrs: { 'data-testid': 'model-selector-trigger', 'aria-label': 'Gemini 4 Neon (Gilt für /btw, Bereit)' },
+    useChildNodes: true,
+  });
+  const spaLbl1 = env.makeElement('span', { text: 'Gemini 4 Neon' });
+  const spaChev1 = env.makeElement('svg', {});
+  spaBtnNoGlyph.appendChild(spaLbl1);
+  spaBtnNoGlyph.appendChild(spaChev1);
+  env.body.appendChild(spaBtnNoGlyph);
+
+  // Burst of 20 rapid mutations (simulating streaming/SPA render) must coalesce into a single throttled timer
+  for (let i = 0; i < 20; i += 1) {
+    env.triggerMutations(env.body, [{ type: 'childList', addedNodes: [spaBtnNoGlyph] }]);
+  }
+  assert.equal(env.getCounts().activeTimers, 1, 'Rapid DOM mutations must coalesce into strictly 1 throttled timer');
+  env.advanceTime(110);
+  assert.equal(env.getCounts().activeTimers, 0);
+
+  const badge1 = spaBtnNoGlyph.querySelector('.ag-pp-mini-keycap');
+  assert.ok(badge1, 'Stub must auto-paint [10Ne] after SPA DOM return without hover/click');
+  assert.equal(badge1.getAttribute('data-z'), '10');
+  assert.equal(badge1.getAttribute('data-symbol'), 'Ne');
+  assert.equal(badge1.children[0].textContent, '10');
+  assert.equal(badge1.children[1].textContent, 'Ne');
+  assert.equal(spaBtnNoGlyph.childNodes[0], badge1, 'Without glyph, [10Ne] must be pinned at start (left of model name)');
+  assert.equal(spaBtnNoGlyph.childNodes[1], spaLbl1);
+
+  // 3) SPA route switch via popstate creates a second trigger WITH .ag-cs-model-glyph already mounted
+  const spaBtnWithGlyph = env.makeElement('button', {
+    attrs: { 'data-testid': 'model-selector-trigger', 'aria-label': 'Gemini 4 Neon (S’applique à /btw, car son modele est pret)' },
+    useChildNodes: true,
+  });
+  const spaGlyph2 = env.makeElement('span', { className: 'ag-cs-model-glyph' });
+  const spaLbl2 = env.makeElement('span', { text: 'Gemini 4 Neon' });
+  const spaChev2 = env.makeElement('svg', {});
+  spaBtnWithGlyph.appendChild(spaGlyph2);
+  spaBtnWithGlyph.appendChild(spaLbl2);
+  spaBtnWithGlyph.appendChild(spaChev2);
+  env.body.appendChild(spaBtnWithGlyph);
+
+  env.window.dispatchEvent(env.createEventObj('popstate', {}, env.window));
+  env.advanceTime(110);
+  const badge2 = spaBtnWithGlyph.querySelector('.ag-pp-mini-keycap');
+  assert.ok(badge2, 'Stub must auto-paint [10Ne] on popstate SPA route change without hover/click');
+  assert.equal(badge2.getAttribute('data-z'), '10');
+  assert.equal(badge2.getAttribute('data-symbol'), 'Ne');
+  assert.equal(spaBtnWithGlyph.childNodes[0], spaGlyph2);
+  assert.equal(spaBtnWithGlyph.childNodes[1], badge2, 'With glyph, [10Ne] must stay pinned right after glyph (left of model name)');
+  assert.equal(spaBtnWithGlyph.childNodes[2], spaLbl2);
+
+  // 4) Upgrade to full periodic-picker (via explicit stub.destroy(true) handoff): 0 leaked listeners/timers/observers, badges preserved
+  stub.destroy(true);
+  assert.deepEqual(stub.getStatus(), { status: 'destroyed', mode: 'off' });
+  stub.destroy(); // idempotent double destroy must preserve 'destroyed' status
+  assert.deepEqual(stub.getStatus(), { status: 'destroyed', mode: 'off' });
+  assert.equal(env.window.__agPrismPeriodicStub, undefined, 'Destroyed stub must clear window.__agPrismPeriodicStub');
+  assert.deepEqual(env.getCounts(), {
+    docListeners: 0,
+    winListeners: 0,
+    activeTimers: 0,
+    activeRafs: 0,
+    activeObservers: 0,
+  }, 'Upgrade destroy(true) must clean up 100% of doc/win listeners, timers, and MutationObservers');
+  assert.ok(spaBtnNoGlyph.querySelector('.ag-pp-mini-keycap'), 'Upgrade destroy(true) must preserve badges for seamless handoff');
+  assert.ok(spaBtnWithGlyph.querySelector('.ag-pp-mini-keycap'), 'Upgrade destroy(true) must preserve badges for seamless handoff');
+
+  // 5) Direct full bundle load (sets __agPeriodicFullLoaded = true without explicit stub.destroy): stub auto-cleans 100% on next signal
+  const env2 = createPeriodicSandbox();
+  const stub2 = stubMod.mountPeriodicPickerStub({ root: env2.window, doc: env2.document });
+  const trig2 = env2.makeElement('button', { attrs: { 'data-testid': 'model-selector-trigger' }, useChildNodes: true });
+  trig2.appendChild(env2.makeElement('span', { text: 'Gemini 4 Neon' }));
+  env2.body.appendChild(trig2);
+  env2.triggerMutations(env2.body, [{ type: 'childList', addedNodes: [trig2] }]);
+  env2.advanceTime(110);
+  assert.equal(trig2.querySelector('.ag-pp-mini-keycap')?.getAttribute('data-symbol'), 'Ne');
+
+  env2.window.__agPeriodicMockHost = {
+    selectedModel: { label: 'Gemini 4 Neon', modelId: 'gemini-4-ne' },
+    modelOptions: [{ label: 'Gemini 4 Neon', modelId: 'gemini-4-ne' }],
+  };
+  const fullFactory = loadPeriodicFactoryInSandbox(env2);
+  const fullInst = fullFactory.mountPeriodicPicker({ root: env2.window, doc: env2.document, mode: 'on' });
+  assert.equal(env2.window.__agPeriodicFullLoaded, true);
+  // Trigger popstate / mutation -> stub detects __agPeriodicFullLoaded and self-destructs cleanly
+  env2.window.dispatchEvent(env2.createEventObj('popstate', {}, env2.window));
+  assert.deepEqual(stub2.getStatus(), { status: 'destroyed', mode: 'off' });
+  assert.equal(env2.window.__agPrismPeriodicStub, undefined);
+  // Destroying fullInst afterwards must bring ALL counts back to exact 0 (proving stub left 0 leaked listeners/observers/timers)
+  fullInst.destroy();
+  assert.deepEqual(env2.getCounts(), {
+    docListeners: 0,
+    winListeners: 0,
+    activeTimers: 0,
+    activeRafs: 0,
+    activeObservers: 0,
+  }, 'After full bundle load + teardown, stub must leave 0 leaked listeners, observers, or timers');
+
+  // 6) Explicit off-teardown stub.destroy() removes badges and cleans all hooks
+  const env3 = createPeriodicSandbox();
+  const trig3 = env3.makeElement('button', { attrs: { 'data-testid': 'model-selector-trigger' }, useChildNodes: true });
+  trig3.appendChild(env3.makeElement('span', { text: 'Gemini 4 Neon' }));
+  env3.body.appendChild(trig3);
+  const stub3 = stubMod.mountPeriodicPickerStub({ root: env3.window, doc: env3.document });
+  assert.ok(trig3.querySelector('.ag-pp-mini-keycap'));
+  stub3.destroy();
+  assert.equal(trig3.querySelector('.ag-pp-mini-keycap'), null, 'Off-teardown destroy() must remove stub badges');
+  assert.deepEqual(env3.getCounts(), {
+    docListeners: 0,
+    winListeners: 0,
+    activeTimers: 0,
+    activeRafs: 0,
+    activeObservers: 0,
+  });
+});
