@@ -306,13 +306,13 @@ test('static frame cache & adaptive heartbeat: skips redundant clearRect + style
   try {
     const snap0 = stage.getLayoutSnapshot();
     assert.equal(snap0.perf.timerIntervalMs, 100, 'Active heartbeat must run at 100ms');
-    assert.equal(clearRectCount, 3, 'Initial mount draws both mascots + 1 static habitat prop once');
+    assert.equal(clearRectCount, 2, 'Initial mount draws both main mascots once (habitat prop uses pure CSS SVG DataURI, 0 Canvas)');
     assert.equal(transformAssignCount, 2, 'Initial mount writes initial style.transform once per mascot');
 
     // 等待 260ms（跨过 2 拍心跳）：因姿态、帧签名与坐标完全未变，必须 0 次 clearRect、0 次 style.transform 写入！
     await new Promise((r) => setTimeout(r, 260));
     const snapIdle = stage.getLayoutSnapshot();
-    assert.equal(clearRectCount, 3, 'Unchanged idle frames must completely skip Canvas clearRect/redraw');
+    assert.equal(clearRectCount, 2, 'Unchanged idle frames must completely skip Canvas clearRect/redraw');
     assert.equal(transformAssignCount, 2, 'Stationary mascots must completely skip DOM style.transform writes');
     assert.ok(snapIdle.perf.canvasSkips >= 2, 'Must record skipped canvas redraws');
     assert.ok(snapIdle.perf.domTransformSkips >= 2, 'Must record skipped DOM transform writes');
@@ -1523,7 +1523,7 @@ test('Issue #2/#4/#5 regressions: RLE fillRect batching pixel-equivalence, tier-
 
   try {
     const initialCtxCalls = getCtxCalls;
-    assert.equal(initialCtxCalls, 6, 'Should acquire 2D context exactly once for 2 main actors + 3 mini crabs + 1 static habitat prop');
+    assert.equal(initialCtxCalls, 5, 'Should acquire 2D context exactly once for 2 main actors + 3 mini crabs (0 habitat canvas)');
 
     // Verify streamTier === 3 write pose alternates frames across ticks instead of freezing on even localTick
     const seenWriteFrames = new Set([
@@ -1803,8 +1803,10 @@ test('WO-MAIN-001B: 9 Slash theaters, 4 contextual links, habitat 3-mode 0fps pr
 
   try {
     const habEl = hostEl.children.find((n) => n.className === 'ag-v2-habitat-prop');
-    assert.ok(habEl, 'Expected .ag-v2-habitat-prop canvas mounted in stage');
-    assert.equal(habDraws, 1, 'Habitat prop must draw exactly 1 static frame at mount (0fps idle)');
+    assert.ok(habEl, 'Expected .ag-v2-habitat-prop mounted in stage');
+    assert.notEqual(habEl.tagName, 'CANVAS', 'Habitat prop must use pure CSS SVG DataURI div (0 Canvas)');
+    assert.equal(habDraws, 0, 'Habitat prop must perform 0 Canvas2D draws');
+    assert.ok(String(habEl.style.backgroundImage || '').includes('data:image/svg+xml'), 'Habitat prop must render SVG DataURI backgroundImage');
 
     // Test all 9 slash commands + /swarm alias
     for (const cmd of ['plan', 'goal', 'boost', 'teamwork', 'swarm', 'browser', 'compact', 'schedule', 'grill-me', 'learn']) {

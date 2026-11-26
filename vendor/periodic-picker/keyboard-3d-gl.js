@@ -4655,11 +4655,15 @@
       '}',
       '',
       'vec3 F_Schlick(float vdh, vec3 f0) {',
-      '  return f0 + (1.0 - f0) * pow(clamp(1.0 - vdh, 0.0, 1.0), 5.0);',
+      '  float x = clamp(1.0 - vdh, 0.0, 1.0);',
+      '  float x2 = x * x;',
+      '  return f0 + (1.0 - f0) * (x2 * x2 * x);',
       '}',
       '',
       'vec3 F_SchlickRoughness(float ndv, vec3 f0, float rough) {',
-      '  return f0 + (max(vec3(1.0 - rough), f0) - f0) * pow(clamp(1.0 - ndv, 0.0, 1.0), 5.0);',
+      '  float x = clamp(1.0 - ndv, 0.0, 1.0);',
+      '  float x2 = x * x;',
+      '  return f0 + (max(vec3(1.0 - rough), f0) - f0) * (x2 * x2 * x);',
       '}',
       '',
       'vec2 dirToEquirectUv(vec3 d) {',
@@ -4681,51 +4685,42 @@
       '',
       'vec3 samplePrismSpectrum6(float phase, float coreSharp, float toneIdx, float isLight) {',
       '  vec3 specSrgb;',
-      '  vec3 coreSrgb = vec3(1.0, 1.0, 1.0);',
+      '  vec3 coreLin = vec3(1.0);',
       '  if (toneIdx > 4.5) {',
-      '    /* 5: mono */',
       '    specSrgb = isLight > 0.5',
       '      ? mix4Stops(vec3(0.118, 0.161, 0.231), vec3(0.200, 0.255, 0.333), vec3(0.392, 0.455, 0.545), vec3(0.580, 0.639, 0.722), phase)',
       '      : mix4Stops(vec3(0.886, 0.910, 0.941), vec3(0.580, 0.639, 0.722), vec3(0.392, 0.455, 0.545), vec3(0.796, 0.835, 0.882), phase);',
-      '    coreSrgb = isLight > 0.5 ? vec3(0.92, 0.95, 0.99) : vec3(0.97, 0.98, 1.00);',
+      '    coreLin = isLight > 0.5 ? vec3(0.8324, 0.8933, 0.9781) : vec3(0.9351, 0.9565, 1.0000);',
       '  } else if (toneIdx > 3.5) {',
-      '    /* 4: amber */',
       '    specSrgb = isLight > 0.5',
       '      ? mix4Stops(vec3(0.573, 0.251, 0.055), vec3(0.706, 0.325, 0.035), vec3(0.851, 0.467, 0.024), vec3(0.961, 0.620, 0.043), phase)',
       '      : mix4Stops(vec3(0.992, 0.902, 0.541), vec3(0.949, 0.722, 0.294), vec3(0.851, 0.467, 0.024), vec3(0.980, 0.816, 0.365), phase);',
-      '    coreSrgb = vec3(1.00, 0.985, 0.92);',
+      '    coreLin = vec3(1.0000, 0.9673, 0.8324);',
       '  } else if (toneIdx > 2.5) {',
-      '    /* 3: iris */',
       '    specSrgb = isLight > 0.5',
       '      ? mix4Stops(vec3(0.357, 0.129, 0.714), vec3(0.486, 0.227, 0.929), vec3(0.545, 0.361, 0.965), vec3(0.659, 0.333, 0.969), phase)',
       '      : mix4Stops(vec3(0.867, 0.839, 0.996), vec3(0.647, 0.541, 0.973), vec3(0.427, 0.157, 0.851), vec3(0.765, 0.690, 0.988), phase);',
-      '    coreSrgb = vec3(0.965, 0.955, 1.00);',
+      '    coreLin = vec3(0.9245, 0.9036, 1.0000);',
       '  } else if (toneIdx > 1.5) {',
-      '    /* 2: cobalt */',
       '    specSrgb = isLight > 0.5',
       '      ? mix4Stops(vec3(0.114, 0.306, 0.847), vec3(0.145, 0.388, 0.922), vec3(0.008, 0.518, 0.780), vec3(0.220, 0.741, 0.973), phase)',
       '      : mix4Stops(vec3(0.486, 0.886, 1.000), vec3(0.259, 0.522, 0.957), vec3(0.106, 0.286, 0.698), vec3(0.380, 0.720, 0.985), phase);',
-      '    coreSrgb = vec3(0.945, 0.980, 1.00);',
+      '    coreLin = vec3(0.8830, 0.9565, 1.0000);',
       '  } else if (toneIdx > 0.5) {',
-      '    /* 1: warm */',
       '    specSrgb = isLight > 0.5',
       '      ? mix4Stops(vec3(0.604, 0.204, 0.071), vec3(0.761, 0.349, 0.204), vec3(0.851, 0.467, 0.341), vec3(0.851, 0.467, 0.024), phase)',
       '      : mix4Stops(vec3(0.965, 0.741, 0.376), vec3(0.941, 0.639, 0.494), vec3(0.851, 0.467, 0.341), vec3(0.953, 0.686, 0.420), phase);',
-      '    coreSrgb = vec3(1.00, 0.965, 0.933);',
+      '    coreLin = vec3(1.0000, 0.9245, 0.8585);',
       '  } else {',
-      '    /* 0: default (#FFFFFF -> #4285F4 Cobalt -> #9B72CB Iris -> #EA4335 Coral -> #FBBC04 Amber) */',
       '    specSrgb = isLight > 0.5',
       '      ? mix4Stops(vec3(0.145, 0.388, 0.922), vec3(0.486, 0.227, 0.929), vec3(0.918, 0.263, 0.208), vec3(0.851, 0.467, 0.024), phase)',
       '      : mix4Stops(vec3(0.259, 0.522, 0.957), vec3(0.608, 0.447, 0.796), vec3(0.918, 0.263, 0.208), vec3(0.984, 0.737, 0.016), phase);',
-      '    coreSrgb = vec3(1.00, 1.00, 1.00);',
       '  }',
       '  vec3 specLin = srgbToLinear(specSrgb);',
-      '  vec3 coreLin = srgbToLinear(coreSrgb);',
       '  float kCore = clamp(coreSharp, 0.0, 1.0);',
       '  return mix(specLin, coreLin * mix(1.38, 1.12, isLight), kCore * mix(0.88, 0.56, isLight));',
       '}',
       '',
-      '/* V9 手术刀级 1px 纯白镜面亮丝棱镜边（Razor-Sharp Specular Filament：82% 纯白镜面核 + 18% 清透微色散余韵） */',
       'vec3 evalTrue3DPrismRim(',
       '  vec3 localPos,',
       '  vec3 worldN,',
@@ -4738,7 +4733,6 @@
       '  float isLight',
       ') {',
       '  if (chamferMask <= 0.02 || ambientMul <= 0.01) return vec3(0.0);',
-      '  /* 严格提高倒角斜率幂次，仅点亮屏幕外侧 0.04U 单内唇窄脊与机身外沿 45° 钻石折角（1px~1.5px 手术刀细丝） */',
       '  float razorMask = pow(clamp(chamferMask, 0.0, 1.0), 3.6);',
       '  if (razorMask <= 0.002) return vec3(0.0);',
       '  float toneIdx = prismCfg.x;',
@@ -4747,14 +4741,16 @@
       '  float ePulse = prismCfg.w;',
       '',
       '  float isWarmTone = ((toneIdx > 0.5 && toneIdx < 1.5) || (toneIdx > 3.5 && toneIdx < 4.5)) ? 1.0 : 0.0;',
-      '  vec3 pureWhiteSrgb = mix(vec3(0.973, 0.980, 0.988), vec3(1.000, 0.992, 0.969), isWarmTone);',
-      '  vec3 pureWhiteLin = srgbToLinear(pureWhiteSrgb) * mix(1.42, 1.14, isLight);',
+      '  vec3 pureWhiteLin = mix(vec3(0.9415, 0.9565, 0.9738), vec3(1.0000, 0.9825, 0.9330), isWarmTone) * mix(1.42, 1.14, isLight);',
       '',
       '  float ndvAbs = clamp(abs(dot(worldN, V)), 0.0, 1.0);',
       '  float fres3D = 0.24 + 0.76 * pow(1.0 - ndvAbs, 2.35);',
       '  vec3 Hprism = normalize(V + normalize(vec3(-V.x * 0.42 + 0.22, 0.78, -V.z * 0.42 + 0.26)));',
-      '  float specFilament = pow(max(dot(worldN, Hprism), 0.0), 26.0);',
-      '  float softSheen = pow(max(dot(worldN, Hprism), 0.0), 8.0);',
+      '  float nhP = max(dot(worldN, Hprism), 0.0);',
+      '  float nh2 = nhP * nhP;',
+      '  float nh4 = nh2 * nh2;',
+      '  float softSheen = nh4 * nh4;',
+      '  float specFilament = softSheen * softSheen * softSheen * nh2;',
       '',
       '  vec3 outRim = vec3(0.0);',
       '  /* V13.1 精密 CNC 6063 45° 亮银/香槟金属倒角镜面扫光（极克制零彩虹霓虹，凸显机械切面锋利度） */',
@@ -4889,6 +4885,18 @@
       '}',
     ].join('\n');
 
+    var GLSL_FRAME_GLOBALS_UBO = [
+      'layout(std140) uniform FrameGlobals {',
+      '  mat4 u_viewProj;',
+      '  mat4 u_lightViewProj;',
+      '  vec4 u_camPos;',
+      '  vec4 u_lightDir;',
+      '  vec4 u_rimTint;',
+      '  vec4 u_envParams;',
+      '  vec4 u_prismConfig;',
+      '};',
+    ].join('\n');
+
     var SOLID_VS = [
       '#version 300 es',
       'precision highp float;',
@@ -4897,11 +4905,8 @@
       'layout(location = 2) in vec3 a_color;',
       'layout(location = 3) in vec4 a_params;',
       'layout(location = 4) in vec2 a_uv;',
-      'uniform mat4 u_viewProj;',
+      GLSL_FRAME_GLOBALS_UBO,
       'uniform mat4 u_model;',
-      'uniform vec3 u_camPos;',
-      'uniform vec4 u_envParams;',
-      'uniform vec4 u_prismConfig;',
       'out vec3 v_worldPos;',
       'out vec3 v_localPos;',
       'out vec3 v_normal;',
@@ -4935,7 +4940,7 @@
       '      pos.y += sin(phaseT * 1.9 + mSeed * 6.2831853) * 0.042;',
       '      float mSize = clamp(a_normal.x, 0.005, 0.065) * (1.0 + ePulseF * 0.35 + 0.16 * sin(phaseT * 2.6 + mSeed * 12.56637));',
       '      vec3 wpCenter = (u_model * vec4(pos, 1.0)).xyz;',
-      '      vec3 toCam = normalize(u_camPos - wpCenter);',
+      '      vec3 toCam = normalize(u_camPos.xyz - wpCenter);',
       '      vec3 upRef = abs(toCam.y) > 0.99 ? vec3(0.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0);',
       '      vec3 bRight = normalize(cross(upRef, toCam));',
       '      vec3 bUp = cross(toCam, bRight);',
@@ -4966,16 +4971,11 @@
       'in vec3 v_color;',
       'in vec4 v_params;',
       'in vec2 v_uv;',
-      'uniform vec3 u_camPos;',
-      'uniform vec3 u_lightDir;',
-      'uniform vec3 u_rimTint;',
-      'uniform vec4 u_envParams;',
+      GLSL_FRAME_GLOBALS_UBO,
       'uniform vec4 u_liftCapShadow;',
       'uniform vec4 u_switchLightPos;',
       'uniform vec3 u_switchLightColor;',
       'uniform vec4 u_prismFocusPos;',
-      'uniform vec4 u_prismConfig;',
-      'uniform mat4 u_lightViewProj;',
       'uniform sampler2D u_shadowTex;',
       'uniform sampler2D u_grainTex;',
       'uniform sampler2D u_metalEnvTex;',
@@ -5027,7 +5027,7 @@
       '    } else if (kind < 7.45) {',
       '      /* High / Extra 档专属：高亮轴底垂直聚光能量光柱 */',
       '      float pHeightT = clamp(v_uv.y, 0.0, 1.0);',
-      '      vec3 Vpil = normalize(u_camPos - v_worldPos);',
+      '      vec3 Vpil = normalize(u_camPos.xyz - v_worldPos);',
       '      vec3 Npil = normalize(v_normal);',
       '      float centerCore = pow(clamp(abs(dot(Npil, Vpil)), 0.0, 1.0), 1.45);',
       '      float vertEnv = smoothstep(0.0, 0.16, pHeightT) * pow(max(0.0, 1.0 - pHeightT * 0.88), 1.35);',
@@ -5038,10 +5038,9 @@
       '      float pAlpha = clamp(centerCore * vertEnv * shimmerP * visAlpha * mix(0.46, 0.34, isLightF), 0.0, 0.85);',
       '      outColor = vec4(pilSrgb * pAlpha, pAlpha * mix(0.24, 0.58, isLightF));',
       '    } else if (kind < 7.85) {',
-      '      /* 三维八面体切面折光微晶：真实切面法线 Fresnel 钻石火彩 + 镜面星芒闪耀 */',
-      '      vec3 Vcr = normalize(u_camPos - v_worldPos);',
+      '      vec3 Vcr = normalize(u_camPos.xyz - v_worldPos);',
       '      vec3 Ncr = normalize(v_normal);',
-      '      vec3 Lcr = normalize(u_lightDir);',
+      '      vec3 Lcr = normalize(u_lightDir.xyz);',
       '      float ndvCr = abs(dot(Ncr, Vcr));',
       '      float fresCr = 0.26 + 0.74 * pow(1.0 - clamp(ndvCr, 0.0, 1.0), 2.2);',
       '      vec3 Hcr = normalize(Vcr + Lcr);',
@@ -5081,8 +5080,9 @@
       '  vec3 baseN = normalize(v_normal);',
       '  vec3 N = baseN;',
       '  if (kind < 0.5) {',
-      '    /* 220 目各向同性苹果级 Space Black / 星光银超细微晶阳极氧化铝：三平面无接缝微晶采样 */',
-      '    vec3 triW = pow(abs(baseN), vec3(4.0));',
+      '    vec3 an = abs(baseN);',
+      '    vec3 triW = an * an;',
+      '    triW *= triW;',
       '    triW /= max(triW.x + triW.y + triW.z, 1e-4);',
       '    float gScale = 2.95;',
       '    float gStep = grainTexelSize(u_grainTex);',
@@ -5111,21 +5111,20 @@
       '    N = normalize(baseN + vec3(pcGx - pcG, 0.0, pcG - 0.5) * 0.055);',
       '  }',
       '',
-      '  vec3 V = normalize(u_camPos - v_worldPos);',
-      '  vec3 L = normalize(u_lightDir);',
+      '  vec3 V = normalize(u_camPos.xyz - v_worldPos);',
+      '  vec3 L = normalize(u_lightDir.xyz);',
       '  vec3 H = normalize(V + L);',
       '  float ndv = max(dot(N, V), 1e-4);',
       '  float ndl = max(dot(N, L), 0.0);',
       '  float ndh = max(dot(N, H), 0.0);',
       '  float vdh = max(dot(V, H), 0.0);',
       '',
-      '  /* kind == 4: 机身侧腰极细哑光微金属导光暗槽（常亮霓虹饱和度下调 ~45%+，仅近场掠过或能量脉冲浮现冷白微色散光泽） */',
       '  if (kind > 3.5 && kind < 4.5) {',
       '    vec3 Rw = reflect(-V, baseN);',
       '    float fresW = 0.06 + 0.94 * pow(1.0 - max(dot(baseN, V), 0.0), 3.8);',
       '    vec3 matteMetalRefl = sampleMetalStudioEnv(u_metalEnvTex, Rw, 0.28, isLight) * fresW * mix(0.24, 0.22, isLight);',
       '    float idlePhase = fract(edgeArcPhase * 1.35 + baseN.x * 0.14 - baseN.z * 0.14);',
-      '    vec3 coolNeutral = srgbToLinear(mix(vec3(0.76, 0.80, 0.88), vec3(0.88, 0.90, 0.94), isLight));',
+      '    vec3 coolNeutral = mix(vec3(0.5467, 0.6121, 0.7549), vec3(0.7549, 0.7931, 0.8727), isLight);',
       '    vec3 desatIdleTint = mix(coolNeutral, samplePrismSpectrum6(idlePhase, 0.82, u_prismConfig.x, isLight), 0.38);',
       '    vec3 quietCore = desatIdleTint * (emis * ambientMul * mix(0.32, 0.22, isLight));',
       '    vec3 waistPrism = evalTrue3DPrismRim(v_localPos, baseN, V, 0.76, edgeArcPhase, u_prismFocusPos, u_prismConfig, ambientMul, isLight);',
@@ -5234,7 +5233,7 @@
       '  float ndlRim = max(dot(N, rimDir), 0.0);',
       '  float ndhRim = max(dot(N, Hrim), 0.0);',
       '  float rimSpec = D_GGX(ndhRim, max(0.010, alphaRough)) * 0.16 * ndlRim;',
-      '  vec3 rimColLin = srgbToLinear(u_rimTint) * mix(0.76, 0.48, isLight);',
+      '  vec3 rimColLin = u_rimTint.xyz * mix(0.76, 0.48, isLight);',
       '  vec3 LoRim = (f0 * rimSpec + diffColor * ndlRim * 0.08) * rimColLin;',
       '',
       '  vec3 R = reflect(-V, N);',
@@ -5299,7 +5298,7 @@
       'layout(location = 10) in vec4 a_atlas;',
       'layout(location = 11) in vec4 a_extra;',
       '',
-      'uniform mat4 u_viewProj;',
+      GLSL_FRAME_GLOBALS_UBO,
       'uniform mat4 u_chassisMat;',
       'uniform mat4 u_auxChassisMat;',
       '',
@@ -5348,19 +5347,14 @@
       'in vec4 v_legColor;',
       'in vec4 v_extra;',
       '',
+      GLSL_FRAME_GLOBALS_UBO,
       'uniform sampler2D u_atlasTex;',
       'uniform sampler2D u_shadowTex;',
       'uniform sampler2D u_grainTex;',
       'uniform sampler2D u_metalEnvTex;',
-      'uniform mat4 u_lightViewProj;',
-      'uniform vec3 u_camPos;',
-      'uniform vec3 u_lightDir;',
-      'uniform vec3 u_rimTint;',
-      'uniform vec4 u_envParams;',
       'uniform vec4 u_switchLightPos;',
       'uniform vec3 u_switchLightColor;',
       'uniform vec4 u_liftCapShadow;',
-      'uniform vec4 u_prismConfig;',
       'out vec4 outColor;',
       '',
       GLSL_PBR_COMMON,
@@ -5402,17 +5396,11 @@
       '  float isOrchKey = step(zSeed, -99.5) * step(-100.5, zSeed);',
       '  float isElemGemKey = step(0.5, zSeed) * isAvail * (1.0 - isMonoKey);',
       '',
-      '  /* V14 `#0 ORCH` 拉丝阳极氧化金属键帽：暗色深邃星云钛紫×暗香槟金（锁存增辉），浅色柔和薰衣草银紫×香槟阳极铝配深靛墨字 */',
       '  if (isOrchKey > 0.5 && isAvail > 0.01 && isMonoKey < 0.5) {',
       '    float orchDiag = clamp((v_localPos.x * 1.18 + v_localPos.z * 0.96) + 0.50, 0.0, 1.0);',
-      '    vec3 orchDarkRest = mix(vec3(0.16, 0.13, 0.31), vec3(0.32, 0.23, 0.14), orchDiag);',
-      '    vec3 orchDarkActive = mix(vec3(0.32, 0.22, 0.64), vec3(0.68, 0.48, 0.20), orchDiag);',
-      '    vec3 orchDarkSrgb = mix(orchDarkRest, orchDarkActive, clamp(orchLatch, 0.0, 1.0));',
-      '    vec3 orchLightRest = mix(vec3(0.80, 0.76, 0.95), vec3(0.94, 0.86, 0.70), orchDiag);',
-      '    vec3 orchLightActive = mix(vec3(0.72, 0.65, 0.96), vec3(0.95, 0.80, 0.54), orchDiag);',
-      '    vec3 orchLightSrgb = mix(orchLightRest, orchLightActive, clamp(orchLatch, 0.0, 1.0));',
-      '    vec3 orchAnodLin = srgbToLinear(mix(orchDarkSrgb, orchLightSrgb, u_envParams.x));',
-      '    capLin = mix(capLin, orchAnodLin, isAvail);',
+      '    vec3 orchDarkLin = mix(mix(vec3(0.0177, 0.0113, 0.0761), vec3(0.0816, 0.0394, 0.0132), orchDiag), mix(vec3(0.0816, 0.0358, 0.3746), vec3(0.4277, 0.1992, 0.0290), orchDiag), clamp(orchLatch, 0.0, 1.0));',
+      '    vec3 orchLightLin = mix(mix(vec3(0.6121, 0.5467, 0.8933), vec3(0.8727, 0.7176, 0.4561), orchDiag), mix(vec3(0.4852, 0.3877, 0.9140), vec3(0.8933, 0.6121, 0.2577), orchDiag), clamp(orchLatch, 0.0, 1.0));',
+      '    capLin = mix(capLin, mix(orchDarkLin, orchLightLin, u_envParams.x), isAvail);',
       '  } else if (isAvail > 0.001) {',
       '    float capBright = smoothstep(0.20, 0.55, dot(capLin, vec3(0.2126, 0.7152, 0.0722)));',
       '    vec3 gemRestLin = mix(capLin * 0.92, capLin * 0.98, capBright);',
@@ -5479,8 +5467,8 @@
       '    if (orchLatch > 0.005 && u_envParams.x < 0.5) {',
       '      float dualL = clamp((v_localPos.x + v_localPos.z + 0.36) * 1.45, 0.0, 1.0);',
       '      vec3 latchGlowLin = isMonoKey > 0.5',
-      '        ? srgbToLinear(vec3(0.92, 0.92, 0.92))',
-      '        : srgbToLinear(mix(vec3(0.86, 0.76, 1.00), vec3(1.00, 0.88, 0.52), dualL));',
+      '        ? vec3(0.8324)',
+      '        : mix(vec3(0.7176, 0.5467, 1.0000), vec3(1.0000, 0.7549, 0.2371), dualL);',
       '      activeInkLin = mix(activeInkLin, latchGlowLin, orchLatch * (0.36 + 0.44 * badgeMask));',
       '      dotEmis += clamp(legAlpha, 0.0, 1.0) * orchLatch * (0.48 + 0.40 * badgeMask) * max(0.32, ambientMul);',
       '    }',
@@ -5525,8 +5513,8 @@
       '  float rough = mix(stealthRough, ceramicRough, isAvail);',
       '  vec3 Nc = grainMask > 0.04 ? normalize(mix(baseN, N, mix(0.06, 0.02, isAvail))) : baseN;',
       '',
-      '  vec3 V = normalize(u_camPos - v_worldPos);',
-      '  vec3 L = normalize(u_lightDir);',
+      '  vec3 V = normalize(u_camPos.xyz - v_worldPos);',
+      '  vec3 L = normalize(u_lightDir.xyz);',
       '  vec3 H = normalize(V + L);',
       '',
       '  float ndv = max(dot(N, V), 1e-4);',
@@ -5572,7 +5560,9 @@
       '    float ndhC = max(dot(Nc, H), 0.0);',
       '    float Dc = D_GGX(ndhC, ccAlpha);',
       '    float Vc = V_SmithGGX(ndvC, ndlC, ccAlpha);',
-      '    Fc = (0.042 + 0.958 * pow(clamp(1.0 - vdh, 0.0, 1.0), 5.0)) * clearcoat;',
+      '    float xv = clamp(1.0 - vdh, 0.0, 1.0);',
+      '    float xv2 = xv * xv;',
+      '    Fc = (0.042 + 0.958 * (xv2 * xv2 * xv)) * clearcoat;',
       '    float isDarkInk = 1.0 - step(0.24, dot(activeInkLin, vec3(0.2126, 0.7152, 0.0722)));',
       '    coatInkGuard = 1.0 - clamp(legSmoothMix * 1.25, 0.0, 1.0) * isDarkInk * 0.56;',
       '    specCoatDirect = Dc * Vc * Fc * coatInkGuard;',
@@ -5630,7 +5620,9 @@
       '    float fresEdgeCrisp = pow(1.0 - ndvC, 3.10);',
       '    float lowerSkirtTrans = (1.0 - smoothstep(0.04, 0.46, v_localPos.y)) * (1.0 - isTopFace * 0.82);',
       '    float sideRimTrans = (1.0 - clamp(baseN.y, 0.0, 1.0)) * 0.62 + fresPcGlass * (0.50 - isTopFace * 0.28);',
-      '    float dishCatch = isTopFace * pow(max(dot(Nc, normalize(V + vec3(-0.38, 0.86, 0.34))), 0.0), 26.0) * (1.0 - legSmoothMix * 0.88);',
+      '    float dc1 = max(dot(Nc, normalize(V + vec3(-0.38, 0.86, 0.34))), 0.0);',
+      '    float dc2 = dc1 * dc1; float dc4 = dc2 * dc2; float dc8 = dc4 * dc4;',
+      '    float dishCatch = isTopFace * (dc8 * dc8 * dc8 * dc2) * (1.0 - legSmoothMix * 0.88);',
       '    vec3 dualBadgeLin = srgbToLinear(resolveHeroBadgeSrgb(zSeed, vec3(0.06), v_localPos));',
       '    vec3 prismCoreCol = u_switchLightPos.w > 0.01 ? mix(srgbToLinear(u_switchLightColor), dualBadgeLin, 0.56) : dualBadgeLin;',
       '    /* Dark 态：清透烟熏磨砂光学水晶玻璃帽；Light 态：晶莹冰透磨砂彩晶玻璃帽（严防浅色键帽死白不透！） */',
@@ -5649,7 +5641,7 @@
       '  float ndhRim = max(dot(Nc, Hrim), 0.0);',
       '  float stealthTopSuppress = 1.0 - smoothstep(0.42, 0.85, v_part) * (1.0 - isAvail);',
       '  float rimEdge = (pow(1.0 - ndvC, 2.6) * 0.62 + 0.22) * stealthTopSuppress;',
-      '  vec3 rimRad = srgbToLinear(u_rimTint) * mix(0.58, 0.30, u_envParams.x);',
+      '  vec3 rimRad = u_rimTint.xyz * mix(0.58, 0.30, u_envParams.x);',
       '  float rimCoatBoost = mix(0.002, mix(0.09, 0.14, heroChroma), isAvail);',
       '  vec3 LoRim = (albedo * mix(0.022, 0.12, isAvail) * ndlRim + vec3(D_GGX(ndhRim, max(0.015, ccAlpha)) * rimCoatBoost * ndlRim)) * rimRad * rimEdge * cavityAo;',
       '',
@@ -5750,11 +5742,12 @@
       '  if (orchLatch > 0.005 && ambientMul > 0.01) {',
       '    float rimRing = smoothstep(0.50, 0.76, v_part) * (1.0 - smoothstep(0.84, 0.96, v_part));',
       '    float topBezel = step(0.85, v_part) * smoothstep(0.285, 0.348, max(abs(v_localPos.x), abs(v_localPos.z)));',
-      '    float haloMask = clamp(rimRing * 0.82 + topBezel * 0.90 + pow(1.0 - ndvC, 3.0) * 0.22, 0.0, 1.0);',
+      '    float f1o = 1.0 - ndvC;',
+      '    float haloMask = clamp(rimRing * 0.82 + topBezel * 0.90 + (f1o * f1o * f1o) * 0.22, 0.0, 1.0);',
       '    float diagPhase = clamp((v_localPos.x * 1.35 - v_localPos.z * 1.15) + 0.5, 0.0, 1.0);',
       '    vec3 orchRimLin = isMonoKey > 0.5',
-      '      ? srgbToLinear(vec3(mix(0.78, 0.44, u_envParams.x)))',
-      '      : srgbToLinear(mix(vec3(0.62, 0.48, 0.86), vec3(0.88, 0.72, 0.40), diagPhase));',
+      '      ? vec3(mix(0.5789, 0.1643, u_envParams.x))',
+      '      : mix(vec3(0.3502, 0.1992, 0.7176), vec3(0.7549, 0.4852, 0.1332), diagPhase);',
       '    float pulseLatch = 1.0 + u_prismConfig.w * 0.26;',
       '    totalLin += orchRimLin * (haloMask * orchLatch * pulseLatch * max(0.30, ambientMul) * mix(0.56, 0.42, u_envParams.x));',
       '  }',
@@ -5774,7 +5767,7 @@
       'precision highp float;',
       'layout(location = 0) in vec3 a_pos;',
       'layout(location = 1) in vec2 a_uv;',
-      'uniform mat4 u_viewProj;',
+      GLSL_FRAME_GLOBALS_UBO,
       'uniform mat4 u_model;',
       'out vec3 v_worldPos;',
       'out vec3 v_localPos;',
@@ -5797,15 +5790,11 @@
       'in vec3 v_localPos;',
       'in vec3 v_normal;',
       'in vec2 v_uv;',
+      GLSL_FRAME_GLOBALS_UBO,
       'uniform sampler2D u_oledTex;',
       'uniform sampler2D u_shadowTex;',
-      'uniform mat4 u_lightViewProj;',
-      'uniform vec3 u_camPos;',
-      'uniform vec3 u_lightDir;',
       'uniform vec3 u_glassTint;',
-      'uniform vec4 u_envParams;',
       'uniform vec4 u_prismFocusPos;',
-      'uniform vec4 u_prismConfig;',
       'uniform vec4 u_screenOptics;',
       'uniform vec3 u_screenElemRgb;',
       'uniform float u_screenAvail;',
@@ -5990,7 +5979,7 @@
       '',
       '  vec4 oled = texture(u_oledTex, uvSample);',
       '  vec3 N = normalize(v_normal);',
-      '  vec3 V = normalize(u_camPos - v_worldPos);',
+      '  vec3 V = normalize(u_camPos.xyz - v_worldPos);',
       '  vec3 R = reflect(-V, N);',
       '  float ndv = max(dot(N, V), 1e-4);',
       '  /* SCREEN_FS 跳过昂贵多点阴影采样（原仅调制 <=4% 亮度），由 GPU 直接驱动柔和呼吸流光与扫描微光，0 Canvas2D 重绘 */',
@@ -6033,7 +6022,8 @@
       '  float ePulseScr = u_prismConfig.w;',
       '  float breathWave = 0.5 + 0.5 * sin(gpuTime * 1.15);',
       '  float scanSweep = fract(v_uv.x * 0.42 + v_uv.y * 0.18 - gpuTime * 0.085);',
-      '  float scanBand = exp(-pow((scanSweep - 0.5) * 7.5, 2.0)) * mix(0.014, 0.009, isLightScr) * u_envParams.z;',
+      '  float scD = (scanSweep - 0.5) * 7.5;',
+      '  float scanBand = exp(-scD * scD) * mix(0.014, 0.009, isLightScr) * u_envParams.z;',
       '  float microScanline = (0.5 + 0.5 * sin(v_uv.y * 240.0 * 3.14159265)) * mix(0.006, 0.002, isLightScr);',
       '  float breathGain = 1.0 + (breathWave * 0.012 + ePulseScr * 0.048) * u_envParams.z * mix(1.0, 0.45, isLightScr);',
       '  float diagSheen = (sheenBand1 * 0.016 + sheenBand2 * 0.010 + fres * 0.012) + ptrSheen + scanBand;',
@@ -6477,6 +6467,7 @@
       var _framePrismCfg4 = new Float32Array(4);
       var _frameEnvVec4 = new Float32Array(4);
       var _frameLiftShadow4 = new Float32Array(4);
+      var _frameUboFloats = new Float32Array(52);
       var _zeroVec4 = new Float32Array([0, 0, 0, 0]);
       var _fallbackRimTint3 = new Float32Array([0.74, 0.84, 1.0]);
 
@@ -6688,6 +6679,7 @@
             depth: true,
             stencil: false,
             premultipliedAlpha: true,
+            preserveDrawingBuffer: false,
             powerPreference: 'high-performance',
           });
           if (candGl && typeof candGl.createProgram === 'function' && typeof candGl.createVertexArray === 'function') {
@@ -7170,62 +7162,70 @@
         lastDynMeshSig = '';
         keycapInstanceDirty = true;
 
+        var uboTarget = gl.UNIFORM_BUFFER || 0x8a11;
+        var frameGlobalsUbo = createGlBuffer(uboTarget, _frameUboFloats, gl.DYNAMIC_DRAW);
+        if (
+          typeof gl.getUniformBlockIndex === 'function' &&
+          typeof gl.uniformBlockBinding === 'function' &&
+          typeof gl.bindBufferBase === 'function'
+        ) {
+          var uboProgs = [progSolid, progKeycap, progScreen];
+          for (var ui = 0; ui < uboProgs.length; ui++) {
+            var blockIdx = gl.getUniformBlockIndex(uboProgs[ui], 'FrameGlobals');
+            if (blockIdx !== undefined && blockIdx !== null && blockIdx !== 0xffffffff && blockIdx >= 0) {
+              gl.uniformBlockBinding(uboProgs[ui], blockIdx, 0);
+            }
+          }
+          gl.bindBufferBase(uboTarget, 0, frameGlobalsUbo);
+        }
+
+        var uSolid = {
+          model: gl.getUniformLocation(progSolid, 'u_model'),
+          liftCapShadow: gl.getUniformLocation(progSolid, 'u_liftCapShadow'),
+          switchLightPos: gl.getUniformLocation(progSolid, 'u_switchLightPos'),
+          switchLightColor: gl.getUniformLocation(progSolid, 'u_switchLightColor'),
+          prismFocusPos: gl.getUniformLocation(progSolid, 'u_prismFocusPos'),
+        };
+        var uKeycap = {
+          chassisMat: gl.getUniformLocation(progKeycap, 'u_chassisMat'),
+          auxChassisMat: gl.getUniformLocation(progKeycap, 'u_auxChassisMat'),
+          switchLightPos: gl.getUniformLocation(progKeycap, 'u_switchLightPos'),
+          switchLightColor: gl.getUniformLocation(progKeycap, 'u_switchLightColor'),
+          liftCapShadow: gl.getUniformLocation(progKeycap, 'u_liftCapShadow'),
+        };
+        var uScreen = {
+          model: gl.getUniformLocation(progScreen, 'u_model'),
+          glassTint: gl.getUniformLocation(progScreen, 'u_glassTint'),
+          prismFocusPos: gl.getUniformLocation(progScreen, 'u_prismFocusPos'),
+          screenOptics: gl.getUniformLocation(progScreen, 'u_screenOptics'),
+          screenElemRgb: gl.getUniformLocation(progScreen, 'u_screenElemRgb'),
+          screenAvail: gl.getUniformLocation(progScreen, 'u_screenAvail'),
+        };
+
+        /* 静态采样器单元初始化绑定一次即可，避免每帧重复 uniform1i */
+        gl.useProgram(progSolid);
+        gl.uniform1i(gl.getUniformLocation(progSolid, 'u_shadowTex'), 1);
+        gl.uniform1i(gl.getUniformLocation(progSolid, 'u_grainTex'), 2);
+        gl.uniform1i(gl.getUniformLocation(progSolid, 'u_metalEnvTex'), 3);
+        gl.useProgram(progKeycap);
+        gl.uniform1i(gl.getUniformLocation(progKeycap, 'u_atlasTex'), 0);
+        gl.uniform1i(gl.getUniformLocation(progKeycap, 'u_shadowTex'), 1);
+        gl.uniform1i(gl.getUniformLocation(progKeycap, 'u_grainTex'), 2);
+        gl.uniform1i(gl.getUniformLocation(progKeycap, 'u_metalEnvTex'), 3);
+        gl.useProgram(progScreen);
+        gl.uniform1i(gl.getUniformLocation(progScreen, 'u_oledTex'), 0);
+        gl.uniform1i(gl.getUniformLocation(progScreen, 'u_shadowTex'), 1);
+        gl.useProgram(null);
+
         glObjs = {
           progSolid: progSolid,
           progKeycap: progKeycap,
           progScreen: progScreen,
           shadowPass: shadowPass,
-          uSolid: {
-            viewProj: gl.getUniformLocation(progSolid, 'u_viewProj'),
-            model: gl.getUniformLocation(progSolid, 'u_model'),
-            camPos: gl.getUniformLocation(progSolid, 'u_camPos'),
-            lightDir: gl.getUniformLocation(progSolid, 'u_lightDir'),
-            rimTint: gl.getUniformLocation(progSolid, 'u_rimTint'),
-            envParams: gl.getUniformLocation(progSolid, 'u_envParams'),
-            liftCapShadow: gl.getUniformLocation(progSolid, 'u_liftCapShadow'),
-            switchLightPos: gl.getUniformLocation(progSolid, 'u_switchLightPos'),
-            switchLightColor: gl.getUniformLocation(progSolid, 'u_switchLightColor'),
-            prismFocusPos: gl.getUniformLocation(progSolid, 'u_prismFocusPos'),
-            prismConfig: gl.getUniformLocation(progSolid, 'u_prismConfig'),
-            lightViewProj: gl.getUniformLocation(progSolid, 'u_lightViewProj'),
-            shadowTex: gl.getUniformLocation(progSolid, 'u_shadowTex'),
-            grainTex: gl.getUniformLocation(progSolid, 'u_grainTex'),
-            metalEnvTex: gl.getUniformLocation(progSolid, 'u_metalEnvTex'),
-          },
-          uKeycap: {
-            viewProj: gl.getUniformLocation(progKeycap, 'u_viewProj'),
-            chassisMat: gl.getUniformLocation(progKeycap, 'u_chassisMat'),
-            auxChassisMat: gl.getUniformLocation(progKeycap, 'u_auxChassisMat'),
-            atlasTex: gl.getUniformLocation(progKeycap, 'u_atlasTex'),
-            shadowTex: gl.getUniformLocation(progKeycap, 'u_shadowTex'),
-            grainTex: gl.getUniformLocation(progKeycap, 'u_grainTex'),
-            metalEnvTex: gl.getUniformLocation(progKeycap, 'u_metalEnvTex'),
-            lightViewProj: gl.getUniformLocation(progKeycap, 'u_lightViewProj'),
-            camPos: gl.getUniformLocation(progKeycap, 'u_camPos'),
-            lightDir: gl.getUniformLocation(progKeycap, 'u_lightDir'),
-            rimTint: gl.getUniformLocation(progKeycap, 'u_rimTint'),
-            envParams: gl.getUniformLocation(progKeycap, 'u_envParams'),
-            switchLightPos: gl.getUniformLocation(progKeycap, 'u_switchLightPos'),
-            switchLightColor: gl.getUniformLocation(progKeycap, 'u_switchLightColor'),
-            liftCapShadow: gl.getUniformLocation(progKeycap, 'u_liftCapShadow'),
-            prismConfig: gl.getUniformLocation(progKeycap, 'u_prismConfig'),
-          },
-          uScreen: {
-            viewProj: gl.getUniformLocation(progScreen, 'u_viewProj'),
-            model: gl.getUniformLocation(progScreen, 'u_model'),
-            oledTex: gl.getUniformLocation(progScreen, 'u_oledTex'),
-            shadowTex: gl.getUniformLocation(progScreen, 'u_shadowTex'),
-            lightViewProj: gl.getUniformLocation(progScreen, 'u_lightViewProj'),
-            camPos: gl.getUniformLocation(progScreen, 'u_camPos'),
-            lightDir: gl.getUniformLocation(progScreen, 'u_lightDir'),
-            glassTint: gl.getUniformLocation(progScreen, 'u_glassTint'),
-            envParams: gl.getUniformLocation(progScreen, 'u_envParams'),
-            prismFocusPos: gl.getUniformLocation(progScreen, 'u_prismFocusPos'),
-            prismConfig: gl.getUniformLocation(progScreen, 'u_prismConfig'),
-            screenOptics: gl.getUniformLocation(progScreen, 'u_screenOptics'),
-            screenElemRgb: gl.getUniformLocation(progScreen, 'u_screenElemRgb'),
-            screenAvail: gl.getUniformLocation(progScreen, 'u_screenAvail'),
-          },
+          frameGlobalsUbo: frameGlobalsUbo,
+          uSolid: uSolid,
+          uKeycap: uKeycap,
+          uScreen: uScreen,
           capVao: capVao,
           capIndexCount: capGeom.indexCount,
           capOuterIndexCount: capGeom.outerIndexCount !== undefined ? capGeom.outerIndexCount : capGeom.indexCount,
@@ -10263,10 +10263,37 @@
           liftShadowVec = _zeroVec4;
         }
 
+        /* 单次 std140 UBO 上传替代三套着色器重复 uniform 提交（rimTint 在 CPU 预转线性空间） */
+        _frameUboFloats.set(viewProjMat, 0);
+        _frameUboFloats.set(lightViewProjMat, 16);
+        _frameUboFloats[32] = camEye[0];
+        _frameUboFloats[33] = camEye[1];
+        _frameUboFloats[34] = camEye[2];
+        _frameUboFloats[35] = 0;
+        _frameUboFloats[36] = MAIN_LIGHT_DIR[0];
+        _frameUboFloats[37] = MAIN_LIGHT_DIR[1];
+        _frameUboFloats[38] = MAIN_LIGHT_DIR[2];
+        _frameUboFloats[39] = 0;
+        _frameUboFloats[40] = Math.pow(Math.max(0, rimTintVec[0]), 2.2);
+        _frameUboFloats[41] = Math.pow(Math.max(0, rimTintVec[1]), 2.2);
+        _frameUboFloats[42] = Math.pow(Math.max(0, rimTintVec[2]), 2.2);
+        _frameUboFloats[43] = 0;
+        _frameUboFloats[44] = envVec[0];
+        _frameUboFloats[45] = envVec[1];
+        _frameUboFloats[46] = envVec[2];
+        _frameUboFloats[47] = envVec[3];
+        _frameUboFloats[48] = prismCfgVec[0];
+        _frameUboFloats[49] = prismCfgVec[1];
+        _frameUboFloats[50] = prismCfgVec[2];
+        _frameUboFloats[51] = prismCfgVec[3];
+        var frameUboTarget = gl.UNIFORM_BUFFER || 0x8a11;
+        gl.bindBuffer(frameUboTarget, glObjs.frameGlobalsUbo);
+        gl.bufferSubData(frameUboTarget, 0, _frameUboFloats);
+        gl.bindBuffer(frameUboTarget, null);
+
         gl.viewport(0, 0, canvas.width, canvas.height);
         gl.clearColor(0, 0, 0, 0);
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-        /* Pass 1 & 2 全为不透明实体：关闭混合省带宽，利用 Front-to-Back Early-Z 消除被 96 颗键帽遮挡的定位板 Overdraw */
         if (typeof gl.disable === 'function') {
           gl.disable(gl.BLEND);
         }
@@ -10278,19 +10305,11 @@
         gl.activeTexture(texUnit3);
         gl.bindTexture(gl.TEXTURE_2D, glObjs.metalEnvTex);
 
-        /* Pass 1 (Early-Z 前景): 96 颗不透明键帽轻量外壳 + 仅 1 颗浮空磁悬浮键（instance 0）微距立体底腔 */
         if (totalKeyInstances > 0) {
           gl.useProgram(glObjs.progKeycap);
-          gl.uniformMatrix4fv(glObjs.uKeycap.viewProj, false, viewProjMat);
           gl.uniformMatrix4fv(glObjs.uKeycap.chassisMat, false, chassisMat);
           gl.uniformMatrix4fv(glObjs.uKeycap.auxChassisMat, false, auxChassisMat);
-          gl.uniformMatrix4fv(glObjs.uKeycap.lightViewProj, false, lightViewProjMat);
-          gl.uniform3fv(glObjs.uKeycap.camPos, camEye);
-          gl.uniform3fv(glObjs.uKeycap.lightDir, MAIN_LIGHT_DIR);
-          gl.uniform3fv(glObjs.uKeycap.rimTint, rimTintVec);
-          gl.uniform4fv(glObjs.uKeycap.envParams, envVec);
           gl.uniform4fv(glObjs.uKeycap.liftCapShadow, liftShadowVec);
-          gl.uniform4fv(glObjs.uKeycap.prismConfig, prismCfgVec);
 
           if (switchInfo && ambientMul > 0.01 && switchInfo.lift > 0.03) {
             gl.uniform4f(
@@ -10308,10 +10327,6 @@
 
           gl.activeTexture(gl.TEXTURE0);
           gl.bindTexture(gl.TEXTURE_2D, glObjs.atlasTex);
-          gl.uniform1i(glObjs.uKeycap.atlasTex, 0);
-          gl.uniform1i(glObjs.uKeycap.shadowTex, 1);
-          gl.uniform1i(glObjs.uKeycap.grainTex, 2);
-          gl.uniform1i(glObjs.uKeycap.metalEnvTex, 3);
 
           gl.bindVertexArray(glObjs.capVao);
           gl.drawElementsInstanced(gl.TRIANGLES, glObjs.capOuterIndexCount, gl.UNSIGNED_SHORT, 0, totalKeyInstances);
@@ -10327,18 +10342,10 @@
           gl.bindVertexArray(null);
         }
 
-        /* Pass 2 (Early-Z 受益层): 主盘与右侧 2×3 副盘 Step-Bezel CNC 铝壳 + 导光腰线 + 静态 PVD 镜面配重 + 轴座 */
         gl.useProgram(glObjs.progSolid);
-        gl.uniformMatrix4fv(glObjs.uSolid.viewProj, false, viewProjMat);
         gl.uniformMatrix4fv(glObjs.uSolid.model, false, chassisMat);
-        gl.uniformMatrix4fv(glObjs.uSolid.lightViewProj, false, lightViewProjMat);
-        gl.uniform3fv(glObjs.uSolid.camPos, camEye);
-        gl.uniform3fv(glObjs.uSolid.lightDir, MAIN_LIGHT_DIR);
-        gl.uniform3fv(glObjs.uSolid.rimTint, rimTintVec);
-        gl.uniform4fv(glObjs.uSolid.envParams, envVec);
         gl.uniform4fv(glObjs.uSolid.liftCapShadow, switchInfo && !switchInfo.isAux ? liftShadowVec : _zeroVec4);
         gl.uniform4fv(glObjs.uSolid.prismFocusPos, prismFocusVec);
-        gl.uniform4fv(glObjs.uSolid.prismConfig, prismCfgVec);
 
         if (switchInfo && !switchInfo.isAux && ambientMul > 0.01 && switchInfo.lift > 0.03) {
           gl.uniform4f(
@@ -10353,10 +10360,6 @@
           gl.uniform4f(glObjs.uSolid.switchLightPos, 0, 0, 0, 0);
           gl.uniform3f(glObjs.uSolid.switchLightColor, 0, 0, 0);
         }
-
-        gl.uniform1i(glObjs.uSolid.shadowTex, 1);
-        gl.uniform1i(glObjs.uSolid.grainTex, 2);
-        gl.uniform1i(glObjs.uSolid.metalEnvTex, 3);
 
         gl.bindVertexArray(glObjs.chassisGpu.vao);
         gl.drawElements(gl.TRIANGLES, glObjs.chassisGpu.mainCount, gl.UNSIGNED_SHORT, 0);
@@ -10396,7 +10399,6 @@
           }
         }
 
-        /* Pass 3: 第 3~12 族 10U×3U 2.5D 蓝宝石圆角 OLED 大屏（开启混合以平滑融合 1px 圆角抗锯齿边至 CNC 内框） */
         gl.enable(gl.BLEND);
         gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
         var diScreen = state.deckInfo || null;
@@ -10414,15 +10416,9 @@
           : resolveScreenElementRgb(screenZ, palette);
 
         gl.useProgram(glObjs.progScreen);
-        gl.uniformMatrix4fv(glObjs.uScreen.viewProj, false, viewProjMat);
         gl.uniformMatrix4fv(glObjs.uScreen.model, false, chassisMat);
-        gl.uniformMatrix4fv(glObjs.uScreen.lightViewProj, false, lightViewProjMat);
-        gl.uniform3fv(glObjs.uScreen.camPos, camEye);
-        gl.uniform3fv(glObjs.uScreen.lightDir, MAIN_LIGHT_DIR);
         gl.uniform3fv(glObjs.uScreen.glassTint, palette.deckGlassTint);
-        gl.uniform4fv(glObjs.uScreen.envParams, envVec);
         gl.uniform4fv(glObjs.uScreen.prismFocusPos, prismFocusVec);
-        gl.uniform4fv(glObjs.uScreen.prismConfig, prismCfgVec);
         gl.uniform4f(glObjs.uScreen.screenOptics, screenZ, screenEnergy, orbitYawCur, orbitPitchCur);
         gl.uniform3fv(glObjs.uScreen.screenElemRgb, screenElemRgb);
         if (typeof gl.uniform1f === 'function') {
@@ -10431,8 +10427,6 @@
 
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, glObjs.oledTex);
-        gl.uniform1i(glObjs.uScreen.oledTex, 0);
-        gl.uniform1i(glObjs.uScreen.shadowTex, 1);
 
         gl.bindVertexArray(glObjs.scrVao);
         gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0);
@@ -12679,6 +12673,7 @@
             gl.bindVertexArray(null);
             gl.bindBuffer(gl.ARRAY_BUFFER, null);
             gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
+            if (gl.UNIFORM_BUFFER) gl.bindBuffer(gl.UNIFORM_BUFFER, null);
             gl.activeTexture(gl.TEXTURE0 + 3);
             gl.bindTexture(gl.TEXTURE_2D, null);
             gl.activeTexture(gl.TEXTURE0 + 2);
@@ -12769,9 +12764,15 @@
       cancelAnimLoop();
       idle = true;
 
+      function isContextLost() {
+        return Boolean(contextLost || disposed || (gl && typeof gl.isContextLost === 'function' && gl.isContextLost()));
+      }
+
       return {
         setState: setState,
         setPaused: setPaused,
+        cancelAnimLoop: cancelAnimLoop,
+        isContextLost: isContextLost,
         setHardwareState: setHardwareState,
         triggerControlPress: triggerControlPress,
         rotateKnobStep: rotateKnobStep,

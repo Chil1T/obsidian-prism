@@ -57,6 +57,7 @@
     nebulaTint: 0.58,
     nebulaLift: 1.08,
     nebulaFrameMs: 28,
+    idleUploadMs: 500,
     nebulaPeriods: [8.4, 10.8, 12.8],
   };
   const WAVE_STEP = 1 / 600;
@@ -583,42 +584,45 @@ uniform highp vec4 neb2;
 uniform vec4 nebOpt;
 uniform float nebulaLift;
 uniform float spectrumMode;
+uniform vec3 uSpec0;
+uniform vec3 uSpec1;
+uniform vec3 uSpec2;
+uniform vec3 uSpec3;
+uniform highp vec4 uIdleParams;
+uniform highp vec4 uIdleMetrics;
 out vec4 color;
-const vec3 COBALT = vec3(66.0 / 255.0, 133.0 / 255.0, 244.0 / 255.0);
-const vec3 IRIS = vec3(155.0 / 255.0, 114.0 / 255.0, 203.0 / 255.0);
-const vec3 CORAL = vec3(234.0 / 255.0, 67.0 / 255.0, 53.0 / 255.0);
-const vec3 AMBER = vec3(251.0 / 255.0, 188.0 / 255.0, 4.0 / 255.0);
-const vec3 COBALT_L = vec3(37.0 / 255.0, 99.0 / 255.0, 235.0 / 255.0);
-const vec3 IRIS_L = vec3(124.0 / 255.0, 58.0 / 255.0, 237.0 / 255.0);
-const vec3 CORAL_L = vec3(234.0 / 255.0, 67.0 / 255.0, 53.0 / 255.0);
-const vec3 AMBER_L = vec3(217.0 / 255.0, 119.0 / 255.0, 6.0 / 255.0);
-vec3 spectrum(float t, float light, float mode) {
+vec3 spectrum(float t) {
 float f = fract(t) * 4.0;
-vec3 c0 = COBALT; vec3 c1 = IRIS; vec3 c2 = CORAL; vec3 c3 = AMBER;
-vec3 l0 = COBALT_L; vec3 l1 = IRIS_L; vec3 l2 = CORAL_L; vec3 l3 = AMBER_L;
-if (mode > 4.5) {
-c0 = vec3(0.392, 0.455, 0.545); c1 = vec3(0.580, 0.639, 0.722); c2 = vec3(0.796, 0.835, 0.882); c3 = vec3(0.945, 0.961, 0.976);
-l0 = vec3(0.118, 0.161, 0.231); l1 = vec3(0.200, 0.255, 0.333); l2 = vec3(0.278, 0.333, 0.412); l3 = vec3(0.392, 0.455, 0.545);
-} else if (mode > 3.5) {
-c0 = vec3(0.573, 0.251, 0.055); c1 = vec3(0.851, 0.467, 0.024); c2 = vec3(0.949, 0.722, 0.294); c3 = vec3(0.992, 0.902, 0.541);
-l0 = vec3(0.471, 0.208, 0.059); l1 = vec3(0.706, 0.325, 0.035); l2 = vec3(0.851, 0.467, 0.024); l3 = vec3(0.918, 0.345, 0.047);
-} else if (mode > 2.5) {
-c0 = vec3(0.357, 0.129, 0.714); c1 = vec3(0.545, 0.361, 0.965); c2 = vec3(0.647, 0.541, 0.973); c3 = vec3(0.867, 0.839, 0.996);
-l0 = vec3(0.298, 0.114, 0.584); l1 = vec3(0.427, 0.157, 0.851); l2 = vec3(0.486, 0.227, 0.929); l3 = vec3(0.576, 0.200, 0.918);
-} else if (mode > 1.5) {
-c0 = vec3(0.106, 0.286, 0.698); c1 = vec3(0.192, 0.525, 1.000); c2 = vec3(0.361, 0.776, 0.988); c3 = vec3(0.549, 0.878, 1.000);
-l0 = vec3(0.114, 0.306, 0.847); l1 = vec3(0.145, 0.388, 0.922); l2 = vec3(0.008, 0.518, 0.780); l3 = vec3(0.220, 0.741, 0.973);
-} else if (mode > 0.5) {
-c0 = vec3(0.580, 0.290, 0.204); c1 = vec3(0.851, 0.467, 0.341); c2 = vec3(0.933, 0.608, 0.478); c3 = vec3(0.965, 0.741, 0.376);
-l0 = vec3(0.604, 0.204, 0.071); l1 = vec3(0.761, 0.349, 0.204); l2 = vec3(0.851, 0.467, 0.341); l3 = vec3(0.851, 0.467, 0.024);
+vec3 a = mix(uSpec0, uSpec1, clamp(f, 0.0, 1.0));
+vec3 b = mix(a, uSpec2, clamp(f - 1.0, 0.0, 1.0));
+vec3 c = mix(b, uSpec3, clamp(f - 2.0, 0.0, 1.0));
+return mix(c, uSpec0, clamp(f - 3.0, 0.0, 1.0));
 }
-vec3 d;
-vec3 l;
-if (f < 1.0) { d = mix(c0, c1, f); l = mix(l0, l1, f); }
-else if (f < 2.0) { d = mix(c1, c2, f - 1.0); l = mix(l1, l2, f - 1.0); }
-else if (f < 3.0) { d = mix(c2, c3, f - 2.0); l = mix(l2, l3, f - 2.0); }
-else { d = mix(c3, c0, f - 3.0); l = mix(l3, l0, f - 3.0); }
-return mix(d, l, light);
+float fastAtan2Turns(vec2 v) {
+float ax = abs(v.x), ay = abs(v.y);
+float mn = min(ax, ay), mx = max(ax, ay) + 1e-6;
+float a = mn / mx;
+float s = a * a;
+float r = ((-0.04649647 * s + 0.15931422) * s - 0.32762276) * s * a + a;
+if (ay > ax) r = 1.5707963 - r;
+if (v.x < 0.0) r = 3.1415927 - r;
+if (v.y < 0.0) r = -r;
+return r * 0.15915494;
+}
+float hash2Gpu(highp vec2 p) {
+highp vec2 q = fract(p * vec2(0.1031, 0.1030));
+q += dot(q, q.yx + 33.33);
+return fract((q.x + q.y) * q.x);
+}
+float vNoiseGpu(highp vec2 p) {
+highp vec2 i = floor(p);
+vec2 f = fract(p);
+vec2 u = f * f * (3.0 - 2.0 * f);
+return mix(mix(hash2Gpu(i), hash2Gpu(i + vec2(1.0, 0.0)), u.x),
+mix(hash2Gpu(i + vec2(0.0, 1.0)), hash2Gpu(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+float fNoiseGpu(highp vec2 p) {
+return (vNoiseGpu(p) * 4.0 + vNoiseGpu(p * 2.1 + vec2(7.0, 3.0)) * 2.0 + vNoiseGpu(p * 4.3 + vec2(13.0, 11.0))) * (1.0 / 7.0);
 }
 void main() {
 highp vec2 position = vec2(gl_FragCoord.x, size.y - gl_FragCoord.y);
@@ -632,24 +636,34 @@ float coverage = texture(atlas, inAtlas / vec2(glyphCount * atlasCell.x, atlasCe
 if (coverage <= 0.001) { color = vec4(0.0); return; }
 vec3 rgb = mix(ink, wave, data.b);
 float alpha = data.g;
+if (uIdleParams.w > 0.5 && data.b <= 0.001) {
+highp vec2 cssPos = (cell + 0.5) * uIdleMetrics.xy;
+float cNoise = fNoiseGpu(vec2((cssPos.x + uIdleParams.x) * uIdleMetrics.z, cssPos.y * uIdleMetrics.z));
+float cCloud = 0.22 + 0.78 * smoothstep(0.595, 0.795, cNoise);
+float bPhase = fNoiseGpu(cssPos * uIdleMetrics.w + vec2(53.0, 71.0)) * 10.681415;
+float breath = 1.0 - 0.12 * (1.0 + uIdleParams.y * cos(bPhase) + uIdleParams.z * sin(bPhase));
+alpha *= cCloud * breath;
+if (alpha < 0.01) { color = vec4(0.0); return; }
+}
 float packed = floor(data.a * 255.0 + 0.5);
 float level = floor(packed / 32.0);
 float prismAmt = level / 7.0;
 float hue = (packed - level * 32.0) / 32.0;
 float wAura = 0.0;
-vec3 auraRgb = COBALT;
+vec3 auraRgb = uSpec0;
 if (aura.w > 0.001) {
 vec2 rel = position - aura.xy;
 float ar = max(1.0, aura.z);
 if (abs(rel.x) < ar && abs(rel.y) < ar) {
 float d2 = dot(rel, rel);
 if (d2 < ar * ar) {
-float rNorm = sqrt(d2) / ar;
+float invD = inversesqrt(max(d2, 1e-6));
+float rNorm = (d2 * invD) / ar;
 float u = 1.0 - rNorm;
 float s = u * u * (3.0 - 2.0 * u);
 wAura = s * (0.35 + 0.65 * s);
-float ang = atan(rel.y, rel.x + 1e-5) * 0.15915494 + 0.5;
-auraRgb = spectrum(ang - rNorm * 0.45 + auraPhase, lightMode, spectrumMode);
+float ang = fastAtan2Turns(rel) + 0.5;
+auraRgb = spectrum(ang - rNorm * 0.45 + auraPhase);
 }
 }
 }
@@ -664,18 +678,19 @@ float rad = max(1.0, nb.z);
 if (abs(nr.x) < rad && abs(nr.y) < rad) {
 float nd2 = dot(nr, nr);
 if (nd2 < rad * rad) {
-float rn = sqrt(nd2) / rad;
+float invNd = inversesqrt(max(nd2, 1e-6));
+float rn = (nd2 * invNd) / rad;
 float u = 1.0 - rn;
 float s = u * u * (3.0 - 2.0 * u);
 float wi = s * (0.30 + 0.70 * s) * nb.w;
-float nang = atan(nr.y, nr.x + 1e-5) * 0.15915494;
+float nang = fastAtan2Turns(nr);
 wNeb += wi;
-nebAcc += spectrum(nh + nang * 0.22 - rn * 0.26, lightMode, spectrumMode) * wi;
+nebAcc += spectrum(nh + nang * 0.22 - rn * 0.26) * wi;
 }
 }
 }
 }
-vec3 nebRgb = wNeb > 0.0001 ? nebAcc / wNeb : COBALT;
+vec3 nebRgb = wNeb > 0.0001 ? nebAcc / wNeb : uSpec0;
 float wNebC = min(1.0, wNeb);
 float nebT = wNebC * nebOpt.w;
 float auraT = wAura * optics.x * aura.w;
@@ -689,12 +704,16 @@ alpha = min(1.0, alpha * (1.0 + auraLift * wAura * aura.w + nebulaLift * wNebC))
 if (total > 0.0001) {
 float capped = min(optics.z, total);
 float mixAmt = mix(capped, min(0.96, capped * 1.36), lightMode);
-vec3 tintRgb = (auraRgb * auraT + spectrum(hue, lightMode, spectrumMode) * prismT + nebRgb * nebT) / total;
+vec3 tintRgb = (auraRgb * auraT + spectrum(hue) * prismT + nebRgb * nebT) / total;
 rgb = mix(rgb, tintRgb, mixAmt);
 }
 float a = alpha * coverage;
 color = vec4(rgb * a, a);
 }`;
+  function getGlyphSpectrumStops(dark, specCode) {
+    const bank = dark === false ? GLYPH_SPECTRA_LIGHT : GLYPH_SPECTRA_DARK;
+    return bank[specCode] || (dark === false ? SPECTRUM_LIGHT : SPECTRUM);
+  }
   function readAura(palette) {
     const cfg = palette.aura && palette.aura.active ? palette.aura : null;
     return {
@@ -752,13 +771,14 @@ color = vec4(rgb * a, a);
       if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program) || 'program link error');
       gl.useProgram(program);
       uniforms = {};
-      for (const name of ['cells', 'atlas', 'size', 'grid', 'cellPixels', 'atlasCell', 'glyphCount', 'ink', 'wave', 'aura', 'optics', 'auraLift', 'auraPhase', 'lightMode', 'neb0', 'neb1', 'neb2', 'nebOpt', 'nebulaLift', 'spectrumMode']) {
+      for (const name of ['cells', 'atlas', 'size', 'grid', 'cellPixels', 'atlasCell', 'glyphCount', 'ink', 'wave', 'aura', 'optics', 'auraLift', 'auraPhase', 'lightMode', 'neb0', 'neb1', 'neb2', 'nebOpt', 'nebulaLift', 'uSpec0', 'uSpec1', 'uSpec2', 'uSpec3', 'uIdleParams', 'uIdleMetrics']) {
         uniforms[name] = gl.getUniformLocation(program, name);
       }
       allocCellTex();
       atlasTexture = createTex(1, gl.LINEAR);
       gl.uniform1i(uniforms.cells, 0);
       gl.uniform1i(uniforms.atlas, 1);
+      if (uniforms.uIdleMetrics) gl.uniform4f(uniforms.uIdleMetrics, RIPPLE.cellWidth, RIPPLE.cellHeight, 1 / RIPPLE.cloudScale, 1 / RIPPLE.breathScale);
       atlasKey = '';
     }
     function buildAtlas(font, dpr) {
@@ -784,6 +804,7 @@ color = vec4(rgb * a, a);
     try { build(); } catch { try { free(); } catch {} return null; }
     const api = {
       mode: 'webgl2',
+      gpuIdleMod: true,
       data,
       build,
       resize(nc, nr) {
@@ -807,12 +828,17 @@ color = vec4(rgb * a, a);
         const aura = readAura(palette);
         const amb = Number.isFinite(Number(palette.ambientIntensity)) ? M.max(0, M.min(1, Number(palette.ambientIntensity))) : 1;
         const specCode = Number(palette.spectrumCode ?? 0);
+        const stops = getGlyphSpectrumStops(palette.dark, specCode);
         gl.uniform4f(uniforms.aura, aura.x * dpr, aura.y * dpr, aura.radius * dpr, aura.strength * amb);
         gl.uniform4f(uniforms.optics, RIPPLE.auraTint * (specCode === 5 ? 0.55 : 1), RIPPLE.prismTint * (specCode === 5 ? 0.45 : 1), RIPPLE.prismCap, palette.prismStrength);
         gl.uniform1f(uniforms.auraLift, RIPPLE.auraLift * amb * (palette.auraLiftScale ?? 1));
         gl.uniform1f(uniforms.auraPhase, palette.auraPhase || 0);
         gl.uniform1f(uniforms.lightMode, palette.dark === false ? 1 : 0);
-        gl.uniform1f(uniforms.spectrumMode, specCode);
+        gl.uniform3f(uniforms.uSpec0, stops[0][0] / 255, stops[0][1] / 255, stops[0][2] / 255);
+        gl.uniform3f(uniforms.uSpec1, stops[1][0] / 255, stops[1][1] / 255, stops[1][2] / 255);
+        gl.uniform3f(uniforms.uSpec2, stops[2][0] / 255, stops[2][1] / 255, stops[2][2] / 255);
+        gl.uniform3f(uniforms.uSpec3, stops[3][0] / 255, stops[3][1] / 255, stops[3][2] / 255);
+        if (uniforms.uIdleParams) gl.uniform4f(uniforms.uIdleParams, palette.cloudDriftPx || 0, palette.breathSinW || 0, palette.breathCosW ?? 1, 1);
         const neb = palette.nebula, n0 = neb && neb[0], n1 = neb && neb[1], n2 = neb && neb[2];
         gl.uniform4f(uniforms.neb0, n0 ? n0.x * dpr : 0, n0 ? n0.y * dpr : 0, n0 ? n0.radius * dpr : 1, n0 ? n0.strength * amb : 0);
         gl.uniform4f(uniforms.neb1, n1 ? n1.x * dpr : 0, n1 ? n1.y * dpr : 0, n1 ? n1.radius * dpr : 1, n1 ? n1.strength * amb : 0);
@@ -1094,9 +1120,11 @@ color = vec4(rgb * a, a);
     columns = clampDim(columns);
     rows = clampDim(rows);
     const force2D = Boolean(options && (options.prefer2D || options.force2D)) || (typeof globalThis !== 'undefined' && globalThis.__agRippleForce2D === true);
+    const extRen = options && options.externalRenderer ? options.externalRenderer : null;
     const renderer = (columns > 0 && rows > 0)
-      ? ((force2D ? null : createWebGL2Renderer(canvas, columns, rows)) || create2DRenderer(canvas, columns, rows))
+      ? (extRen || (force2D ? null : createWebGL2Renderer(canvas, columns, rows)) || create2DRenderer(canvas, columns, rows))
       : null;
+    const isGpuMod = Boolean(renderer && (renderer.gpuIdleMod || renderer.mode === 'webgl2' || renderer.mode === 'worker-webgl2'));
     const { cellWidth, cellHeight } = RIPPLE;
     let cells = 0, glow, patch, glyphs, edge, mask, breathSin, breathCos, wasLit, colClouds;
     let lastIdleRefreshMs = -Infinity, lastIdleDark = null, lastIdleAlphaScale = -1;
@@ -1106,7 +1134,7 @@ color = vec4(rgb * a, a);
       { x: 0, y: 0, radius: 1, strength: 0, hue: 0 },
       { x: 0, y: 0, radius: 1, strength: 0, hue: 0 },
     ];
-    const effective = { dark: true, ink: [0, 0, 0], wave: [0, 0, 0], fontFamily: 'monospace', aura: null, nebula: nebulaState, prismStrength: 1, auraPhase: 0, ambientIntensity: 1, spectrumCode: 0, alphaScale: 1, nebulaLiftScale: 1, auraLiftScale: 1 };
+    const effective = { dark: true, ink: [0, 0, 0], wave: [0, 0, 0], fontFamily: 'monospace', aura: null, nebula: nebulaState, prismStrength: 1, auraPhase: 0, ambientIntensity: 1, spectrumCode: 0, alphaScale: 1, nebulaLiftScale: 1, auraLiftScale: 1, cloudDriftPx: 0, breathSinW: 0, breathCosW: 1 };
     let lastNebulaEnabled = true, instanceZones = normalizeZones(options && options.calmZones);
     let appliedKey = null, lastZonesRef = null, lastZonesNormalized = [];
     let lastTick = -1, lastDraw = -Infinity, glowing = false, prismBurst = 0, stale = true;
@@ -1238,13 +1266,19 @@ color = vec4(rgb * a, a);
     return {
       mode: renderer ? renderer.mode : 'none',
       isContextLost: () => Boolean(renderer && renderer.isContextLost && renderer.isContextLost()),
+      getBufferSize: () => (renderer && renderer.getBufferSize ? renderer.getBufferSize() : { width: canvas?.width || 0, height: canvas?.height || 0 }),
+      releaseBackingStore() { renderer?.releaseBackingStore?.(); },
       invalidate() { stale = true; },
-      resize(nextCols, nextRows, nextWaves) {
+      resize(nextCols, nextRows, nextWaves, nextDpr) {
         if (nextWaves) waves = nextWaves;
         const nc = clampDim(nextCols), nr = clampDim(nextRows);
         if (!renderer || typeof renderer.resize !== 'function' || nc <= 0 || nr <= 0) return false;
-        if (nc === columns && nr === rows) { stale = true; return true; }
-        if (!renderer.resize(nc, nr)) return false;
+        if (nc === columns && nr === rows) {
+          if (renderer.mode === 'worker-webgl2' && nextDpr) renderer.resize(nc, nr, nextDpr);
+          stale = true;
+          return true;
+        }
+        if (!renderer.resize(nc, nr, nextDpr)) return false;
         initGrid(nc, nr);
         return true;
       },
@@ -1333,16 +1367,26 @@ color = vec4(rgb * a, a);
         }
         const tick = tickAt(now, still);
         const waveActive = waves.active();
+        const omega = (TAU / RIPPLE.breathPeriod) * seconds;
+        const bs = M.sin(omega);
+        const bc = M.cos(omega);
+        eff.cloudDriftPx = seconds * RIPPLE.cloudDrift;
+        eff.breathSinW = bs;
+        eff.breathCosW = bc;
+        const idleUploadGap = isGpuMod ? (RIPPLE.idleUploadMs || 500) : RIPPLE.nebulaFrameMs;
         const needIdleRefresh =
           stale ||
           tick !== lastTick ||
           eff.dark !== lastIdleDark ||
           eff.alphaScale !== lastIdleAlphaScale ||
-          renderer.mode !== 'webgl2' ||
-          M.abs(now - lastIdleRefreshMs) >= RIPPLE.nebulaFrameMs;
+          !isGpuMod ||
+          M.abs(now - lastIdleRefreshMs) >= idleUploadGap;
+        const curDpr = renderer.mode === 'worker-webgl2'
+          ? (renderer.getBufferSize?.().dpr || 1)
+          : canvas.width / (columns * cellWidth);
 
-        if (renderer.mode === 'webgl2' && !needIdleRefresh && !waveActive && !glowing && burst <= 0) {
-          renderer.draw(eff, canvas.width / (columns * cellWidth), false);
+        if (isGpuMod && !needIdleRefresh && !waveActive && !glowing && burst <= 0) {
+          renderer.draw(eff, curDpr, false);
           lastDraw = now;
           return;
         }
@@ -1354,9 +1398,10 @@ color = vec4(rgb * a, a);
             }
           }
         }
-        const drift = M.floor((seconds * RIPPLE.cloudDrift) / cellWidth);
+        const needCpuCloud = !isGpuMod || waveActive || glowing || burst > 0;
+        const drift = needCpuCloud ? M.floor((seconds * RIPPLE.cloudDrift) / cellWidth) : 0;
         if (needIdleRefresh) {
-          for (const abs of cloudColumns.keys()) if (abs < drift) cloudColumns.delete(abs);
+          if (needCpuCloud) for (const abs of cloudColumns.keys()) if (abs < drift) cloudColumns.delete(abs);
           lastIdleRefreshMs = now;
           lastIdleDark = eff.dark;
           lastIdleAlphaScale = eff.alphaScale;
@@ -1366,9 +1411,6 @@ color = vec4(rgb * a, a);
           : (rawDt > 0 ? M.exp(-rawDt / RIPPLE.glowDecay) : (waveActive ? 1 : 0.88));
         const idleAlpha = eff.dark ? RIPPLE.idleAlphaDark : RIPPLE.idleAlphaLight;
         const themeScale = (eff.dark ? 1 : RIPPLE.lightAlphaScale) * eff.alphaScale;
-        const omega = (TAU / RIPPLE.breathPeriod) * seconds;
-        const bs = M.sin(omega);
-        const bc = M.cos(omega);
         const breathHalf = RIPPLE.breathDepth * 0.5;
         const cap = RIPPLE.waveAlphaCap;
         const slopeScale = RIPPLE.prismSlopeScale;
@@ -1382,8 +1424,10 @@ color = vec4(rgb * a, a);
         const idleThemeScale = idleAlpha * themeScale;
         const height = waves.height;
         const { data } = renderer;
-        for (let c = 0; c < columns; c++) {
-          colClouds[c] = cloudColumn(c + drift);
+        if (needCpuCloud) {
+          for (let c = 0; c < columns; c++) {
+            colClouds[c] = cloudColumn(c + drift);
+          }
         }
         let brightest = 0;
         for (let row = 0; row < rows; row++) {
@@ -1397,11 +1441,16 @@ color = vec4(rgb * a, a);
             if (here === 0 && prevG === 0) {
               if (!needIdleRefresh && wasLit[cell] === 0) continue;
               wasLit[cell] = 0;
-              const breath = 1 - breathHalf * (1 + bs * breathCos[cell] + bc * breathSin[cell]);
-              const alpha = idleThemeScale * colClouds[column][row] * breath * mask[cell];
+              let alpha;
+              if (isGpuMod) {
+                alpha = idleThemeScale * mask[cell];
+              } else {
+                const breath = 1 - breathHalf * (1 + bs * breathCos[cell] + bc * breathSin[cell]);
+                alpha = idleThemeScale * colClouds[column][row] * breath * mask[cell];
+              }
               const at = cell << 2;
               data[at] = glyphs[cell];
-              data[at + 1] = alpha < INVISIBLE_ALPHA ? 0 : (alpha >= 1 ? 255 : (alpha * 255 + 0.5) | 0);
+              data[at + 1] = alpha < (isGpuMod ? 0.001 : INVISIBLE_ALPHA) ? 0 : (alpha >= 1 ? 255 : (alpha * 255 + 0.5) | 0);
               data[at + 2] = 0;
               data[at + 3] = 0;
               continue;
@@ -1413,7 +1462,7 @@ color = vec4(rgb * a, a);
             const lit = shown < 0.01 ? 0 : shown;
             glow[cell] = lit;
             wasLit[cell] = lit > 0 ? 1 : 0;
-            let alpha = idleAlpha * colClouds[column][row] * breath;
+            let alpha = isGpuMod && lit === 0 ? idleAlpha : idleAlpha * colClouds[column][row] * breath;
             let packed = 0;
             let waveMix = strength;
             if (lit > 0) {
@@ -1446,12 +1495,12 @@ color = vec4(rgb * a, a);
             alpha *= mask[cell] * themeScale;
             const at = cell << 2;
             data[at] = glyphs[cell];
-            data[at + 1] = alpha < INVISIBLE_ALPHA ? 0 : (alpha >= 1 ? 255 : (alpha * 255 + 0.5) | 0);
-            data[at + 2] = lit > 0 ? ((waveMix * 255 + 0.5) | 0) : 0;
+            data[at + 1] = alpha < (isGpuMod && lit === 0 ? 0.001 : INVISIBLE_ALPHA) ? 0 : (alpha >= 1 ? 255 : (alpha * 255 + 0.5) | 0);
+            data[at + 2] = lit > 0 ? M.max(1, (waveMix * 255 + 0.5) | 0) : 0;
             data[at + 3] = packed;
           }
         }
-        renderer.draw(eff, canvas.width / (columns * cellWidth));
+        renderer.draw(eff, curDpr, true);
         if (burst > 0) {
           prismBurst = still ? 0 : burst * M.exp(-M.max(0.016, rawDt) / 0.38);
           if (prismBurst < 0.015) prismBurst = 0;
@@ -1595,6 +1644,20 @@ uniform float uSurge;
 uniform float uSpeed;
 uniform float uSpectrum;
 uniform float uSemantic;
+uniform vec4 uPre0;
+uniform vec4 uPre1;
+uniform vec4 uSpecModes;
+uniform vec3 uBaseA;
+uniform vec3 uBaseB;
+uniform vec3 uPrismA;
+uniform vec3 uPrismB;
+uniform vec3 uLightA;
+uniform vec3 uLightB;
+uniform vec3 uSurgeLead;
+uniform vec3 uChimeLead;
+uniform vec3 uHotAnchor;
+uniform vec3 uSemA;
+uniform vec3 uSemB;
 out vec4 outColor;
 
 float hash(highp vec2 p) {
@@ -1632,33 +1695,23 @@ float aa = clamp(fwidth(dist) * 1.15, 0.035, 0.14);
 float r = 0.08 + 0.16 * msk;
 return (1.0 - smoothstep(r - aa, r + aa * 0.35, dist)) * msk;
 }
+const float INV_FIELD_NORM = 1.1304178;
 const vec3 DEEP_SPACE_BLUE = vec3(0.059, 0.090, 0.227);
 const vec3 ZENITH_BLUE = vec3(0.192, 0.525, 1.000);
 const vec3 SKY_BLUE = vec3(0.361, 0.776, 0.988);
 const vec3 HAZE_BLUE = vec3(0.733, 0.886, 1.000);
 const vec3 PRISM_COBALT = vec3(0.259, 0.522, 0.957);
 const vec3 PRISM_IRIS = vec3(0.608, 0.447, 0.796);
-const vec3 ICE_MIST = vec3(0.839, 0.933, 1.000);
 const vec3 DAY_COBALT = vec3(0.145, 0.388, 0.922);
 const vec3 DAY_IRIS = vec3(0.486, 0.227, 0.929);
 const vec3 DAY_CORAL = vec3(0.918, 0.263, 0.208);
 const vec3 DAY_AMBER = vec3(0.851, 0.467, 0.024);
 const vec3 DAY_CERULEAN = vec3(0.008, 0.518, 0.780);
-const vec3 WARM_DARK_A = vec3(0.580, 0.290, 0.204);
-const vec3 WARM_DARK_B = vec3(0.851, 0.467, 0.341);
-const vec3 WARM_DARK_C = vec3(0.933, 0.682, 0.365);
 const vec3 DAY_TERRACOTTA = vec3(0.761, 0.349, 0.204);
 const vec3 DAY_SIENNA = vec3(0.635, 0.247, 0.141);
-const vec3 MONO_DARK_LO = vec3(0.620, 0.659, 0.725);
+const vec3 ICE_MIST = vec3(0.839, 0.933, 1.000);
+const vec3 WARM_DARK_B = vec3(0.851, 0.467, 0.341);
 const vec3 MONO_DARK_HI = vec3(0.847, 0.878, 0.929);
-const vec3 MONO_LIGHT_LO = vec3(0.267, 0.318, 0.400);
-const vec3 MONO_LIGHT_HI = vec3(0.416, 0.475, 0.569);
-const vec3 SEM_AMBER_D = vec3(0.949, 0.722, 0.294);
-const vec3 SEM_AMBER_L = vec3(0.851, 0.467, 0.024);
-const vec3 SEM_CORAL_D = vec3(0.851, 0.345, 0.365);
-const vec3 SEM_CORAL_L = vec3(0.863, 0.149, 0.149);
-const vec3 SEM_JADE_D = vec3(0.314, 0.745, 0.576);
-const vec3 SEM_JADE_L = vec3(0.020, 0.588, 0.412);
 float sf(float t){return smoothstep(0.,1.,fract(t));}
 vec3 blueLoop(float x){
 float t=fract(x)*4.,f=sf(t);
@@ -1679,54 +1732,55 @@ vec3 daylightInkLoop(float x){
 float t=fract(x)*5.,f=sf(t);
 return t<1.?mix(DAY_COBALT,DAY_IRIS,f):t<2.?mix(DAY_IRIS,DAY_CORAL,f):t<3.?mix(DAY_CORAL,DAY_AMBER,f):t<4.?mix(DAY_AMBER,DAY_CERULEAN,f):mix(DAY_CERULEAN,DAY_COBALT,f);
 }
-vec3 spectrumBaseDark(float spec,float ph){
-float w=.5+.5*sin(ph*6.2831853);
-return spec>5.5?blueLoop(ph):spec>4.5?mix(MONO_DARK_LO,MONO_DARK_HI,w):spec>3.5?mix(vec3(.82,.545,.2),SEM_AMBER_D,w):spec>2.5?mix(vec3(.44,.36,.82),PRISM_IRIS,w):spec>1.5?blueLoop(ph):spec>.5?mix(WARM_DARK_A,WARM_DARK_B,.35+.65*w):blueLoop(ph);
+vec3 evalBaseDark(float ph){
+return uSpecModes.x>.5?mix(uBaseA,uBaseB,.5+.5*sin(ph*6.2831853)):blueLoop(ph);
 }
-vec3 spectrumPrismDark(float spec,float ph){
-float w=.5+.5*sin(ph*6.2831853+1.1);
-return spec>5.5?neonLoop(ph):spec>4.5?mix(MONO_DARK_LO,MONO_DARK_HI,w):spec>3.5?mix(SEM_AMBER_D,WARM_DARK_C,w):spec>2.5?mix(PRISM_IRIS,vec3(.71,.56,.96),w):spec>1.5?mix(PRISM_COBALT,SKY_BLUE,w):spec>.5?mix(WARM_DARK_B,WARM_DARK_C,w):prismLoop(ph);
+vec3 evalPrismDark(float ph){
+if(uSpecModes.y>.5)return uSpecModes.y>1.5?neonLoop(ph):mix(uPrismA,uPrismB,.5+.5*sin(ph*6.2831853+1.1));
+return prismLoop(ph);
 }
-vec3 spectrumInkLight(float spec,float ph,float washPhase){
-float w=.5+.5*sin(ph*6.2831853),sw=.5+.5*sin(washPhase);
-return abs(spec-5.)<.5?mix(MONO_LIGHT_LO,MONO_LIGHT_HI,.5*(w+sw)):spec>3.5?mix(DAY_AMBER,vec3(.706,.325,.035),w):spec>2.5?mix(DAY_IRIS,vec3(.31,.275,.898),w):spec>1.5?mix(DAY_COBALT,DAY_CERULEAN,sw):spec>.5?mix(DAY_TERRACOTTA,mix(DAY_AMBER,DAY_SIENNA,sw),.45+.45*w):daylightInkLoop(ph);
+vec3 evalInkLight(float ph,float washPh){
+float m=uSpecModes.z;
+if(m<.5)return daylightInkLoop(ph);
+float w=.5+.5*sin(ph*6.2831853),sw=.5+.5*sin(washPh);
+if(m<1.5)return mix(uLightA,uLightB,w);
+if(m<2.5)return mix(DAY_TERRACOTTA,mix(DAY_AMBER,DAY_SIENNA,sw),.45+.45*w);
+if(m<3.5)return mix(uLightA,uLightB,sw);
+return mix(uLightA,uLightB,.5*(w+sw));
 }
-vec3 semanticColor(float sem,float dark,float ph){
-float w=.5+.5*sin(ph*6.2831853);
-if(sem<1.5)return dark>.5?mix(SEM_AMBER_D,vec3(.98,.835,.48),.35*w):mix(SEM_AMBER_L,vec3(.706,.325,.035),.4*w);
-if(sem<2.5)return dark>.5?mix(SEM_CORAL_D,vec3(.69,.235,.265),.4*w):mix(SEM_CORAL_L,vec3(.62,.11,.12),.35*w);
-return dark>.5?mix(SEM_JADE_D,SKY_BLUE,.38*w):mix(SEM_JADE_L,DAY_CERULEAN,.42*w);
-}
-vec3 sm(vec3 a,float d,float p,float i,float w){return w>.001?mix(a,semanticColor(i,d,p),w):a;}
+vec3 sm(vec3 a,float p){return uPre1.y>.001?mix(a,mix(uSemA,uSemB,.5+.5*sin(p*6.2831853)),uPre1.y):a;}
 void main() {
 highp vec2 uv = gl_FragCoord.xy / max(uRes, vec2(1.0));
 float reach = max(uReach, 0.01);
-float stretch = uStretch * (1.0 + 0.08 * (uSpeed - 1.0));
+float stretch = uPre1.w;
 float surgeUp = max(uSurge, 0.0);
-float yCut = uv.y / reach - 0.25 * stretch;
+float y = uv.y / reach;
+float yCut = y - 0.25 * stretch;
 if (yCut > 1.6 + 0.22 * surgeUp) { outColor = vec4(0.0); return; }
 float topFeather = 1.0 - smoothstep(1.15 + 0.14 * surgeUp, 1.58 + 0.22 * surgeUp, yCut);
-highp vec2 px = gl_FragCoord.xy / max(uDpr, 0.5);
-highp vec2 res = uRes / max(uDpr, 0.5);
 highp float t = uTime;
-highp vec2 p = (px - res * 0.5) / max(res.y, 1.0);
-highp vec2 q = p + 0.09 * vec2(fbm3(p * 2.0 + vec2(t * 0.16, 0.0)), fbm3(p * 2.0 + vec2(3.1, -t * 0.13))) - 0.045;
-float y = uv.y / reach;
 float waveA = sin(uv.x * 5.2 - t * 0.68);
 float waveB = sin(uv.x * 8.6 + t * 0.46 + 1.4);
 float curtain = 0.5 + 0.32 * waveA + 0.18 * waveB;
-float jut = (fbm3(vec2(px.x / 220.0 + t * 0.18, t * 0.11)) - 0.5) * 0.68 + (waveA * 0.65 + waveB * 0.35) * 0.24;
-float h = y + stretch * (0.36 * jut + 0.11 * (fbm3(vec2(px.x / 90.0 - t * 0.21, t * 0.14 + 3.0)) - 0.5));
-float glow = exp(-max(h, 0.0) * max(h, 0.0) * 4.0) * (0.76 + 0.42 * curtain) * mix(0.35, 1.0, smoothstep(0.0, 0.3, uv.x) * (1.0 - smoothstep(0.7, 1.0, uv.x)));
+float xEdge = mix(0.35, 1.0, smoothstep(0.0, 0.3, uv.x) * (1.0 - smoothstep(0.7, 1.0, uv.x)));
+float jutWave = (waveA * 0.65 + waveB * 0.35) * 0.24;
+float hMin = max(y + stretch * (0.36 * (-0.2975 + jutWave) - 0.048125), 0.0);
+float glowUpper = exp(-hMin * hMin * 4.0) * (0.76 + 0.42 * curtain) * xEdge;
+if (glowUpper * topFeather < 0.0008 && abs(uSurge) < 0.0001) { outColor = vec4(0.0); return; }
+highp vec2 px = gl_FragCoord.xy / max(uDpr, 0.5);
+highp vec2 res = uRes / max(uDpr, 0.5);
+highp vec2 p = (px - res * 0.5) / max(res.y, 1.0);
+highp vec2 q = p + 0.09 * vec2(fbm3(p * 2.0 + vec2(t * 0.16, 0.0)), fbm3(p * 2.0 + vec2(3.1, -t * 0.13))) - 0.045;
+float jut = (fbm3(vec2(px.x / 220.0 + t * 0.18, t * 0.11)) - 0.5) * 0.68 + jutWave;
+float h = max(y + stretch * (0.36 * jut + 0.11 * (fbm3(vec2(px.x / 90.0 - t * 0.21, t * 0.14 + 3.0)) - 0.5)), 0.0);
+float glow = exp(-h * h * 4.0) * (0.76 + 0.42 * curtain) * xEdge;
 if (glow * topFeather < 0.0008 && abs(uSurge) < 0.0001) { outColor = vec4(0.0); return; }
 float basePhase = px.x / max(res.x, 1.0) * 0.9 + t * 0.15 + 0.22 * fbm3(q * 1.5);
-float semId = floor(uSemantic + 0.001);
-float semW = semId > 0.5 ? clamp(1.0 - (uSemantic - semId) / 0.98, 0.0, 1.0) : 0.0;
-vec3 base = sm(spectrumBaseDark(uSpectrum, basePhase), 1.0, basePhase, semId, semW);
+float semW = uPre1.y;
+vec3 base = sm(evalBaseDark(basePhase), basePhase);
 float n = fbm(q * 3.0 + t * 0.16);
-float field = (1.0 - exp(-1.8 * glow * (0.75 + 0.45 * n))) / (1.0 - exp(-1.8 * 1.2));
-bool M = abs(uSpectrum - 5.0) < 0.5;
-float effPrism = M ? uPrism * 0.28 : uPrism;
+float field = (1.0 - exp(-1.8 * glow * (0.75 + 0.45 * n))) * INV_FIELD_NORM;
+float effPrism = uPre1.z;
 float pPhase = 0.0;
 if (uDark <= 0.5 || effPrism > 0.0001 || abs(uSurge) > 0.0001) {
 pPhase = uv.x * 1.18 - t * 0.18 + 0.28 * fbm3(q * 2.1 + vec2(0.0, t * 0.12)) + 0.14 * y;
@@ -1734,23 +1788,23 @@ pPhase = uv.x * 1.18 - t * 0.18 + 0.28 * fbm3(q * 2.1 + vec2(0.0, t * 0.12)) + 0
 vec3 dotPrismTint = vec3(0.0);
 float dotPrismMix = 0.0, dotBoost = 0.0, surgeArc = 0.0, surgeDy = 0.0, chimeWave = 0.0, chimePhase = 0.0;
 if (effPrism > 0.0001 || abs(uSurge) > 0.0001) {
-vec3 pCol = sm(spectrumPrismDark(uSpectrum, pPhase), 1.0, pPhase, semId, semW);
+vec3 pCol = sm(evalPrismDark(pPhase), pPhase);
 if (effPrism > 0.0001) {
 float wing=smoothstep(.04,.34,field)*(1.-.18*smoothstep(.76,.99,field)),caustics=.62+.38*smoothstep(-.24,.26,jut);
 base = mix(base, pCol, clamp(effPrism * 1.45, 0.0, 1.0)) * (0.86 + 0.28 * wing * caustics);
 dotPrismTint=pCol;dotPrismMix=clamp(effPrism*1.25*(.45+.55*caustics),0.,.78);
 }
 if (uSurge > 0.0001) {
-float sp = clamp(uSurge, 0.0, 1.0), sEnv = sin(sp * 3.14159265) * (1.0 - 0.32 * sp), xRel = (uv.x - 0.5) * 2.0, xSpan = smoothstep(0.0, 0.22, uv.x) * (1.0 - smoothstep(0.78, 1.0, uv.x)), frontY = 1.15 * (1.0 - pow(1.0 - sp, 1.45)) - 0.15 * xRel * xRel + 0.06 * jut, dy = y - frontY, arc = (dy >= 0.0 ? exp(-dy * dy * 24.0) : exp(-dy * dy * 5.2)) * sEnv * xSpan;
+float sp = clamp(uSurge, 0.0, 1.0), xRel = (uv.x - 0.5) * 2.0, xSpan = smoothstep(0.0, 0.22, uv.x) * (1.0 - smoothstep(0.78, 1.0, uv.x)), frontY = uPre0.y - 0.15 * xRel * xRel + 0.06 * jut, dy = y - frontY, arc = (dy >= 0.0 ? exp(-dy * dy * 24.0) : exp(-dy * dy * 5.2)) * uPre0.x * xSpan;
 surgeArc = arc; surgeDy = dy - sp * 0.35;
-vec3 surgeLead = sm(M ? MONO_DARK_HI : (uSpectrum > 0.5 && uSpectrum < 1.5 ? WARM_DARK_C : SKY_BLUE), 1.0, pPhase + 0.2, semId, semW), surgeTrail = sm(spectrumPrismDark(uSpectrum, pPhase + surgeDy * 1.3), 1.0, pPhase + surgeDy * 1.3, semId, semW), surgeCol = mix(surgeLead, surgeTrail, 0.62);
+vec3 surgeLead = sm(uSurgeLead, pPhase + 0.2), surgeTrail = sm(evalPrismDark(pPhase + surgeDy * 1.3), pPhase + surgeDy * 1.3), surgeCol = mix(surgeLead, surgeTrail, 0.62);
 field = clamp(field + arc * 0.52, 0.0, 1.0);
 base = mix(base, surgeCol, clamp(arc * 0.78, 0.0, 0.85));
 dotBoost += arc * 0.58; dotPrismTint = mix(dotPrismTint, surgeCol, clamp(arc * 0.85, 0.0, 1.0)); dotPrismMix = max(dotPrismMix, clamp(arc * 0.82, 0.0, 0.85));
 } else if (uSurge < -0.0001) {
-float cp = clamp(-uSurge, 0.0, 1.0), cEnv = sin(cp * 3.14159265) * (1.0 - 0.28 * cp), rx = abs(uv.x - 0.5), ringR = 0.04 + 0.43 * (1.0 - pow(1.0 - cp, 1.35)), dr = (rx - ringR) / 0.135, hRip = exp(-dr * dr) + 0.32 * (1.0 - cp) * exp(-rx * rx * 18.0), setY = 0.70 * pow(1.0 - cp, 1.35) + 0.04, dsy = y - setY, vSet = exp(-dsy * dsy * 13.5) * (1.0 - smoothstep(1.05, 1.35, y)), chime = hRip * vSet * cEnv;
+float cp = clamp(-uSurge, 0.0, 1.0), rx = abs(uv.x - 0.5), dr = (rx - uPre0.y) / 0.135, hRip = exp(-dr * dr) + 0.32 * (1.0 - cp) * exp(-rx * rx * 18.0), dsy = y - uPre0.z, vSet = exp(-dsy * dsy * 13.5) * (1.0 - smoothstep(1.05, 1.35, y)), chime = hRip * vSet * uPre0.x;
 chimeWave = chime; chimePhase = uv.x * 1.5 + rx * 2.0 - cp * 0.35;
-vec3 chimeLead = sm(M ? MONO_DARK_HI : (uSpectrum > 0.5 && uSpectrum < 1.5 ? WARM_DARK_C : ICE_MIST), 1.0, chimePhase, semId, semW), chimeCol = mix(mix(chimeLead, spectrumPrismDark(uSpectrum, chimePhase), 0.22), chimeLead, semW);
+vec3 chimeLead = sm(uChimeLead, chimePhase), chimeCol = mix(mix(chimeLead, evalPrismDark(chimePhase), 0.22), chimeLead, semW);
 field = clamp(field + chime * 0.46, 0.0, 1.0);
 base = mix(base, chimeCol, clamp(chime * 0.82, 0.0, 0.88));
 dotBoost += chime * 0.42; dotPrismTint = mix(dotPrismTint, chimeCol, clamp(chime * 0.8, 0.0, 1.0)); dotPrismMix = max(dotPrismMix, clamp(chime * 0.75, 0.0, 0.82));
@@ -1773,23 +1827,23 @@ a=clamp(field*.56*breathMod*uPresence,0.,1.);
 da=clamp(dA*sqrt(a)*.78,0.,1.);
 }else{
 float washPh = uv.x * 3.1 + t * 0.48 + 1.3 * n;
-vec3 prismInk = sm(spectrumInkLight(uSpectrum, pPhase, washPh), 0.0, pPhase, semId, semW);
-vec3 washBase = sm(uSpectrum > 0.5 ? spectrumInkLight(uSpectrum, basePhase, washPh) : mix(DAY_COBALT, DAY_CERULEAN, 0.5 + 0.5 * sin(washPh)), 0.0, basePhase, semId, semW);
+vec3 prismInk = sm(evalInkLight(pPhase, washPh), pPhase);
+vec3 washBase = sm(uSpecModes.w > 0.5 ? mix(DAY_COBALT, DAY_CERULEAN, 0.5 + 0.5 * sin(washPh)) : evalInkLight(basePhase, washPh), basePhase);
 float causticsL = 0.48 + 0.52 * smoothstep(-0.24, 0.26, jut);
 float dichroicW = clamp((0.48 + 0.46 * effPrism) * (0.58 + 0.42 * causticsL), 0.0, 0.94);
 vec3 inkRgb = mix(washBase, prismInk, dichroicW);
 if (surgeArc > 0.0001) {
-vec3 surgeInk = sm(mix(washBase, spectrumInkLight(uSpectrum, pPhase + surgeDy * 1.3, washPh), 0.68), 0.0, pPhase + surgeDy * 1.3, semId, semW);
+vec3 surgeInk = sm(mix(washBase, evalInkLight(pPhase + surgeDy * 1.3, washPh), 0.68), pPhase + surgeDy * 1.3);
 inkRgb = mix(inkRgb, surgeInk, clamp(surgeArc * 0.85, 0.0, 0.90));
 } else if (chimeWave > 0.0001) {
-vec3 chimeInk = sm(mix(washBase, spectrumInkLight(uSpectrum, chimePhase, washPh), 0.45), 0.0, chimePhase, semId, semW);
+vec3 chimeInk = sm(mix(washBase, evalInkLight(chimePhase, washPh), 0.45), chimePhase);
 inkRgb = mix(inkRgb, chimeInk, clamp(chimeWave * 0.86, 0.0, 0.90));
 }
-vec3 hotAnchor = mix(M ? MONO_LIGHT_LO : (uSpectrum > 0.5 && uSpectrum < 1.5 ? DAY_SIENNA : DAY_COBALT * 0.84 + DAY_IRIS * 0.16), washBase * 0.88, semW);
+vec3 hotAnchor = mix(uHotAnchor, washBase * 0.88, semW);
 inkRgb = mix(inkRgb, hotAnchor, hot * 0.24);
 c = clamp(inkRgb + grain * 0.022, 0.0, 1.0);
 dc = clamp(mix(washBase * 0.86, prismInk * 0.92, clamp(0.26 + dotPrismMix * 0.68, 0.0, 0.90)), 0.0, 1.0);
-float effPres = pow(clamp(uPresence, 0.0, 1.0), 0.68);
+float effPres = uPre0.w;
 float washGain = mix(1.02, 1.62, clamp(uIntensity, 0.0, 1.0));
 a = clamp(field * 0.66 * washGain * effPres, 0.0, 0.84);
 da = clamp(dA * (0.52 + 0.44 * sqrt(a)) * effPres, 0.0, 0.88);
@@ -1805,6 +1859,68 @@ outAlpha = clamp(outAlpha + tpdf * (0.5 / 255.0), 0.0, 1.0);
 outColor = clamp(vec4(premulRgb, outAlpha), 0.0, 1.0);
 }`;
   const GLOW_FRAG_SHADER = HORIZON_FRAGMENT_SHADER;
+  const _H_BASE_D = [
+    [0, [0, 0, 0], [0, 0, 0]],
+    [1, [0.67485, 0.35195, 0.25195], [0.851, 0.467, 0.341]],
+    [0, [0, 0, 0], [0, 0, 0]],
+    [1, [0.44, 0.36, 0.82], [0.608, 0.447, 0.796]],
+    [1, [0.82, 0.545, 0.2], [0.949, 0.722, 0.294]],
+    [1, [0.62, 0.659, 0.725], [0.847, 0.878, 0.929]],
+    [0, [0, 0, 0], [0, 0, 0]],
+  ];
+  const _H_PRISM_D = [
+    [0, [0, 0, 0], [0, 0, 0]],
+    [1, [0.851, 0.467, 0.341], [0.933, 0.682, 0.365]],
+    [1, [0.259, 0.522, 0.957], [0.361, 0.776, 0.988]],
+    [1, [0.608, 0.447, 0.796], [0.71, 0.56, 0.96]],
+    [1, [0.949, 0.722, 0.294], [0.933, 0.682, 0.365]],
+    [1, [0.62, 0.659, 0.725], [0.847, 0.878, 0.929]],
+    [2, [0, 0, 0], [0, 0, 0]],
+  ];
+  const _H_LIGHT = [
+    [0, [0.145, 0.388, 0.922], [0.008, 0.518, 0.78]],
+    [2, [0.761, 0.349, 0.204], [0.635, 0.247, 0.141]],
+    [3, [0.145, 0.388, 0.922], [0.008, 0.518, 0.78]],
+    [1, [0.486, 0.227, 0.929], [0.31, 0.275, 0.898]],
+    [1, [0.851, 0.467, 0.024], [0.706, 0.325, 0.035]],
+    [4, [0.267, 0.318, 0.4], [0.416, 0.475, 0.569]],
+    [1, [0.851, 0.467, 0.024], [0.706, 0.325, 0.035]],
+  ];
+  const _H_SEM_D = {
+    1: [[0.949, 0.722, 0.294], [0.95985, 0.76155, 0.3591]],
+    2: [[0.851, 0.345, 0.365], [0.7866, 0.301, 0.325]],
+    3: [[0.314, 0.745, 0.576], [0.33186, 0.75678, 0.73256]],
+  };
+  const _H_SEM_L = {
+    1: [[0.851, 0.467, 0.024], [0.793, 0.4102, 0.0284]],
+    2: [[0.863, 0.149, 0.149], [0.77795, 0.13535, 0.13885]],
+    3: [[0.02, 0.588, 0.412], [0.01496, 0.5586, 0.56656]],
+  };
+  function computeHorizonUniforms(dark, presence, prism, surge, speed, spectrumCode, semanticCode) {
+    const sp = surge > 0.0001 ? M.min(1, M.max(0, surge)) : 0;
+    const cp = surge < -0.0001 ? M.min(1, M.max(0, -surge)) : 0;
+    const p1m = sp > 0 ? M.pow(1 - sp, 1.45) : cp > 0 ? M.pow(1 - cp, 1.35) : 1;
+    const env = sp > 0 ? M.sin(sp * M.PI) * (1 - 0.32 * sp) : cp > 0 ? M.sin(cp * M.PI) * (1 - 0.28 * cp) : 0;
+    const fyOrR = sp > 0 ? 1.15 * (1 - p1m) : cp > 0 ? 0.04 + 0.43 * (1 - p1m) : 0;
+    const setY = cp > 0 ? 0.7 * p1m + 0.04 : 0;
+    const effPres = M.pow(M.max(0, M.min(1, presence)), 0.68);
+    const sc = M.max(0, M.min(6, M.round(Number(spectrumCode) || 0)));
+    const semId = M.floor((Number(semanticCode) || 0) + 0.001);
+    const semW = semId > 0.5 ? M.max(0, M.min(1, 1 - (semanticCode - semId) / 0.98)) : 0;
+    const bd = _H_BASE_D[sc] || _H_BASE_D[0], pd = _H_PRISM_D[sc] || _H_PRISM_D[0], ld = _H_LIGHT[sc] || _H_LIGHT[0];
+    const semKey = semId < 1.5 ? 1 : semId < 2.5 ? 2 : 3;
+    const semPair = (dark ? _H_SEM_D : _H_SEM_L)[semKey];
+    return {
+      pre0: [env, fyOrR, setY, effPres],
+      pre1: [semId, semW, sc === 5 ? prism * 0.28 : prism, 0.6 * (1 + 0.08 * (speed - 1))],
+      modes: [bd[0], pd[0], ld[0], sc === 0 ? 1 : 0],
+      baseA: bd[1], baseB: bd[2], prismA: pd[1], prismB: pd[2], lightA: ld[1], lightB: ld[2],
+      surgeLead: sc === 5 ? [0.847, 0.878, 0.929] : sc === 1 ? [0.933, 0.682, 0.365] : [0.361, 0.776, 0.988],
+      chimeLead: sc === 5 ? [0.847, 0.878, 0.929] : sc === 1 ? [0.933, 0.682, 0.365] : [0.839, 0.933, 1.0],
+      hotAnchor: sc === 5 ? [0.267, 0.318, 0.4] : sc === 1 ? [0.635, 0.247, 0.141] : [0.19956, 0.36224, 0.92312],
+      semA: semPair[0], semB: semPair[1],
+    };
+  }
   function createBrandHorizonGLRenderer(canvas) {
     const gl = canvas?.getContext?.('webgl2', { alpha: true, premultipliedAlpha: true, antialias: false, preserveDrawingBuffer: false }) || null;
     if (!gl || gl.isContextLost?.()) return null;
@@ -1825,21 +1941,27 @@ outColor = clamp(vec4(premulRgb, outAlpha), 0.0, 1.0);
       gl.deleteShader(vs); gl.deleteShader(fs);
       if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog) || 'glow program link error');
       gl.useProgram(prog);
-      for (const n of ['uRes', 'uDpr', 'uTime', 'uDark', 'uReach', 'uIntensity', 'uStretch', 'uPresence', 'uPrism', 'uSurge', 'uSpeed', 'uSpectrum', 'uSemantic']) u[n] = gl.getUniformLocation(prog, n);
+      for (const n of ['uRes', 'uDpr', 'uTime', 'uDark', 'uReach', 'uIntensity', 'uPresence', 'uPrism', 'uSurge', 'uSpeed', 'uSpectrum', 'uSemantic', 'uPre0', 'uPre1', 'uSpecModes', 'uBaseA', 'uBaseB', 'uPrismA', 'uPrismB', 'uLightA', 'uLightB', 'uSurgeLead', 'uChimeLead', 'uHotAnchor', 'uSemA', 'uSemB']) u[n] = gl.getUniformLocation(prog, n);
     }
     try { build(); } catch { try { free(); } catch {} return null; }
+    const u1 = (loc, v) => { if (loc) gl.uniform1f(loc, v); };
+    const u3 = (loc, v) => { if (loc && typeof gl.uniform3f === 'function') gl.uniform3f(loc, v[0], v[1], v[2]); };
+    const u4 = (loc, v) => { if (loc && typeof gl.uniform4f === 'function') gl.uniform4f(loc, v[0], v[1], v[2], v[3]); };
     return {
       mode: 'webgl2', build, isContextLost: () => Boolean(gl.isContextLost?.()),
       clear() { if (!prog || gl.isContextLost?.()) return; gl.viewport(0, 0, canvas.width, canvas.height); gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT); },
       draw(w, h, dpr, timeSec, dark, intensity, presence, reach = DEFAULT_HORIZON_AURA.reach, prism = 0, surge = 0, speed = 1, spectrumCode = 0, semanticCode = 0) {
         if (!prog || gl.isContextLost?.()) return;
+        const hu = computeHorizonUniforms(dark, presence, prism, surge, speed, spectrumCode, semanticCode);
         gl.viewport(0, 0, w, h); gl.useProgram(prog);
-        gl.uniform2f(u.uRes, w, h); gl.uniform1f(u.uDpr, dpr); gl.uniform1f(u.uTime, timeSec);
-        gl.uniform1f(u.uDark, dark ? 1 : 0); gl.uniform1f(u.uReach, reach); gl.uniform1f(u.uIntensity, intensity);
-        gl.uniform1f(u.uStretch, 0.6); gl.uniform1f(u.uPresence, presence); gl.uniform1f(u.uPrism, prism);
-        gl.uniform1f(u.uSurge, surge); gl.uniform1f(u.uSpeed, speed);
-        if (u.uSpectrum) gl.uniform1f(u.uSpectrum, spectrumCode);
-        if (u.uSemantic) gl.uniform1f(u.uSemantic, semanticCode);
+        gl.uniform2f(u.uRes, w, h); u1(u.uDpr, dpr); u1(u.uTime, timeSec);
+        u1(u.uDark, dark ? 1 : 0); u1(u.uReach, reach); u1(u.uIntensity, intensity);
+        u1(u.uPresence, presence); u1(u.uPrism, prism); u1(u.uSurge, surge);
+        u1(u.uSpeed, speed); u1(u.uSpectrum, spectrumCode); u1(u.uSemantic, semanticCode);
+        u4(u.uPre0, hu.pre0); u4(u.uPre1, hu.pre1); u4(u.uSpecModes, hu.modes);
+        u3(u.uBaseA, hu.baseA); u3(u.uBaseB, hu.baseB); u3(u.uPrismA, hu.prismA); u3(u.uPrismB, hu.prismB);
+        u3(u.uLightA, hu.lightA); u3(u.uLightB, hu.lightB); u3(u.uSurgeLead, hu.surgeLead);
+        u3(u.uChimeLead, hu.chimeLead); u3(u.uHotAnchor, hu.hotAnchor); u3(u.uSemA, hu.semA); u3(u.uSemB, hu.semB);
         gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT); gl.drawArrays(gl.TRIANGLES, 0, 3);
       },
       dispose(keep) { free(); if (!keep) try { gl.getExtension?.('WEBGL_lose_context')?.loseContext?.(); } catch {} },
@@ -1860,203 +1982,108 @@ outColor = clamp(vec4(premulRgb, outAlpha), 0.0, 1.0);
     return horizonPrismRgb(phase, out, dark);
   }
   function createBrandHorizon2DRenderer(canvas) {
-    const ctx = canvas && canvas.getContext ? canvas.getContext('2d') : null;
+    const ctx = canvas?.getContext?.('2d') || null;
     if (!ctx) return null;
-    let image = null;
-    let pixels = null;
-    const prismRgb = [0, 0, 0];
-    const surgeRgb = [0, 0, 0];
-    const toneRgb = [0, 0, 0];
-    function ensureImage(w, h) {
-      if (!image || image.width !== w || image.height !== h) {
-        image = ctx.createImageData(w, h);
-        pixels = new Uint32Array(image.data.buffer);
-      }
-    }
+    let image = null, pixels = null;
+    const prismRgb = [0, 0, 0], surgeRgb = [0, 0, 0], toneRgb = [0, 0, 0];
+    const ensureImage = (w, h) => { if (!image || image.width !== w || image.height !== h) { image = ctx.createImageData(w, h); pixels = new Uint32Array(image.data.buffer); } };
     return {
-      mode: '2d',
-      build() {},
+      mode: '2d', build() {},
       clear() {
-        if (typeof ctx.clearRect === 'function') {
-          ctx.clearRect(0, 0, canvas.width || 0, canvas.height || 0);
-        } else if (canvas.width > 0 && canvas.height > 0) {
-          ensureImage(canvas.width, canvas.height);
-          pixels.fill(0);
-          ctx.putImageData(image, 0, 0);
-        }
+        if (typeof ctx.clearRect === 'function') ctx.clearRect(0, 0, canvas.width || 0, canvas.height || 0);
+        else if (canvas.width > 0 && canvas.height > 0) { ensureImage(canvas.width, canvas.height); pixels.fill(0); ctx.putImageData(image, 0, 0); }
       },
       draw(w, h, dpr, timeSec, dark, intensity, presence, reach = DEFAULT_HORIZON_AURA.reach, prism = 0, surge = 0, speed = 1, spectrumCode = 0, semanticCode = 0) {
         if (!w || !h) return;
-        ensureImage(w, h);
-        pixels.fill(0);
+        ensureImage(w, h); pixels.fill(0);
         const { max, min, sin, exp, pow, round, abs, floor, sqrt, log } = M;
-        const cl01 = (v) => max(0, min(1, v));
-        const cl255 = (v) => round(min(255, max(0, v))) & 255;
+        const cl01 = (v) => max(0, min(1, v)), cl255 = (v) => round(min(255, max(0, v))) & 255;
         const sTone = (dk, ph, out) => sampleHorizonTone2D(spectrumCode, semanticCode, dk, ph, out);
-        const rEff = max(0.01, reach);
-        const stretchScale = 1 + 0.08 * (speed - 1);
-        const surgeUp = max(0, surge);
-        const effPrism = spectrumCode === 5 ? prism * 0.28 : prism;
-        const hasPrism = effPrism > 0.0001;
-        const hasSurge = abs(surge) > 0.0001;
-        const customMode = spectrumCode > 0 || semanticCode > 0;
-        const dprS = max(0.5, dpr);
-        const cssW = w / dprS;
-        const cssH = h / dprS;
-        const step = max(1, round(dpr));
-        const effPresL = dark ? presence : pow(cl01(presence), 0.68);
-        const washGainL = dark ? 1 : (1.02 + 0.60 * cl01(intensity));
-        const darkBreathMod = dark ? (0.68 + 0.56 * cl01(intensity)) : 1;
+        const rEff = max(0.01, reach), stretchScale = 1 + 0.08 * (speed - 1), surgeUp = max(0, surge);
+        const effPrism = spectrumCode === 5 ? prism * 0.28 : prism, hasPrism = effPrism > 0.0001, hasSurge = abs(surge) > 0.0001, customMode = spectrumCode > 0 || semanticCode > 0;
+        const dprS = max(0.5, dpr), cssW = w / dprS, cssH = h / dprS, step = max(1, round(dpr));
+        const effPresL = dark ? presence : pow(cl01(presence), 0.68), washGainL = dark ? 1 : (1.02 + 0.6 * cl01(intensity)), darkBreathMod = dark ? (0.68 + 0.56 * cl01(intensity)) : 1;
+        const sp0 = surge > 0.0001 ? min(1, surge) : 0, cp0 = surge < -0.0001 ? min(1, -surge) : 0;
+        const sEnv = sp0 ? sin(sp0 * M.PI) * (1 - 0.32 * sp0) : 0, fY0 = sp0 ? 1.15 * (1 - pow(1 - sp0, 1.45)) : 0;
+        const cEnv = cp0 ? sin(cp0 * M.PI) * (1 - 0.28 * cp0) : 0, p1c = cp0 ? pow(1 - cp0, 1.35) : 1, rR0 = 0.04 + 0.43 * (1 - p1c), sY0 = 0.7 * p1c + 0.04;
         for (let py = 0; py < h; py += step) {
-          const uvY = 1 - py / h;
-          const yNorm = uvY / rEff;
+          const uvY = 1 - py / h, yNorm = uvY / rEff;
           if (yNorm > 1.48 + 0.25 * surgeUp) continue;
-          const persp = 1 / (0.55 + uvY);
-          const gyBase = cssH * log(0.55 + uvY);
+          const persp = 1 / (0.55 + uvY), gyBase = cssH * log(0.55 + uvY);
           for (let px = 0; px < w; px += step) {
-            const uvX = px / w;
-            const cssX = px / dprS;
-            const waveA = sin(uvX * 5.2 - timeSec * 0.68);
-            const waveB = sin(uvX * 8.6 + timeSec * 0.46 + 1.4);
-            const curtain = 0.5 + 0.32 * waveA + 0.18 * waveB;
-            const jut = (valueNoise(cssX / 220 + timeSec * 0.18, timeSec * 0.11) - 0.5) * 0.68 + (waveA * 0.65 + waveB * 0.35) * 0.24;
-            const hJut = max(0, yNorm + 0.25 * stretchScale * jut);
-            const edgeFade = (uvX < 0.3 ? 0.35 + 0.65 * smooth(uvX / 0.3) : uvX > 0.7 ? 0.35 + 0.65 * smooth((1 - uvX) / 0.3) : 1);
-            const gVal = exp(-hJut * hJut * 4.0) * (0.76 + 0.42 * curtain) * edgeFade;
-            let field = dark
-              ? min(1, gVal * 1.12 * darkBreathMod * presence)
-              : min(1, gVal * 1.12);
+            const uvX = px / w, cssX = px / dprS, waveA = sin(uvX * 5.2 - timeSec * 0.68), waveB = sin(uvX * 8.6 + timeSec * 0.46 + 1.4);
+            const curtain = 0.5 + 0.32 * waveA + 0.18 * waveB, jut = (valueNoise(cssX / 220 + timeSec * 0.18, timeSec * 0.11) - 0.5) * 0.68 + (waveA * 0.65 + waveB * 0.35) * 0.24;
+            const hJut = max(0, yNorm + 0.25 * stretchScale * jut), edgeFade = uvX < 0.3 ? 0.35 + 0.65 * smooth(uvX / 0.3) : uvX > 0.7 ? 0.35 + 0.65 * smooth((1 - uvX) / 0.3) : 1;
+            const gVal = exp(-hJut * hJut * 4) * (0.76 + 0.42 * curtain) * edgeFade;
+            let field = dark ? min(1, gVal * 1.12 * darkBreathMod * presence) : min(1, gVal * 1.12);
             if (!hasSurge && (dark ? field < 0.008 : field * effPresL < 0.008)) continue;
-            const mixSky = 0.5 + 0.5 * sin(uvX * 3.2 + timeSec * 0.48);
-            const pPhase = uvX * 1.18 - timeSec * 0.18 + 0.28 * valueNoise(uvX * 3.1 + 1.7, yNorm * 1.6 - timeSec * 0.12) + 0.14 * yNorm;
+            const mixSky = 0.5 + 0.5 * sin(uvX * 3.2 + timeSec * 0.48), pPhase = uvX * 1.18 - timeSec * 0.18 + 0.28 * valueNoise(uvX * 3.1 + 1.7, yNorm * 1.6 - timeSec * 0.12) + 0.14 * yNorm;
             let baseR, baseG, baseB, dotR = 0, dotG = 0, dotB = 0;
             if (dark) {
-              if (customMode) {
-                sTone(true, uvX * 0.8 + timeSec * 0.12, toneRgb);
-                baseR = toneRgb[0];
-                baseG = toneRgb[1];
-                baseB = toneRgb[2];
-              } else {
-                baseR = 49 + 43 * mixSky;
-                baseG = 134 + 64 * mixSky;
-                baseB = 255 - 3 * mixSky;
-              }
+              if (customMode) { sTone(true, uvX * 0.8 + timeSec * 0.12, toneRgb); baseR = toneRgb[0]; baseG = toneRgb[1]; baseB = toneRgb[2]; }
+              else { baseR = 49 + 43 * mixSky; baseG = 134 + 64 * mixSky; baseB = 255 - 3 * mixSky; }
             } else {
-              if (customMode) {
-                sTone(false, pPhase, prismRgb);
-                sTone(false, uvX * 0.5 + timeSec * 0.08, toneRgb);
-              } else {
-                horizonPrismRgb(pPhase, prismRgb, false);
-                toneRgb[0] = 37 - 35 * mixSky;
-                toneRgb[1] = 99 + 33 * mixSky;
-                toneRgb[2] = 235 - 36 * mixSky;
-              }
-              const causticsL = 0.48 + 0.52 * smooth((jut + 0.24) / 0.5);
-              const ep2 = customMode ? effPrism : prism;
-              const dichroicW = min(0.94, (0.48 + 0.46 * ep2) * (0.58 + 0.42 * causticsL));
-              baseR = toneRgb[0] + (prismRgb[0] - toneRgb[0]) * dichroicW;
-              baseG = toneRgb[1] + (prismRgb[1] - toneRgb[1]) * dichroicW;
-              baseB = toneRgb[2] + (prismRgb[2] - toneRgb[2]) * dichroicW;
-              const dotMix = min(0.9, 0.26 + ep2 * 0.64);
-              dotR = (customMode ? toneRgb[0] * 0.86 : 32) * (1 - dotMix) + prismRgb[0] * 0.92 * dotMix;
-              dotG = (customMode ? toneRgb[1] * 0.86 : 85) * (1 - dotMix) + prismRgb[1] * 0.92 * dotMix;
-              dotB = (customMode ? toneRgb[2] * 0.86 : 202) * (1 - dotMix) + prismRgb[2] * 0.92 * dotMix;
+              if (customMode) { sTone(false, pPhase, prismRgb); sTone(false, uvX * 0.5 + timeSec * 0.08, toneRgb); }
+              else { horizonPrismRgb(pPhase, prismRgb, false); toneRgb[0] = 37 - 35 * mixSky; toneRgb[1] = 99 + 33 * mixSky; toneRgb[2] = 235 - 36 * mixSky; }
+              const causticsL = 0.48 + 0.52 * smooth((jut + 0.24) / 0.5), ep2 = customMode ? effPrism : prism, dW = min(0.94, (0.48 + 0.46 * ep2) * (0.58 + 0.42 * causticsL));
+              baseR = toneRgb[0] + (prismRgb[0] - toneRgb[0]) * dW; baseG = toneRgb[1] + (prismRgb[1] - toneRgb[1]) * dW; baseB = toneRgb[2] + (prismRgb[2] - toneRgb[2]) * dW;
+              const dm = min(0.9, 0.26 + ep2 * 0.64);
+              dotR = (customMode ? toneRgb[0] * 0.86 : 32) * (1 - dm) + prismRgb[0] * 0.92 * dm;
+              dotG = (customMode ? toneRgb[1] * 0.86 : 85) * (1 - dm) + prismRgb[1] * 0.92 * dm;
+              dotB = (customMode ? toneRgb[2] * 0.86 : 202) * (1 - dm) + prismRgb[2] * 0.92 * dm;
             }
             let dotBoost = 0;
             if (hasPrism || hasSurge) {
               if (dark && hasPrism) {
                 sTone(true, pPhase + 0.18, prismRgb);
-                const wing = smooth((field - 0.04) / 0.32) * (1 - 0.18 * smooth((field - 0.72) / 0.27));
-                const caustics = 0.62 + 0.38 * smooth((jut + 0.24) / 0.5);
-                const wPrism = min(0.92, (0.35 + 0.65 * effPrism) * wing * caustics);
-                baseR += (prismRgb[0] - baseR) * wPrism;
-                baseG += (prismRgb[1] - baseG) * wPrism;
-                baseB += (prismRgb[2] - baseB) * wPrism;
+                const wP = min(0.92, (0.35 + 0.65 * effPrism) * smooth((field - 0.04) / 0.32) * (1 - 0.18 * smooth((field - 0.72) / 0.27)) * (0.62 + 0.38 * smooth((jut + 0.24) / 0.5)));
+                baseR += (prismRgb[0] - baseR) * wP; baseG += (prismRgb[1] - baseG) * wP; baseB += (prismRgb[2] - baseB) * wP;
               }
-              if (surge > 0.0001) {
-                const sp = min(1, surge);
-                const sEnv = sin(sp * M.PI) * (1 - 0.32 * sp);
-                const xRel = (uvX - 0.5) * 2;
-                const xSpan = smooth(uvX / 0.22) * (1 - smooth((uvX - 0.78) / 0.22));
-                const frontY = 1.15 * (1 - pow(1 - sp, 1.45)) - 0.15 * xRel * xRel + 0.06 * jut;
-                const dy = yNorm - frontY;
+              if (sp0) {
+                const xRel = (uvX - 0.5) * 2, xSpan = smooth(uvX / 0.22) * (1 - smooth((uvX - 0.78) / 0.22)), dy = yNorm - (fY0 - 0.15 * xRel * xRel + 0.06 * jut);
                 const arc = (dy >= 0 ? exp(-dy * dy * 24) : exp(-dy * dy * 5.2)) * sEnv * xSpan;
                 field = min(1, field + arc * 0.52 * (dark ? presence : 1));
-                sTone(dark, pPhase + dy * 1.3 - sp * 0.35, surgeRgb);
-                const leadR = customMode ? surgeRgb[0] : (dark ? 92 : 37);
-                const leadG = customMode ? surgeRgb[1] : (dark ? 198 : 99);
-                const leadB = customMode ? surgeRgb[2] : (dark ? 252 : 235);
-                const wArc = min(0.88, arc * 0.82);
-                baseR += (leadR * 0.34 + surgeRgb[0] * 0.66 - baseR) * wArc;
-                baseG += (leadG * 0.34 + surgeRgb[1] * 0.66 - baseG) * wArc;
-                baseB += (leadB * 0.34 + surgeRgb[2] * 0.66 - baseB) * wArc;
+                sTone(dark, pPhase + dy * 1.3 - sp0 * 0.35, surgeRgb);
+                const wA = min(0.88, arc * 0.82);
+                baseR += ((customMode ? surgeRgb[0] : dark ? 92 : 37) * 0.34 + surgeRgb[0] * 0.66 - baseR) * wA;
+                baseG += ((customMode ? surgeRgb[1] : dark ? 198 : 99) * 0.34 + surgeRgb[1] * 0.66 - baseG) * wA;
+                baseB += ((customMode ? surgeRgb[2] : dark ? 252 : 235) * 0.34 + surgeRgb[2] * 0.66 - baseB) * wA;
                 dotBoost += arc * 0.58 * (dark ? presence : 1);
-              } else if (surge < -0.0001) {
-                const cp = min(1, -surge);
-                const cEnv = sin(cp * M.PI) * (1 - 0.28 * cp);
-                const rx = abs(uvX - 0.5);
-                const ringR = 0.04 + 0.43 * (1 - pow(1 - cp, 1.35));
-                const dr = (rx - ringR) / 0.135;
-                const hRip = exp(-dr * dr) + 0.32 * (1 - cp) * expClamp(rx * rx * 18);
-                const setY = 0.70 * pow(1 - cp, 1.35) + 0.04;
-                const dsy = yNorm - setY;
-                const vSet = exp(-dsy * dsy * 13.5) * (1 - smooth((yNorm - 1.05) / 0.3));
-                const chime = hRip * vSet * cEnv;
+              } else if (cp0) {
+                const rx = abs(uvX - 0.5), dr = (rx - rR0) / 0.135, dsy = yNorm - sY0;
+                const chime = (exp(-dr * dr) + 0.32 * (1 - cp0) * expClamp(rx * rx * 18)) * exp(-dsy * dsy * 13.5) * (1 - smooth((yNorm - 1.05) / 0.3)) * cEnv;
                 field = min(1, field + chime * 0.46 * (dark ? presence : 1));
-                sTone(dark, uvX * 1.5 + rx * 2 - cp * 0.35, surgeRgb);
-                const cr = customMode ? surgeRgb[0] : (dark ? (214 * 0.78 + surgeRgb[0] * 0.22) : (2 * 0.55 + surgeRgb[0] * 0.45));
-                const cg = customMode ? surgeRgb[1] : (dark ? (238 * 0.78 + surgeRgb[1] * 0.22) : (132 * 0.55 + surgeRgb[1] * 0.45));
-                const cb = customMode ? surgeRgb[2] : (dark ? (255 * 0.78 + surgeRgb[2] * 0.22) : (199 * 0.55 + surgeRgb[2] * 0.45));
-                const wChime = min(0.88, chime * 0.84);
-                baseR += (cr - baseR) * wChime;
-                baseG += (cg - baseG) * wChime;
-                baseB += (cb - baseB) * wChime;
+                sTone(dark, uvX * 1.5 + rx * 2 - cp0 * 0.35, surgeRgb);
+                const wC = min(0.88, chime * 0.84);
+                baseR += ((customMode ? surgeRgb[0] : dark ? 214 * 0.78 + surgeRgb[0] * 0.22 : 2 * 0.55 + surgeRgb[0] * 0.45) - baseR) * wC;
+                baseG += ((customMode ? surgeRgb[1] : dark ? 238 * 0.78 + surgeRgb[1] * 0.22 : 132 * 0.55 + surgeRgb[1] * 0.45) - baseG) * wC;
+                baseB += ((customMode ? surgeRgb[2] : dark ? 255 * 0.78 + surgeRgb[2] * 0.22 : 199 * 0.55 + surgeRgb[2] * 0.45) - baseB) * wC;
                 dotBoost += chime * 0.42 * (dark ? presence : 1);
               }
             }
             if (dark ? field < 0.008 : field * effPresL < 0.008) continue;
-            const gx = (cssX - cssW * 0.5) * persp;
-            const gy = gyBase + 10 * sin(gx * 0.007 + timeSec * 0.42) - timeSec * 1.4;
-            const cellX = gx / 7 - floor(gx / 7) - 0.5;
-            const cellY = gy / 7 - floor(gy / 7) - 0.5;
-            const dist = sqrt(cellX * cellX + cellY * cellY);
+            const gx = (cssX - cssW * 0.5) * persp, gy = gyBase + 10 * sin(gx * 0.007 + timeSec * 0.42) - timeSec * 1.4;
+            const cX = gx / 7 - floor(gx / 7) - 0.5, cY = gy / 7 - floor(gy / 7) - 0.5, dist = sqrt(cX * cX + cY * cY);
             const band = min(1, smooth((field - 0.25) / 0.25) * (1 - smooth((field - 0.72) / 0.26)) + dotBoost);
             let fillA, dotA, R, G, B;
             if (dark) {
-              dotA = dist < 0.26 ? (1 - smooth((dist - 0.12) / 0.14)) * band * 0.65 : 0;
-              fillA = field * 0.48;
-              const dLift = spectrumCode === 5 ? 36 : 56;
-              R = cl255(baseR + dotA * (spectrumCode === 5 ? 36 : 72));
-              G = cl255(baseG + dotA * dLift);
-              B = cl255(baseB + dotA * (spectrumCode === 5 ? 38 : 24));
+              dotA = dist < 0.26 ? (1 - smooth((dist - 0.12) / 0.14)) * band * 0.65 : 0; fillA = field * 0.48;
+              const dL = spectrumCode === 5 ? 36 : 56;
+              R = cl255(baseR + dotA * (spectrumCode === 5 ? 36 : 72)); G = cl255(baseG + dotA * dL); B = cl255(baseB + dotA * (spectrumCode === 5 ? 38 : 24));
             } else {
               fillA = min(0.84, field * 0.66 * washGainL * effPresL);
               dotA = dist < 0.24 ? min(0.88, (1 - smooth((dist - 0.14) / 0.1)) * band * (0.52 + 0.44 * sqrt(fillA)) * effPresL) : 0;
-              const hotL = 0.24 * smooth((field - 0.65) / 0.35);
-              const ancR = customMode ? baseR * 0.85 : 46;
-              const ancG = customMode ? baseG * 0.85 : 92;
-              const ancB = customMode ? baseB * 0.85 : 235;
-              const inkR = baseR * (1 - hotL) + ancR * hotL;
-              const inkG = baseG * (1 - hotL) + ancG * hotL;
-              const inkB = baseB * (1 - hotL) + ancB * hotL;
-              const compA = fillA + dotA * (1 - fillA);
+              const hL = 0.24 * smooth((field - 0.65) / 0.35), compA = fillA + dotA * (1 - fillA);
               if (compA <= 0.002) continue;
-              const wFill = (fillA * (1 - dotA)) / compA;
-              const wDot = dotA / compA;
-              R = cl255(inkR * wFill + dotR * wDot);
-              G = cl255(inkG * wFill + dotG * wDot);
-              B = cl255(inkB * wFill + dotB * wDot);
+              const wF = (fillA * (1 - dotA)) / compA, wD = dotA / compA;
+              R = cl255((baseR * (1 - hL) + (customMode ? baseR * 0.85 : 46) * hL) * wF + dotR * wD);
+              G = cl255((baseG * (1 - hL) + (customMode ? baseG * 0.85 : 92) * hL) * wF + dotG * wD);
+              B = cl255((baseB * (1 - hL) + (customMode ? baseB * 0.85 : 235) * hL) * wF + dotB * wD);
             }
-            const outA = cl01(fillA + dotA * (1 - fillA));
-            const A = round(outA * 255) & 255;
+            const A = round(cl01(fillA + dotA * (1 - fillA)) * 255) & 255;
             if (A === 0) continue;
             const packed = LITTLE_ENDIAN ? ((A << 24) | (B << 16) | (G << 8) | R) >>> 0 : ((R << 24) | (G << 16) | (B << 8) | A) >>> 0;
-            for (let sy = 0; sy < step && py + sy < h; sy++) {
-              const rowOff = (py + sy) * w + px;
-              for (let sx = 0; sx < step && px + sx < w; sx++) {
-                pixels[rowOff + sx] = packed;
-              }
-            }
+            for (let sy = 0; sy < step && py + sy < h; sy++) for (let sx = 0, ro = (py + sy) * w + px; sx < step && px + sx < w; sx++) pixels[ro + sx] = packed;
           }
         }
         ctx.putImageData(image, 0, 0);
@@ -2210,6 +2237,7 @@ outColor = clamp(vec4(premulRgb, outAlpha), 0.0, 1.0);
   return {
     RIPPLE, SPECTRUM, SPECTRUM_LIGHT, HORIZON_SPECTRUM, HORIZON_PRISM_STOPS, HORIZON_DAYLIGHT_STOPS,
     HORIZON_SPECTRUM_MODES, HORIZON_SEMANTIC_MODES, HORIZON_FRAGMENT_SHADER, GLOW_VERT_SHADER, GLOW_FRAG_SHADER,
+    VERTEX_SHADER, FRAGMENT_SHADER, getGlyphSpectrumStops, computeHorizonUniforms,
     DEFAULT_HORIZON_AURA, GLYPHS, hash, valueNoise, fractalNoise, glyphIndex, cloudClear, patchClear,
     spectrumRgb, horizonPrismRgb, resolveHorizonSpectrumCode, resolveHorizonSemanticCode, resolveHorizonDpr,
     computeNebulaLobes, createWaveField, parseCssColorToRgb, parseAmbientScale, createGlyphField, mountBrandHorizonGlow,

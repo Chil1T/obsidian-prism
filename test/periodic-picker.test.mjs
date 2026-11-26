@@ -2807,8 +2807,10 @@ test('V7 Bottom-Out Slam (115ms confirmSlamMs, lift -> 0) & Ceramic Acoustics ze
   assert.equal(inst.isOpen(), false, 'Picker must cleanly close after 115ms confirmSlamMs');
   assert.equal(env.document.getElementById('ag-prism-periodic-picker-root'), null);
   assert.equal(hostState.selectedModel.label, 'Gemini 4 Hydrogen (High)', 'Second-click confirm must commit model');
-  assert.equal(env.getCounts().activeTimers, 0, 'All timers must be 0 after 115ms confirm close');
+  assert.equal(env.getCounts().activeTimers, 1, 'Normal close arms only the 20s warm-standby reclaim timer');
   assert.equal(env.getCounts().activeRafs, 0, 'All rAFs must be 0 after 115ms confirm close');
+  env.advanceTime(20000);
+  assert.equal(env.getCounts().activeTimers, 0, 'Warm-standby timer must self-clear after 20s');
 
   // 2B) Pressing Escape mid-way through 115ms slam window cancels pending timer & closes cleanly without rollback
   hostState.selectedModel = { label: 'Gemini 4 Carbon (High)', modelId: 'gemini-4-c-high' };
@@ -2832,8 +2834,10 @@ test('V7 Bottom-Out Slam (115ms confirmSlamMs, lift -> 0) & Ceramic Acoustics ze
     'Escape mid-slam must close cleanly while keeping selected host model (no rollback)'
   );
   assert.equal(env.document.getElementById('ag-prism-periodic-picker-root'), null);
-  assert.equal(env.getCounts().activeTimers, 0, 'Escape mid-slam must cancel pending 115ms timer');
+  assert.equal(env.getCounts().activeTimers, 1, 'Escape mid-slam cancels 115ms timer and enters 20s warm standby');
   assert.equal(env.getCounts().activeRafs, 0, 'Escape mid-slam must cancel active rAFs');
+  env.advanceTime(20000);
+  assert.equal(env.getCounts().activeTimers, 0, 'Standby timer clears after 20s');
 
   // 2C) Calling destroy() mid-way through 115ms slam window cancels timers/rAFs/listeners & closes AudioContext
   assert.equal(inst.open(triggerBtn), true);
@@ -3777,6 +3781,11 @@ test('V10 VisionOS Spatial Glass, Minimalist External Reset Capsule (.ag-pp-sr-o
 
   env.advanceTime(120);
   assert.equal(inst.isOpen(), false, 'Picker must close cleanly after 115ms Bottom-Out Slam');
+  assert.equal(env.getCounts().activeRafs, 0, 'Closing picker must immediately cancel rAF to 0fps');
+  assert.equal(env.getCounts().activeTimers, 1, 'Closing picker arms 20s deferred WebGL2 warm-standby timer');
+  assert.equal(glCanvasEl._gl._stats().loseContextCalls, 0, 'Warm standby keeps WebGL2 context alive for 20s');
+
+  env.advanceTime(20000);
   assert.equal(env.getCounts().activeTimers, 0);
   assert.equal(env.getCounts().activeRafs, 0);
 
@@ -3978,7 +3987,7 @@ test('V11 2x3 Aux Macro Pad (auxKeys export, raycast pick, main-aux single-selec
   assert.equal(inst.isOpen(), true);
   env.advanceTime(40);
   assert.equal(inst.isOpen(), false, 'Aux second-click confirm slam must close after 115ms');
-  assert.equal(env.getCounts().activeTimers, 0);
+  assert.equal(env.getCounts().activeTimers, 1, 'Normal close holds 1 deferred 20s warm-standby timer');
   assert.equal(env.getCounts().activeRafs, 0);
 
   // Re-open (host is Orchestrator) -> click main key 6 C -> clears selectedAuxIndex & restores 6C mini-keycap
@@ -6463,16 +6472,18 @@ test('V14.1 Cold-Start Zero Decode, 120ms Pre-Warm, Immediate Close Eviction, Ze
   assert.equal(inst.getStatus().grainDecoded, true);
   inst.close();
   assert.equal(env.getCounts().activeRafs, 0, 'Closing dock must immediately settle to 0fps');
-  assert.equal(env.getCounts().activeTimers, 0, 'Closing dock must leave 0 idle eviction timers');
+  assert.equal(env.getCounts().activeTimers, 1, 'Closing dock arms 20s deferred WebGL2 warm-standby timer');
   assert.equal(audioCloseCount >= 1 && inst.getStatus().audioState === 'none', true, 'Closing dock must immediately close/release AudioContext');
   assert.ok(inst.getStatus().cachedWallpapers >= 1, 'Normal close retains warm decoded wallpaper cache for fast reopen');
   assert.equal(inst.getStatus().grainDecoded, true, 'Normal close retains warm decoded PBR grain cache for fast reopen');
 
-  // Window backgrounding (visibilitychange: hidden) must immediately evict all heavy caches
+  // Window backgrounding (visibilitychange: hidden) evicts heavy caches immediately & shortens standby reclaim to 2000ms
   env.document.visibilityState = 'hidden';
   env.document.dispatchEvent(env.createEventObj('visibilitychange'));
   assert.equal(inst.getStatus().cachedWallpapers, 0, 'Backgrounding window must IMMEDIATELY evict cached offscreen wallpaper Images');
   assert.equal(inst.getStatus().grainDecoded, false, 'Backgrounding window must IMMEDIATELY evict decoded PBR grain TypedArrays');
+  env.advanceTime(2000);
+  assert.equal(env.getCounts().activeTimers, 0, 'Backgrounded standby timer must reclaim WebGL2 within 2000ms');
   env.document.visibilityState = 'visible';
   env.document.dispatchEvent(env.createEventObj('visibilitychange'));
 
@@ -6629,7 +6640,9 @@ test('V14.1 Deep Bug Regression Suite: Animated Drawer Close Immediate Eviction,
   env.advanceTime(450);
   assert.equal(inst.isOpen(), false, 'Animated drawer close completed');
   assert.equal(env.getCounts().activeRafs, 0, 'Animated drawer close must settle to 0fps');
-  assert.equal(env.getCounts().activeTimers, 0, 'Animated drawer close must leave 0 active timers');
+  assert.equal(env.getCounts().activeTimers, 1, 'Animated drawer close arms 20s warm-standby reclaim timer');
+  env.advanceTime(20000);
+  assert.equal(env.getCounts().activeTimers, 0, 'Standby timer must clear after 20s');
 
   inst.destroy();
   assert.equal(inst.getStatus().cachedWallpapers, 0, 'destroy() MUST immediately evict cached wallpapers');
@@ -7795,23 +7808,24 @@ test('v1.0.8-beta perf-dom-bg: 3D hit-layer pointer isolation, event bubble fire
     assert.equal(rootEl.style.getPropertyValue(rootVar), '', `Root container must never receive ${rootVar}`);
   }
 
-  // 4) 热开离屏 DOM 壳复用 + 替换全新 <canvas> + close() 零残留 + hidden 立即释放
+  // 4) 20s 热待机瞬开（复用离屏 DOM 壳 + 活 WebGL2 <canvas>）+ hidden 2s 延迟回收
   inst.close();
   assert.equal(env.document.getElementById('ag-prism-periodic-picker-root'), null, 'Closed picker must detach root from DOM');
   assert.equal(inst.open(triggerBtn), true);
   const rootEl2 = env.document.getElementById('ag-prism-periodic-picker-root');
   const canvas2 = rootEl2.querySelector('.ag-pp-gl-canvas');
-  assert.equal(rootEl2, rootEl, 'Warm reopen must reuse cached detached DOM shell (0 501-node rebuild)');
-  assert.notEqual(canvas2, canvas1, 'Warm reopen must swap in a fresh <canvas> to avoid lost WebGL context');
+  assert.equal(rootEl2, rootEl, 'Warm reopen within 20s must reuse cached detached DOM shell (0 501-node rebuild)');
+  assert.equal(canvas2, canvas1, 'Warm reopen within 20s must reuse live warm-standby <canvas> without WebGL2 cold rebuild');
 
   inst.close();
   env.document.visibilityState = 'hidden';
   env.document.dispatchEvent(env.createEventObj('visibilitychange'));
+  env.advanceTime(2000);
   env.document.visibilityState = 'visible';
   env.document.dispatchEvent(env.createEventObj('visibilitychange'));
   assert.equal(inst.open(triggerBtn), true);
   const rootEl3 = env.document.getElementById('ag-prism-periodic-picker-root');
-  assert.notEqual(rootEl3, rootEl, 'visibilitychange(hidden) must evict detached shell cache');
+  assert.notEqual(rootEl3, rootEl, 'visibilitychange(hidden) + 2000ms must reclaim warm-standby renderer and evict detached shell cache');
 
   // 5) 背景模块 data-ag-pp-open="1" 真 0fps 休眠静态/行为核验
   const hostI18nMod = require(HOST_I18N_FILE);

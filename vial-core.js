@@ -14,7 +14,6 @@
 
   const clampFillVal = (v) => Math.max(0.06, Math.min(0.95, Number.isFinite(+v) ? +v : 0.46));
 
-  // 高阻尼光学水平仪流体舱物理模拟器
   function createWaterVialPhysics(initialOptions = {}) {
     const waveH = new Float32Array(WAVE_NODES), waveV = new Float32Array(WAVE_NODES);
     let fill = clampFillVal(initialOptions.fill ?? 0.46), targetFill = fill, streaming = initialOptions.streaming !== false;
@@ -342,8 +341,9 @@
 
   // ── WebGL2 Antigravity Prism 512K 光学水试管 Shader（深空电离 + 白昼高硼硅晴空蓝实验室玻璃） ──
   const VERT_SRC = `#version 300 es
+    precision highp float;
     in vec2 a_pos;
-    out vec2 v_uv;
+    out highp vec2 v_uv;
     void main() {
       v_uv = a_pos * 0.5 + 0.5;
       gl_Position = vec4(a_pos, 0.0, 1.0);
@@ -351,15 +351,16 @@
   `;
 
   const FRAG_SRC = `#version 300 es
-    precision highp float;
-    in vec2 v_uv;
+    precision mediump float;
+    in highp vec2 v_uv;
     out vec4 outColor;
 
-    uniform vec2 u_res;
-    uniform float u_time;
+    uniform highp vec2 u_res;
+    uniform highp float u_time;
     uniform float u_dark;
     uniform float u_fill;
     uniform float u_tilt;
+    uniform vec3 u_tiltTrig;
     uniform vec3 u_tint;
     uniform float u_camp;
     uniform float u_accent;
@@ -368,46 +369,46 @@
     uniform float u_wetL;
     uniform float u_wetR;
     uniform float u_hoverSlice;
-    uniform float u_wave[24];
+    uniform sampler2D u_waveTex;
+    uniform sampler2D u_scaleTex;
+    uniform float u_wave;
+    uniform float u_raySlope;
     uniform vec4 u_drops[4];
     uniform vec4 u_bubbles[8];
     uniform vec2 u_bubShape[8];
-    uniform float u_raySlope[24];
     uniform vec3 u_ratios;
 
-    const float CX = 34.0;
-    const float R_OUT = 21.6;
-    const float R_IN = 19.6;
-    const float TOP_OUT = 18.5;
-    const float TOP_IN = 20.5;
-    const float LIP_Y = 18.5;
-    const float HEM_Y = 175.0;
-    const float FLOOR_OUT = 198.0;
-    const float FLOOR_IN = 195.0;
-    const float RC_OUT = 14.5;
-    const float RC_IN = 12.5;
-    const float H_BOX_OUT = 89.75;
-    const float Y_MID_OUT = 108.25;
-    const float H_BOX_IN = 87.25;
-    const float Y_MID_IN = 107.75;
+    const highp float CX = 34.0;
+    const highp float R_OUT = 21.6;
+    const highp float R_IN = 19.6;
+    const highp float TOP_OUT = 18.5;
+    const highp float TOP_IN = 20.5;
+    const highp float LIP_Y = 18.5;
+    const highp float HEM_Y = 175.0;
+    const highp float FLOOR_OUT = 198.0;
+    const highp float FLOOR_IN = 195.0;
+    const highp float RC_OUT = 14.5;
+    const highp float RC_IN = 12.5;
+    const highp float H_BOX_OUT = 89.75;
+    const highp float Y_MID_OUT = 108.25;
+    const highp float H_BOX_IN = 87.25;
+    const highp float Y_MID_IN = 107.75;
 
-    // 深色深空连续电离色阶：#0F173A -> #1B49B2 -> #3186FF -> #5CC6FC
     const vec3 ION_DEEP = vec3(0.059, 0.090, 0.227);
     const vec3 ION_SYS = vec3(0.106, 0.286, 0.698);
     const vec3 ION_CONV = vec3(0.192, 0.525, 1.000);
     const vec3 ION_TOOL = vec3(0.361, 0.776, 0.988);
     const vec3 ION_HAZE = vec3(0.690, 0.875, 1.000);
 
-    // 白昼高硼硅实验室玻璃 & 皇家钴蓝至晴空蔚蓝电离光谱
-    const vec3 DAY_AIR = vec3(0.880, 0.920, 0.980);       // 清透冰川淡蓝灰管腔底衬
-    const vec3 DAY_RIM_REF = vec3(0.118, 0.251, 0.686);   // rgba(30, 64, 175, 0.28) 玻璃折射暗边
-    const vec3 DAY_ROYAL = vec3(0.114, 0.306, 0.847);     // #1D4ED8 深邃皇家钴蓝
-    const vec3 DAY_COBALT = vec3(0.145, 0.388, 0.922);    // #2563EB 鲜亮宝石钴蓝
-    const vec3 DAY_SKY = vec3(0.008, 0.518, 0.780);       // #0284C7 浓郁晴空蔚蓝
-    const vec3 DAY_CROWN = vec3(0.055, 0.600, 0.885);     // 晴空折射顶冠
-    const vec3 DAY_MENISCUS = vec3(0.016, 0.275, 0.635);  // 高对比度靛青弯月面刀锋
-    const vec3 DAY_VIOLET = vec3(0.486, 0.227, 0.929);    // #7C3AED 高负载浓郁紫晶
-    const vec3 DAY_AMBER_RED = vec3(0.918, 0.345, 0.047); // #EA580C 临界琥珀红
+    const vec3 DAY_AIR = vec3(0.880, 0.920, 0.980);
+    const vec3 DAY_RIM_REF = vec3(0.118, 0.251, 0.686);
+    const vec3 DAY_ROYAL = vec3(0.114, 0.306, 0.847);
+    const vec3 DAY_COBALT = vec3(0.145, 0.388, 0.922);
+    const vec3 DAY_SKY = vec3(0.008, 0.518, 0.780);
+    const vec3 DAY_CROWN = vec3(0.055, 0.600, 0.885);
+    const vec3 DAY_MENISCUS = vec3(0.016, 0.275, 0.635);
+    const vec3 DAY_VIOLET = vec3(0.486, 0.227, 0.929);
+    const vec3 DAY_AMBER_RED = vec3(0.918, 0.345, 0.047);
 
     // 阵营色偏参考常量 & 深色临界态琥珀熔金色阶
     const vec3 CLD_CONV = vec3(0.820, 0.490, 0.280);
@@ -426,42 +427,49 @@
       alpha = outA;
     }
 
-    float roundedBoxSdf(vec2 p, vec2 halfExt, float r) {
-      vec2 d = abs(p) - (halfExt - vec2(r));
+    highp float roundedBoxSdf(highp vec2 p, highp vec2 halfExt, highp float r) {
+      highp vec2 d = abs(p) - (halfExt - vec2(r));
       return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - r;
+    }
+
+    float waveAt(int idx) {
+      vec2 rg = texelFetch(u_waveTex, ivec2(idx, 0), 0).rg;
+      return (rg.r * 65280.0 + rg.g * 255.0) * (32.0 / 65535.0) - 16.0;
     }
 
     float sampleWave(float uNorm) {
       float t = clamp((uNorm + 1.0) * 0.5, 0.0, 1.0) * 23.0;
       int i1 = int(clamp(floor(t), 0.0, 22.0));
       float f = t - float(i1);
-      float p0 = u_wave[max(i1 - 1, 0)];
-      float p1 = u_wave[i1];
-      float p2 = u_wave[i1 + 1];
-      float p3 = u_wave[min(i1 + 2, 23)];
-      return 0.5 * (2.0 * p1 + (-p0 + p2) * f + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * f * f + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * f * f * f);
+      float f2 = f * f;
+      float p0 = waveAt(max(i1 - 1, 0));
+      float p1 = waveAt(i1);
+      float p2 = waveAt(i1 + 1);
+      float p3 = waveAt(min(i1 + 2, 23));
+      return 0.5 * (2.0 * p1 + (-p0 + p2) * f + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * f2 + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * f2 * f);
     }
 
-    float waveCurvature(float uNorm) {
-      float du = 0.10;
-      return sampleWave(uNorm - du) + sampleWave(uNorm + du) - 2.0 * sampleWave(uNorm);
+    float fastAsin(float x) {
+      float a = abs(x);
+      float r = 1.5707963 - sqrt(max(0.0, 1.0 - a)) * (1.5707288 + a * (-0.2121144 + a * (0.0742610 - 0.0187293 * a)));
+      return x < 0.0 ? -r : r;
     }
 
-    float hash12(vec2 p) {
-      vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    float hash12(highp vec2 p) {
+      highp vec3 p3 = fract(vec3(p.xyx) * 0.1031);
       p3 += dot(p3, p3.yzx + 33.33);
       return fract((p3.x + p3.y) * p3.z);
     }
 
-    float vNoise(vec2 p) {
-      vec2 i = floor(p);
+    float vNoise(highp vec2 p) {
+      highp vec2 i = floor(p);
       vec2 f = fract(p);
       vec2 u = f * f * (3.0 - 2.0 * f);
       return mix(mix(hash12(i), hash12(i + vec2(1.0, 0.0)), u.x),
                  mix(hash12(i + vec2(0.0, 1.0)), hash12(i + vec2(1.0, 1.0)), u.x), u.y);
     }
 
-    float fbm3(vec2 p) {
+    float fbm3(highp vec2 p) {
       float v = 0.0;
       float a = 0.5;
       for (int i = 0; i < 3; i++) {
@@ -472,22 +480,21 @@
       return v;
     }
 
-    float capsuleHalfWidth(float yPx, float topY, float botY, float rSide, float rc) {
+    highp float capsuleHalfWidth(highp float yPx, highp float topY, highp float botY, highp float rSide, highp float rc) {
       if (yPx < topY || yPx > botY) return 0.0;
-      float cyT = topY + rc;
+      highp float cyT = topY + rc;
       if (yPx < cyT) {
-        float dt = cyT - yPx;
+        highp float dt = cyT - yPx;
         return rSide - rc + sqrt(max(0.0, rc * rc - dt * dt));
       }
-      float cyB = botY - rc;
+      highp float cyB = botY - rc;
       if (yPx > cyB) {
-        float db = yPx - cyB;
+        highp float db = yPx - cyB;
         return rSide - rc + sqrt(max(0.0, rc * rc - db * db));
       }
       return rSide;
     }
 
-    // 连续电离能量渐变采样：深色深海靛青 vs 白昼皇家钴蓝-晴空蔚蓝（支持 cobalt / iris / amber / mono 四档强调色）
     vec3 evalHorizonSpectrum(float hFrac) {
       float h = clamp(hFrac, 0.0, 1.0);
       if (u_dark > 0.5) {
@@ -516,8 +523,7 @@
         sea = mix(sea, ION_CONV, smoothstep(0.30, 0.78, h));
         sea = mix(sea, ION_TOOL, smoothstep(0.68, 1.00, h));
         vec3 darkCamp = mix(CAMP_INDIGO, CAMP_ASTRAL, smoothstep(0.22, 0.96, h));
-        vec3 campTinted = mix(sea, darkCamp, u_camp * 0.22);
-        return mix(campTinted, crit, u_critical);
+        return mix(mix(sea, darkCamp, u_camp * 0.22), crit, u_critical);
       }
 
       vec3 dayCrit = mix(DAY_VIOLET * 0.86, DAY_VIOLET, smoothstep(0.0, 0.34, h));
@@ -525,36 +531,29 @@
       dayCrit = mix(dayCrit, vec3(0.960, 0.560, 0.065), smoothstep(0.76, 1.00, h));
       if (u_accent > 2.5) {
         vec3 dayMono = mix(vec3(0.153, 0.153, 0.165), vec3(0.322, 0.322, 0.357), smoothstep(0.0, 0.50, h));
-        dayMono = mix(dayMono, vec3(0.455, 0.455, 0.490), smoothstep(0.45, 1.00, h));
-        return mix(dayMono, dayCrit, u_critical);
+        return mix(mix(dayMono, vec3(0.455, 0.455, 0.490), smoothstep(0.45, 1.00, h)), dayCrit, u_critical);
       }
       if (u_accent > 1.5) {
         vec3 dayAmb = mix(vec3(0.706, 0.325, 0.035), vec3(0.851, 0.467, 0.024), smoothstep(0.0, 0.50, h));
-        dayAmb = mix(dayAmb, vec3(0.961, 0.620, 0.043), smoothstep(0.45, 1.00, h));
-        return mix(dayAmb, dayCrit, u_critical);
+        return mix(mix(dayAmb, vec3(0.961, 0.620, 0.043), smoothstep(0.45, 1.00, h)), dayCrit, u_critical);
       }
       if (u_accent > 0.5) {
         vec3 dayIris = mix(vec3(0.357, 0.129, 0.714), vec3(0.486, 0.227, 0.929), smoothstep(0.0, 0.50, h));
-        dayIris = mix(dayIris, vec3(0.659, 0.333, 0.969), smoothstep(0.45, 1.00, h));
-        return mix(dayIris, dayCrit, u_critical);
+        return mix(mix(dayIris, vec3(0.659, 0.333, 0.969), smoothstep(0.45, 1.00, h)), dayCrit, u_critical);
       }
-
-      // 白昼高对比晴空蔚蓝 -> 皇家钴蓝光谱（#1D4ED8 -> #2563EB -> #0284C7）
       vec3 daySea = mix(DAY_ROYAL, DAY_COBALT, smoothstep(0.0, 0.48, h));
       daySea = mix(daySea, DAY_SKY, smoothstep(0.42, 0.88, h));
       daySea = mix(daySea, DAY_CROWN, smoothstep(0.82, 1.00, h));
       daySea = mix(daySea, mix(DAY_VIOLET, CLD_CONV, 0.32 * h), u_camp * 0.20);
-
-      // 高负载预警：平滑融入浓郁紫晶 #7C3AED -> 临界琥珀红 #EA580C
       float warnShift = smoothstep(0.68, 0.85, u_fill);
-      vec3 warnSpec = mix(DAY_ROYAL, DAY_VIOLET, smoothstep(0.10, 0.78, h));
-      daySea = mix(daySea, warnSpec, warnShift * 0.68);
+      daySea = mix(daySea, mix(DAY_ROYAL, DAY_VIOLET, smoothstep(0.10, 0.78, h)), warnShift * 0.68);
       return mix(daySea, dayCrit, u_critical);
     }
 
-    void drawIonDroplet(inout vec3 col, inout float alpha, vec2 px, vec2 center, float rad, vec3 dropCol, float darkMode) {
+    void drawIonDroplet(inout vec3 col, inout float alpha, highp vec2 px, highp vec2 center, float rad, vec3 dropCol, float darkMode) {
       vec2 p = px - center;
-      if (dot(p, p) > (rad * 2.2 + 2.0) * (rad * 2.2 + 2.0)) return;
+      float rLim = rad * 2.2 + 2.0;
+      if (dot(p, p) > rLim * rLim) return;
       vec2 q = vec2(p.x * 1.15, (p.y + 0.35 * rad) * 0.68);
       float rn = length(q) / max(0.7, rad);
       float halo = exp(-rn * rn * 2.4);
@@ -570,40 +569,41 @@
     }
 
     void main() {
-      vec2 px = vec2(v_uv.x * 96.0, (1.0 - v_uv.y) * 220.0);
-      float dx = px.x - CX;
+      highp vec2 scaleUv = vec2(v_uv.x, 1.0 - v_uv.y);
+      highp vec2 px = vec2(v_uv.x * 96.0, scaleUv.y * 220.0);
+      highp float dx = px.x - CX;
 
       // 1. 一体封闭式修长圆角高硼硅/暗曜石纯透晶舱精确 SDF
-      float sdfOut = roundedBoxSdf(vec2(dx, px.y - Y_MID_OUT), vec2(R_OUT, H_BOX_OUT), RC_OUT);
-      float distOut = -sdfOut;
+      highp float sdfOut = roundedBoxSdf(vec2(dx, px.y - Y_MID_OUT), vec2(R_OUT, H_BOX_OUT), RC_OUT);
+      highp float distOut = -sdfOut;
       if (distOut <= -0.8) {
-        outColor = vec4(0.0);
+        outColor = texture(u_scaleTex, scaleUv);
         return;
       }
 
-      float sdfIn = roundedBoxSdf(vec2(dx, px.y - Y_MID_IN), vec2(R_IN, H_BOX_IN), RC_IN);
-      float distIn = -sdfIn;
-      float rOutAtY = capsuleHalfWidth(px.y, TOP_OUT, FLOOR_OUT, R_OUT, RC_OUT);
-      float rInAtY = capsuleHalfWidth(px.y, TOP_IN, FLOOR_IN, R_IN, RC_IN);
+      highp float sdfIn = roundedBoxSdf(vec2(dx, px.y - Y_MID_IN), vec2(R_IN, H_BOX_IN), RC_IN);
+      highp float distIn = -sdfIn;
+      highp float rOutAtY = capsuleHalfWidth(px.y, TOP_OUT, FLOOR_OUT, R_OUT, RC_OUT);
+      highp float rInAtY = capsuleHalfWidth(px.y, TOP_IN, FLOOR_IN, R_IN, RC_IN);
       bool inInnerBore = distIn > -0.6;
 
       vec3 col = vec3(0.0);
       float alpha = 0.0;
 
       // 2. 实时 3D 液位与电离激光弯月面坐标
-      float topChamber = LIP_Y + 8.0;
-      float botChamber = HEM_Y + 14.0;
-      float baseSurfY = botChamber - u_fill * (botChamber - topChamber);
+      highp float topChamber = LIP_Y + 8.0;
+      highp float botChamber = HEM_Y + 14.0;
+      highp float baseSurfY = botChamber - u_fill * (botChamber - topChamber);
       float uIn = (rInAtY > 0.5) ? clamp(dx / rInAtY, -1.0, 1.0) : clamp(dx / R_IN, -1.0, 1.0);
       float au = abs(uIn);
-      float slopeTilt = tan(u_tilt) * dx;
+      float slopeTilt = u_tiltTrig.z * dx;
       float waveDisp = sampleWave(uIn);
-      float capillary = -1.55 * pow(au, 3.0);
+      float capillary = -1.55 * (au * au * au);
 
-      float surfCenterY = baseSurfY + slopeTilt + waveDisp + capillary;
+      highp float surfCenterY = baseSurfY + slopeTilt + waveDisp + capillary;
       float perspAmp = (rInAtY > 0.0) ? (0.205 * rInAtY * sqrt(max(0.0, 1.0 - uIn * uIn))) : 0.0;
-      float surfBackY = surfCenterY - perspAmp;
-      float surfFrontY = surfCenterY + perspAmp;
+      highp float surfBackY = surfCenterY - perspAmp;
+      highp float surfFrontY = surfCenterY + perspAmp;
 
       float sumR = max(1e-3, u_ratios.x + u_ratios.y + u_ratios.z);
       float colH = max(12.0, FLOOR_IN - baseSurfY);
@@ -614,25 +614,25 @@
       // 3. 玻璃舱空气底衬与白昼高硼硅深蓝折射侧壁
       float bodyAA = smoothstep(-0.55, 0.45, distOut);
       float uOut = clamp(dx / max(1.0, rOutAtY), -1.0, 1.0);
-      float lensCurve = pow(abs(uOut), 2.6);
+      float auOut = abs(uOut), auOut2 = auOut * auOut, auOutS = sqrt(auOut);
+      float lensCurve = auOut2 * auOutS;
       vec3 airBackCol = u_dark > 0.5 ? vec3(0.045, 0.068, 0.125) : DAY_AIR;
       float airBackA = u_dark > 0.5
-        ? 0.11 * (0.30 + 0.70 * pow(abs(uOut), 3.4))
+        ? 0.11 * (0.30 + 0.70 * (auOut2 * auOut * auOutS))
         : mix(0.26, 0.42, lensCurve);
       layerOver(col, alpha, airBackCol, airBackA * bodyAA);
 
-      // 白昼高硼硅玻璃壁左右深色折射暗边 (Refraction Rim: rgba(30, 64, 175, 0.28)) 与管口/管底厚壁折光
       if (u_dark <= 0.5) {
         float wallBand = smoothstep(3.4, 0.8, distOut) * bodyAA;
-        float sideRefract = smoothstep(0.66, 0.98, abs(uOut)) * bodyAA;
+        float sideRefract = smoothstep(0.66, 0.98, auOut) * bodyAA;
         float capArc = (smoothstep(TOP_OUT + 6.5, TOP_OUT + 1.2, px.y) + smoothstep(FLOOR_OUT - 7.5, FLOOR_OUT - 1.2, px.y)) * bodyAA;
         float refractMask = clamp(max(wallBand * 0.85, sideRefract * 0.92) + capArc * 0.42, 0.0, 1.0);
         layerOver(col, alpha, DAY_RIM_REF, refractMask * 0.28);
       }
 
-      // 顶部圆弧玻璃肩部微米冷折光
       if (px.y < TOP_OUT + RC_OUT) {
-        float domeGlow = exp(-pow((px.y - (TOP_OUT + 2.8)) / 2.2, 2.0) - pow((dx + 5.0) / 10.5, 2.0)) * bodyAA;
+        float dDy = (px.y - (TOP_OUT + 2.8)) / 2.2, dDx = (dx + 5.0) / 10.5;
+        float domeGlow = exp(-dDy * dDy - dDx * dDx) * bodyAA;
         vec3 domeCol = u_dark > 0.5 ? mix(ION_HAZE, vec3(1.0), 0.5) : mix(DAY_COBALT, DAY_SKY, 0.45);
         layerOver(col, alpha, domeCol, domeGlow * mix(0.26, 0.32, u_dark));
       }
@@ -643,7 +643,7 @@
         float depthPx = max(0.0, px.y - surfCenterY);
         float nz = sqrt(max(0.0, 1.0 - uIn * uIn));
 
-        vec2 flowUv = vec2(dx / 25.0, (px.y + u_time * 10.5) / 38.0);
+        highp vec2 flowUv = vec2(dx / 25.0, (px.y + u_time * 10.5) / 38.0);
         float plasma = fbm3(flowUv + vec2(sin(u_time * 0.38) * 0.22, 0.0));
         float field = smoothstep(0.18, 0.84, plasma) * (0.42 + 0.58 * nz);
 
@@ -656,10 +656,9 @@
           ionBody += surfTint * horizonCrown * 0.15;
           float subRim = smoothstep(2.4, 0.35, distIn) * smoothstep(-0.2, 0.5, distIn);
           ionBody = mix(ionBody, mix(surfTint, ION_HAZE, 0.30), subRim * 0.38);
-          float botScatter = exp(-pow(dx / 11.0, 2.0) - pow((px.y - (FLOOR_IN - 3.0)) / 3.6, 2.0));
-          ionBody += mix(ION_CONV, CRIT_CONV, u_critical) * botScatter * 0.16;
+          float bx = dx / 11.0, by = (px.y - (FLOOR_IN - 3.0)) / 3.6;
+          ionBody += mix(ION_CONV, CRIT_CONV, u_critical) * exp(-bx * bx - by * by) * 0.16;
         } else {
-          // 白昼饱满蓝宝石圆柱体积折射：边缘深邃皇家蓝，中心通透晴空蔚蓝，绝不泛白寡淡
           vec3 lightEdge = mix(DAY_ROYAL * 0.72, DAY_VIOLET * 0.68, u_critical);
           vec3 richBody = mix(lightEdge, ionBase, 0.32 + 0.68 * nz);
           ionBody = richBody * (0.88 + 0.16 * nz) * (0.92 + 0.14 * field);
@@ -667,66 +666,74 @@
           ionBody = mix(ionBody, mix(surfTint, vec3(0.75, 0.92, 1.0), 0.36), horizonCrown * 0.28);
           float subRim = smoothstep(2.6, 0.35, distIn) * smoothstep(-0.2, 0.5, distIn);
           ionBody = mix(ionBody, mix(DAY_RIM_REF, DAY_MENISCUS, 0.45), subRim * 0.42);
-          float botScatter = exp(-pow(dx / 11.5, 2.0) - pow((px.y - (FLOOR_IN - 3.2)) / 3.8, 2.0));
-          ionBody += mix(DAY_COBALT, DAY_AMBER_RED, u_critical) * botScatter * 0.18;
+          float bx = dx / 11.5, by = (px.y - (FLOOR_IN - 3.2)) / 3.8;
+          ionBody += mix(DAY_COBALT, DAY_AMBER_RED, u_critical) * exp(-bx * bx - by * by) * 0.18;
         }
 
         layerOver(col, alpha, clamp(ionBody, 0.0, 1.0), boreMask * mix(0.93, 0.91, u_dark));
 
-        // 4b. 失重微米星尘半调点阵
+        // 4b. 失重微米星尘半调点阵（fastAsin 替代 asin）
         if (depthPx > 1.8) {
-          float arcX = asin(clamp(uIn, -0.96, 0.96)) * R_IN;
+          float arcX = fastAsin(clamp(uIn, -0.96, 0.96)) * R_IN;
           float waveSyncY = slopeTilt * 0.85 + waveDisp * 0.75;
-          float pTime = px.y - waveSyncY + u_time * 6.2;
-          vec2 stardustUv = vec2(arcX / 6.0, pTime / 6.0);
-          vec2 cellId = floor(stardustUv);
+          highp float pTime = px.y - waveSyncY + u_time * 6.2;
+          highp vec2 stardustUv = vec2(arcX / 6.0, pTime / 6.0);
+          highp vec2 cellId = floor(stardustUv);
           vec2 cellF = fract(stardustUv) - 0.5;
           float rnd = hash12(cellId + vec2(3.7, 9.1));
-          float jitter = (rnd - 0.5) * 0.28;
-          vec2 starOff = cellF - vec2(jitter, sin(rnd * 6.283 + u_time * 1.2) * 0.12);
+          vec2 starOff = cellF - vec2((rnd - 0.5) * 0.28, sin(rnd * 6.283 + u_time * 1.2) * 0.12);
           float dotRad = mix(0.09, 0.20, smoothstep(0.18, 0.95, rnd));
           float dotMask = (1.0 - smoothstep(dotRad - 0.07, dotRad + 0.03, length(starOff)));
           float upperBoost = 0.32 + 0.68 * exp(-depthPx / 54.0);
           float twinkle = 0.65 + 0.35 * sin(u_time * 2.1 + rnd * 12.566);
           float stardustVis = dotMask * step(0.36, rnd) * upperBoost * twinkle * nz * smoothstep(0.6, 2.5, distIn) * boreMask;
           vec3 baseStar = u_dark > 0.5 ? mix(ION_TOOL, ION_HAZE, 0.62) : vec3(0.92, 0.98, 1.0);
-          vec3 campStar = mix(baseStar, vec3(0.68, 0.75, 1.0), u_camp * 0.42);
-          vec3 starCol = mix(campStar, CRIT_TOOL, u_critical);
+          vec3 starCol = mix(mix(baseStar, vec3(0.68, 0.75, 1.0), u_camp * 0.42), CRIT_TOOL, u_critical);
           layerOver(col, alpha, min(starCol * 1.22, 1.0), stardustVis * mix(0.62, 0.70, u_dark));
         }
 
-        // 4c. 缓升 3D 星尘微粒与晶莹气泡描边 (u_bubbles)
-        for (int i = 0; i < 8; i++) {
-          vec4 b = u_bubbles[i];
-          if (b.w <= 0.0 || px.y < surfCenterY + 1.0) continue;
-          float bRad = b.z;
-          vec2 bp0 = px - vec2(CX + b.x, b.y);
-          if (dot(bp0, bp0) > (bRad * 2.2 + 1.4) * (bRad * 2.2 + 1.4)) continue;
-          float ca = cos(u_bubShape[i].y);
-          float sa = sin(u_bubShape[i].y);
-          vec2 bpr = vec2(ca * bp0.x + sa * bp0.y, -sa * bp0.x + ca * bp0.y);
-          float asp = max(0.65, u_bubShape[i].x);
-          vec2 bp = bpr / vec2(asp, 1.0 / asp);
-          float bd = length(bp) / max(0.6, bRad);
-          float halo = exp(-bd * bd * 1.55) * b.w * boreMask;
-          float sparkCore = (1.0 - smoothstep(0.22, 0.76, bd)) * b.w * boreMask;
-          layerOver(col, alpha, mix(surfTint, ION_HAZE, 0.45), halo * 0.40);
-          if (u_dark <= 0.5) {
-            float bubRim = (1.0 - smoothstep(0.72, 1.08, bd)) * smoothstep(0.42, 0.76, bd) * b.w * boreMask;
-            layerOver(col, alpha, mix(DAY_MENISCUS, DAY_VIOLET, u_critical), bubRim * 0.85);
+        // 4c. 缓升 3D 星尘微粒与晶莹气泡描边（u_tiltTrig 提至循环外，0 cos/sin）
+        if (px.y >= surfCenterY + 1.0) {
+          float ca = u_tiltTrig.x, sa = u_tiltTrig.y;
+          for (int i = 0; i < 8; i++) {
+            vec4 b = u_bubbles[i];
+            if (b.w <= 0.0) continue;
+            float bRad = b.z, bLim = bRad * 2.2 + 1.4;
+            vec2 bp0 = px - vec2(CX + b.x, b.y);
+            if (dot(bp0, bp0) > bLim * bLim) continue;
+            vec2 bpr = vec2(ca * bp0.x + sa * bp0.y, -sa * bp0.x + ca * bp0.y);
+            float asp = max(0.65, u_bubShape[i].x);
+            vec2 bp = vec2(bpr.x / asp, bpr.y * asp);
+            float bd = length(bp) / max(0.6, bRad);
+            float halo = exp(-bd * bd * 1.55) * b.w * boreMask;
+            float sparkCore = (1.0 - smoothstep(0.22, 0.76, bd)) * b.w * boreMask;
+            layerOver(col, alpha, mix(surfTint, ION_HAZE, 0.45), halo * 0.40);
+            if (u_dark <= 0.5) {
+              float bubRim = (1.0 - smoothstep(0.72, 1.08, bd)) * smoothstep(0.42, 0.76, bd) * b.w * boreMask;
+              layerOver(col, alpha, mix(DAY_MENISCUS, DAY_VIOLET, u_critical), bubRim * 0.85);
+            }
+            layerOver(col, alpha, vec3(0.95, 0.99, 1.0), sparkCore * 0.88);
           }
-          layerOver(col, alpha, vec3(0.95, 0.99, 1.0), sparkCore * 0.88);
         }
       }
 
-      // 5. 3D 折光椭圆液面 + 高对比度弯月面刀锋
+      // 5. 3D 折光椭圆液面 + 高对比度弯月面刀锋（复用单次 wL/wR 斜率与曲率差）
       if (inInnerBore) {
         float boreMask = smoothstep(-0.35, 0.55, distIn);
+        float dFront = abs(px.y - surfFrontY);
+        bool inDisc = px.y >= surfBackY - 0.5 && px.y <= surfFrontY + 0.5;
+        bool needSlope = inDisc || (u_dark > 0.5 && dFront < 5.0);
+        float wSlopeAbs = 0.0, wCurvAbs = 0.0;
+        if (needSlope) {
+          float wR = sampleWave(min(1.0, uIn + 0.06));
+          float wL = sampleWave(max(-1.0, uIn - 0.06));
+          wSlopeAbs = abs(wR - wL);
+          wCurvAbs = abs(wL + wR - 2.0 * waveDisp);
+        }
 
-        if (px.y >= surfBackY - 0.5 && px.y <= surfFrontY + 0.5) {
+        if (inDisc) {
           float discV = clamp((px.y - surfBackY) / max(0.8, surfFrontY - surfBackY), 0.0, 1.0);
-          float wSlope = sampleWave(min(1.0, uIn + 0.06)) - sampleWave(max(-1.0, uIn - 0.06));
-          float excite = smoothstep(0.08, 0.40, abs(wSlope) + abs(waveCurvature(uIn)) * 0.5 + abs(u_tilt) * 0.6);
+          float excite = smoothstep(0.08, 0.40, wSlopeAbs + wCurvAbs * 0.5 + abs(u_tilt) * 0.6);
           vec3 discCol = u_dark > 0.5
             ? mix(surfTint * 0.78, mix(surfTint, ION_HAZE, 0.42), 0.32 + 0.68 * discV)
             : mix(mix(DAY_ROYAL, DAY_SKY, 0.58), mix(DAY_SKY, vec3(0.76, 0.93, 1.0), 0.52), 0.28 + 0.72 * discV);
@@ -735,35 +742,28 @@
           layerOver(col, alpha, discCol, discMask * mix(0.68, 0.54, u_dark));
         }
 
-        // 后接触弧
         float dBack = abs(px.y - surfBackY);
         float backArc = (1.0 - smoothstep(0.18, 0.82, dBack)) * boreMask;
         vec3 backCol = u_dark > 0.5 ? mix(surfTint, ION_HAZE, 0.55) : mix(DAY_MENISCUS, DAY_SKY, 0.45);
         layerOver(col, alpha, backCol, backArc * mix(0.64, 0.50, u_dark));
 
-        // 前接触弧下缘深海折影
         float dUnder = abs(px.y - (surfFrontY + 1.2));
         float underShadow = (1.0 - smoothstep(0.2, 0.92, dUnder)) * boreMask * step(px.y, FLOOR_IN - 0.5);
         layerOver(col, alpha, u_dark > 0.5 ? ION_DEEP : DAY_ROYAL * 0.58, underShadow * mix(0.52, 0.46, u_dark));
 
-        // 1.15px 锋利弯月面折射刀锋（浅色采用高对比靛青刀锋，深色采用冰青激光刃）
-        float dFront = abs(px.y - surfFrontY);
-        float laserHalo = exp(-pow(dFront / 2.1, 2.0)) * boreMask;
+        float dfS = dFront / 2.1;
+        float laserHalo = exp(-dfS * dfS) * boreMask;
         float laserBlade = (1.0 - smoothstep(0.32, 0.95, dFront)) * boreMask;
         if (u_dark > 0.5) {
-          float wSlope = abs(sampleWave(min(1.0, uIn + 0.06)) - sampleWave(max(-1.0, uIn - 0.06)));
-          float prismShift = smoothstep(0.05, 0.32, wSlope + abs(u_tilt) * 0.7);
-          vec3 coldBlade = mix(ION_TOOL, ION_HAZE, 0.68);
-          vec3 baseBladeCol = mix(coldBlade, vec3(0.74, 0.82, 1.0), u_camp * 0.24);
+          float prismShift = smoothstep(0.05, 0.32, wSlopeAbs + abs(u_tilt) * 0.7);
+          vec3 baseBladeCol = mix(mix(ION_TOOL, ION_HAZE, 0.68), vec3(0.74, 0.82, 1.0), u_camp * 0.24);
           vec3 prismBladeCol = mix(ION_CONV, mix(CAMP_ASTRAL, ION_TOOL, 0.5 + 0.5 * uIn), clamp((uIn + 1.0) * 0.5, 0.0, 1.0));
           vec3 laserCol = mix(baseBladeCol, prismBladeCol, prismShift * (1.0 - u_critical) * 0.58);
           if (u_critical > 0.5) laserCol = mix(CRIT_TOOL, vec3(1.0, 0.97, 0.86), 0.48);
           layerOver(col, alpha, laserCol, laserHalo * 0.36);
           layerOver(col, alpha, mix(laserCol, vec3(0.97, 0.99, 1.0), 0.44), laserBlade * 0.92);
         } else {
-          vec3 dayBlade = u_critical > 0.5
-            ? mix(vec3(0.76, 0.25, 0.04), DAY_AMBER_RED, 0.5)
-            : DAY_MENISCUS;
+          vec3 dayBlade = u_critical > 0.5 ? mix(vec3(0.76, 0.25, 0.04), DAY_AMBER_RED, 0.5) : DAY_MENISCUS;
           layerOver(col, alpha, dayBlade, laserHalo * 0.38);
           layerOver(col, alpha, dayBlade, laserBlade * 0.95);
           float specLine = (1.0 - smoothstep(0.15, 0.58, abs(px.y - (surfFrontY - 0.55)))) * boreMask * (1.0 - 0.45 * au);
@@ -793,11 +793,10 @@
         drawIonDroplet(col, alpha, px, vec2(CX + dr.x, dr.y), dr.z, surfTint, u_dark);
       }
 
-      // 7. 垂直玻璃折射丝（白昼空气段采用冷蓝折射丝，液柱段采用纯白晶丝，彻底告别白底画白线！）
+      // 7. 垂直玻璃折射丝
       if (px.y > TOP_OUT + 9.0 && px.y < FLOOR_OUT - 9.0) {
         bool submerged = px.y >= surfCenterY;
-        float snellShift = submerged ? 1.0 : 0.0;
-        float fineAxisX = CX - R_OUT * 0.72 + snellShift;
+        float fineAxisX = CX - R_OUT * 0.72 + (submerged ? 1.0 : 0.0);
         float fineThread = (1.0 - smoothstep(0.18, 0.85, abs(px.x - fineAxisX)))
           * smoothstep(TOP_OUT + 9.0, TOP_OUT + 22.0, px.y)
           * (1.0 - smoothstep(FLOOR_OUT - 22.0, FLOOR_OUT - 9.0, px.y))
@@ -805,11 +804,9 @@
         vec3 threadCol = u_dark > 0.5
           ? vec3(0.78, 0.89, 1.0)
           : (submerged ? vec3(0.95, 0.99, 1.0) : mix(DAY_RIM_REF, DAY_COBALT, 0.42));
-        float threadAlpha = u_dark > 0.5 ? 0.32 : (submerged ? 0.56 : 0.34);
-        layerOver(col, alpha, threadCol, fineThread * threadAlpha);
+        layerOver(col, alpha, threadCol, fineThread * (u_dark > 0.5 ? 0.32 : (submerged ? 0.56 : 0.34)));
       }
 
-      // 悬停切片图例时的 1px 光学聚焦环
       if (u_hoverSlice >= -0.5) {
         float midFrac = u_hoverSlice < 0.5
           ? (u_ratios.x * 0.5) / sumR
@@ -820,23 +817,18 @@
         layerOver(col, alpha, u_dark > 0.5 ? ION_HAZE : vec3(1.0), hRing * 0.84);
       }
 
-      // 1.1px 精密高硼硅/冷晶微棱镜胶囊外轮廓
       float rimMask = smoothstep(1.65, 0.95, distOut) * smoothstep(-0.35, 0.35, distOut);
       float prismGrad = 0.5 + 0.5 * sin(px.y * 0.032 - u_time * 0.40 + dx * 0.04);
       vec3 darkRimLeft = mix(vec3(0.72, 0.85, 0.98), mix(vec3(0.22, 0.48, 0.92), vec3(0.48, 0.56, 0.92), prismGrad), 0.30);
-      vec3 darkRimRight = vec3(0.20, 0.30, 0.46);
       vec3 lightRim = mix(DAY_RIM_REF, vec3(0.118, 0.161, 0.231), 0.52 + 0.25 * smoothstep(-0.6, 0.7, uOut));
-      vec3 rimCol = u_dark > 0.5
-        ? mix(darkRimLeft, darkRimRight, smoothstep(-0.6, 0.7, uOut))
-        : lightRim;
+      vec3 rimCol = u_dark > 0.5 ? mix(darkRimLeft, vec3(0.20, 0.30, 0.46), smoothstep(-0.6, 0.7, uOut)) : lightRim;
       layerOver(col, alpha, rimCol, rimMask * mix(0.82, 0.84, u_dark));
 
-      // 8. Mono 钛银单色纯化（消除蓝光/彩虹折射残留）+ 动态微米抖动防 8-bit 梯度色带
+      // 8. Mono 钛银单色纯化 + 抖动 + 刻度小纹理 premultiplied alpha 混合叠加
       if (u_accent > 2.5 && u_critical < 0.5) {
         float monoLum = dot(col, vec3(0.299, 0.587, 0.114));
         col = mix(col, vec3(monoLum * 0.99, monoLum, monoLum * 1.01), 0.94);
       } else if (u_accent > 0.5 && u_dark <= 0.5 && u_critical < 0.5) {
-        // 白昼 iris / amber 模式下同步玻璃侧沿与液面刀锋色相
         float lum = dot(col, vec3(0.299, 0.587, 0.114));
         vec3 toneTint = u_accent > 1.5 ? vec3(lum * 1.24, lum * 0.88, lum * 0.52) : vec3(lum * 0.96, lum * 0.78, lum * 1.28);
         col = mix(col, clamp(toneTint, 0.0, 1.0), 0.24 * (1.0 - step(surfBackY, px.y)));
@@ -844,7 +836,12 @@
       float n1 = hash12(gl_FragCoord.xy + fract(u_time * 7.0) * 31.0);
       float n2 = hash12(gl_FragCoord.xy + vec2(17.31, 41.7));
       float dither = (n1 + n2 - 1.0) / 255.0;
-      outColor = vec4(clamp(col + vec3(dither), 0.0, 1.0), clamp(alpha + dither * step(0.01, alpha), 0.0, 1.0));
+      vec3 vCol = clamp(col + vec3(dither), 0.0, 1.0);
+      float vA = clamp(alpha + dither * step(0.01, alpha), 0.0, 1.0);
+      vec4 sc = texture(u_scaleTex, scaleUv);
+      vec3 pmRgb = sc.rgb + vCol * vA * (1.0 - sc.a);
+      float pmA = sc.a + vA * (1.0 - sc.a);
+      outColor = clamp(vec4(pmRgb, pmA), 0.0, 1.0);
     }
   `;
 
@@ -927,7 +924,7 @@
     const cssW = 96;
     const cssH = 220;
     const reduceMotion = Boolean(options.reduceMotion);
-    const ctx2d = canvas.getContext('2d');
+    let ctx2d = null;
     let manualFill = clampFillVal(options.fill ?? 0.46);
     let useManualFill = false;
     let manualDark = options.isDark !== undefined ? Boolean(options.isDark) : true;
@@ -984,7 +981,8 @@
       };
     };
 
-    let glState = null, glCanvas = null, glContextLost = false, layeredGl = false, lastScaleSig = '';
+    let glState = null, glContextLost = false, lastScaleSig = '';
+    let scaleCanvas = null, scaleCtx = null;
     const readVialPerf = () => {
       const rw = typeof globalThis !== 'undefined' && globalThis.__agPrismRippleWorker;
       if (rw && typeof rw.getPerfMode === 'function') return rw.getPerfMode();
@@ -993,7 +991,19 @@
       const v = String(raw).trim().toLowerCase();
       return v === 'performance' || v === 'quality' || v === 'balanced' ? v : 'balanced';
     };
-    const glOpts = () => ({ alpha: true, antialias: readVialPerf() === 'quality', premultipliedAlpha: false });
+    const glOpts = () => ({ alpha: true, antialias: readVialPerf() === 'quality', premultipliedAlpha: true, preserveDrawingBuffer: false });
+
+    const makeTex = (gl, unit, filter) => {
+      if (typeof gl.createTexture !== 'function') return null;
+      const tex = gl.createTexture();
+      gl.activeTexture?.((gl.TEXTURE0 || 0x84c0) + unit);
+      gl.bindTexture?.(gl.TEXTURE_2D || 0x0de1, tex);
+      gl.texParameteri?.(gl.TEXTURE_2D || 0x0de1, gl.TEXTURE_MIN_FILTER || 0x2801, filter);
+      gl.texParameteri?.(gl.TEXTURE_2D || 0x0de1, gl.TEXTURE_MAG_FILTER || 0x2800, filter);
+      gl.texParameteri?.(gl.TEXTURE_2D || 0x0de1, gl.TEXTURE_WRAP_S || 0x2802, gl.CLAMP_TO_EDGE || 0x812f);
+      gl.texParameteri?.(gl.TEXTURE_2D || 0x0de1, gl.TEXTURE_WRAP_T || 0x2803, gl.CLAMP_TO_EDGE || 0x812f);
+      return tex;
+    };
 
     const buildGlState = (gl) => {
       const prog = compileProgram(gl, VERT_SRC, FRAG_SRC);
@@ -1003,68 +1013,80 @@
       const locPos = gl.getAttribLocation(prog, 'a_pos');
       gl.enableVertexAttribArray(locPos);
       gl.vertexAttribPointer(locPos, 2, gl.FLOAT, false, 0, 0);
+      gl.useProgram(prog);
+      const waveTex = makeTex(gl, 0, gl.NEAREST || 0x2600);
+      const scaleTex = makeTex(gl, 1, gl.LINEAR || 0x2601);
+      if (waveTex && typeof gl.texImage2D === 'function') {
+        gl.activeTexture?.(gl.TEXTURE0 || 0x84c0);
+        gl.bindTexture?.(gl.TEXTURE_2D || 0x0de1, waveTex);
+        gl.texImage2D(gl.TEXTURE_2D || 0x0de1, 0, gl.RGBA || 0x1908, WAVE_NODES, 1, 0, gl.RGBA || 0x1908, gl.UNSIGNED_BYTE || 0x1401, new Uint8Array(WAVE_NODES * 4));
+      }
+      if (scaleTex && typeof gl.texImage2D === 'function') {
+        gl.activeTexture?.((gl.TEXTURE0 || 0x84c0) + 1);
+        gl.bindTexture?.(gl.TEXTURE_2D || 0x0de1, scaleTex);
+        gl.texImage2D(gl.TEXTURE_2D || 0x0de1, 0, gl.RGBA || 0x1908, 1, 1, 0, gl.RGBA || 0x1908, gl.UNSIGNED_BYTE || 0x1401, new Uint8Array(4));
+      }
       const ul = (n) => gl.getUniformLocation(prog, n);
+      const uWaveTex = ul('u_waveTex'), uScaleTex = ul('u_scaleTex');
+      if (uWaveTex != null && typeof gl.uniform1i === 'function') gl.uniform1i(uWaveTex, 0);
+      if (uScaleTex != null && typeof gl.uniform1i === 'function') gl.uniform1i(uScaleTex, 1);
       return {
-        gl, prog, buf,
+        gl, prog, buf, waveTex, scaleTex,
         u: {
           res: ul('u_res'), time: ul('u_time'), dark: ul('u_dark'), fill: ul('u_fill'), tilt: ul('u_tilt'),
-          tint: ul('u_tint'), camp: ul('u_camp'), accent: ul('u_accent'), critical: ul('u_critical'),
-          pendant: ul('u_pendant'), wetL: ul('u_wetL'), wetR: ul('u_wetR'), hoverSlice: ul('u_hoverSlice'),
-          wave: ul('u_wave[0]'), drops: ul('u_drops[0]'), bubbles: ul('u_bubbles[0]'),
-          bubShape: ul('u_bubShape[0]'), raySlope: ul('u_raySlope[0]'), ratios: ul('u_ratios'),
+          tiltTrig: ul('u_tiltTrig'), tint: ul('u_tint'), camp: ul('u_camp'), accent: ul('u_accent'),
+          critical: ul('u_critical'), pendant: ul('u_pendant'), wetL: ul('u_wetL'), wetR: ul('u_wetR'),
+          hoverSlice: ul('u_hoverSlice'), drops: ul('u_drops[0]'), bubbles: ul('u_bubbles[0]'),
+          bubShape: ul('u_bubShape[0]'), ratios: ul('u_ratios'),
         },
       };
+    };
+
+    const ensure2dFallback = () => {
+      if (!ctx2d && canvas && typeof canvas.getContext === 'function') {
+        try { ctx2d = canvas.getContext('2d'); } catch { ctx2d = null; }
+      }
+      return ctx2d;
     };
 
     const onGlLost = (ev) => {
       if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
       glContextLost = true; glState = null; dirtyRender = true; lastScaleSig = '';
-      if (layeredGl && glCanvas?.style) glCanvas.style.display = 'none';
+      ensure2dFallback();
       if (typeof options.onWake === 'function') { try { options.onWake(); } catch {} }
     };
 
     const onGlRestored = () => {
-      if (!glCanvas) return;
+      if (!canvas) return;
       try {
-        const gl = glCanvas.getContext('webgl2', glOpts());
+        const gl = canvas.getContext('webgl2', glOpts());
         if (gl) {
           glState = buildGlState(gl); glContextLost = false; dirtyRender = true; lastScaleSig = '';
-          if (layeredGl && glCanvas?.style) glCanvas.style.display = '';
           if (typeof options.onWake === 'function') { try { options.onWake(); } catch {} }
         }
       } catch { glState = null; }
     };
 
-    if (typeof document !== 'undefined' && ctx2d) {
+    if (canvas && typeof canvas.getContext === 'function') {
       try {
-        glCanvas = document.createElement('canvas');
-        if (glCanvas && typeof glCanvas.addEventListener === 'function') {
-          glCanvas.addEventListener('webglcontextlost', onGlLost);
-          glCanvas.addEventListener('webglcontextrestored', onGlRestored);
-        }
-        const gl = glCanvas.getContext('webgl2', glOpts());
+        const gl = canvas.getContext('webgl2', glOpts());
         if (gl) {
           glState = buildGlState(gl);
-          const p = canvas && canvas.parentNode;
-          if (p && typeof p.insertBefore === 'function') {
-            layeredGl = true;
-            if (p.style && !p.style.position) p.style.position = 'relative';
-            glCanvas.setAttribute?.('data-ag-vial-gl', '1');
-            glCanvas.setAttribute?.('aria-hidden', 'true');
-            if (glCanvas.style) {
-              Object.assign(glCanvas.style, { position: 'absolute', left: '0', top: '0', width: `${cssW}px`, height: `${cssH}px`, pointerEvents: 'none', zIndex: '0' });
-            }
-            if (canvas.style) {
-              if (!canvas.style.position) canvas.style.position = 'relative';
-              canvas.style.zIndex = '1';
-            }
-            p.insertBefore(glCanvas, canvas);
+          if (typeof canvas.addEventListener === 'function') {
+            canvas.addEventListener('webglcontextlost', onGlLost);
+            canvas.addEventListener('webglcontextrestored', onGlRestored);
+          }
+          const docRef = canvas.ownerDocument || (typeof document !== 'undefined' ? document : null);
+          if (docRef && typeof docRef.createElement === 'function') {
+            scaleCanvas = docRef.createElement('canvas');
+            scaleCtx = scaleCanvas && typeof scaleCanvas.getContext === 'function' ? scaleCanvas.getContext('2d') : null;
           }
         }
       } catch (err) {
         if (typeof console !== 'undefined') console.warn('[vial-core] WebGL2 不可用，降级 2D：', err && err.message);
         glState = null;
       }
+      if (!glState) ensure2dFallback();
     }
 
     const getRendererMode = () => (glState && !glContextLost ? 'webgl2' : '2d');
@@ -1080,7 +1102,7 @@
     const dropArr = new Float32Array(16);
     const bubArr = new Float32Array(32);
     const bubShapeArr = new Float32Array(16);
-    const raySlopeArr = new Float32Array(WAVE_NODES);
+    const waveTexBuf = new Uint8Array(WAVE_NODES * 4);
     const snapBuf = {};
 
     const buildVisualSig = (st) =>
@@ -1092,35 +1114,6 @@
         try {
           options.onWake();
         } catch {}
-      }
-    };
-
-    const crWave = (wave, uNorm) => {
-      const t = Math.max(0, Math.min(1, (uNorm + 1) * 0.5)) * (WAVE_NODES - 1);
-      const i1 = Math.max(0, Math.min(WAVE_NODES - 2, Math.floor(t)));
-      const f = t - i1;
-      const p0 = wave[Math.max(i1 - 1, 0)];
-      const p1 = wave[i1];
-      const p2 = wave[i1 + 1];
-      const p3 = wave[Math.min(i1 + 2, WAVE_NODES - 1)];
-      return (
-        0.5 *
-        (2 * p1 +
-          (-p0 + p2) * f +
-          (2 * p0 - 5 * p1 + 4 * p2 - p3) * f * f +
-          (-p0 + 3 * p1 - 3 * p2 + p3) * f * f * f)
-      );
-    };
-
-    const updateRaySlopes = (tilt, t) => {
-      const tanT = Math.tan(tilt);
-      const du = 0.045;
-      for (let j = 0; j < WAVE_NODES; j++) {
-        const u = -1 + (j + 0.5) / 12;
-        const waveSlope = (crWave(phys.waveH, u + du) - crWave(phys.waveH, u - du)) / (2 * du * TUBE_IN_R);
-        const micro =
-          (0.03 * 9 * Math.cos(u * 9 + t * 2.1) + 0.018 * 15 * Math.cos(u * 15 - t * 2.8 + 1.3)) / TUBE_IN_R;
-        raySlopeArr[j] = waveSlope + tanT * 0.35 + micro;
       }
     };
 
@@ -1447,7 +1440,7 @@
     };
 
     const stepInternal = (dtSec, isInitBoot) => {
-      if (!ctx2d) return;
+      if (!glState && !ctx2d) return;
       const dt = Math.max(0.001, Math.min(MAX_FRAME_DT, Number(dtSec || 0.016)));
       const st = resolveEffectiveState();
       phys.setStreaming(Boolean(st.streaming));
@@ -1476,20 +1469,17 @@
       const snap = phys.readSnapshotInto(snapBuf);
 
       const glAlive =
-        Boolean(glState && glCanvas && !glContextLost) &&
+        Boolean(glState && !glContextLost) &&
         (typeof glState.gl.isContextLost !== 'function' || !glState.gl.isContextLost());
       if (glState && !glAlive) {
         glContextLost = true;
         glState = null;
         lastScaleSig = '';
+        ensure2dFallback();
       }
 
-      if (glAlive && glState && glCanvas) {
-        const { gl, prog, u } = glState;
-        if (glCanvas.width !== targetW || glCanvas.height !== targetH) {
-          glCanvas.width = targetW;
-          glCanvas.height = targetH;
-        }
+      if (glAlive && glState) {
+        const { gl, prog, u, waveTex, scaleTex } = glState;
         gl.viewport(0, 0, targetW, targetH);
         gl.clearColor(0, 0, 0, 0);
         gl.clear(gl.COLOR_BUFFER_BIT);
@@ -1505,15 +1495,49 @@
         for (let i = 0; i < Math.min(8, phys.bubbles.length); i++) {
           const b = phys.bubbles[i];
           bubArr[i * 4] = b.x; bubArr[i * 4 + 1] = b.y; bubArr[i * 4 + 2] = b.r; bubArr[i * 4 + 3] = b.alpha;
-          bubShapeArr[i * 2] = b.aspect || 1.0; bubShapeArr[i * 2 + 1] = snap.tiltAngle;
+          bubShapeArr[i * 2] = b.aspect || 1.0; bubShapeArr[i * 2 + 1] = 0;
         }
-        updateRaySlopes(snap.tiltAngle, elapsedTime);
+        for (let j = 0; j < WAVE_NODES; j++) {
+          const norm = Math.max(0, Math.min(1, (phys.waveH[j] + 16) * (1 / 32)));
+          const q = (norm * 65535 + 0.5) | 0;
+          const o = j << 2;
+          waveTexBuf[o] = (q >> 8) & 255;
+          waveTexBuf[o + 1] = q & 255;
+          waveTexBuf[o + 2] = 0;
+          waveTexBuf[o + 3] = 255;
+        }
+        if (waveTex) {
+          gl.activeTexture?.(gl.TEXTURE0 || 0x84c0);
+          gl.bindTexture?.(gl.TEXTURE_2D || 0x0de1, waveTex);
+          if (typeof gl.texSubImage2D === 'function') {
+            gl.texSubImage2D(gl.TEXTURE_2D || 0x0de1, 0, 0, 0, WAVE_NODES, 1, gl.RGBA || 0x1908, gl.UNSIGNED_BYTE || 0x1401, waveTexBuf);
+          } else if (typeof gl.texImage2D === 'function') {
+            gl.texImage2D(gl.TEXTURE_2D || 0x0de1, 0, gl.RGBA || 0x1908, WAVE_NODES, 1, 0, gl.RGBA || 0x1908, gl.UNSIGNED_BYTE || 0x1401, waveTexBuf);
+          }
+        }
+        const sSig = `${st.isDark ? 1 : 0}|${st.accentTone}|${st.critical ? 1 : 0}|${st.maxTokens}|${snap.fill >= 0.238 ? 1 : 0}${snap.fill >= 0.488 ? 1 : 0}${snap.fill >= 0.738 ? 1 : 0}|${targetW}x${targetH}`;
+        if (sSig !== lastScaleSig && scaleTex && scaleCanvas && scaleCtx) {
+          if (scaleCanvas.width !== targetW || scaleCanvas.height !== targetH) {
+            scaleCanvas.width = targetW;
+            scaleCanvas.height = targetH;
+          }
+          scaleCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+          scaleCtx.clearRect(0, 0, cssW, cssH);
+          drawScaleMarks(scaleCtx, st, snap.fill);
+          gl.activeTexture?.((gl.TEXTURE0 || 0x84c0) + 1);
+          gl.bindTexture?.(gl.TEXTURE_2D || 0x0de1, scaleTex);
+          gl.pixelStorei?.(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL || 0x9241, true);
+          gl.texImage2D?.(gl.TEXTURE_2D || 0x0de1, 0, gl.RGBA || 0x1908, gl.RGBA || 0x1908, gl.UNSIGNED_BYTE || 0x1401, scaleCanvas);
+          gl.pixelStorei?.(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL || 0x9241, false);
+          lastScaleSig = sSig;
+        }
 
         gl.uniform2f(u.res, targetW, targetH);
         gl.uniform1f(u.time, elapsedTime);
         gl.uniform1f(u.dark, st.isDark ? 1.0 : 0.0);
         gl.uniform1f(u.fill, snap.fill);
         gl.uniform1f(u.tilt, snap.tiltAngle);
+        if (u.tiltTrig != null) gl.uniform3f(u.tiltTrig, Math.cos(snap.tiltAngle), Math.sin(snap.tiltAngle), Math.tan(snap.tiltAngle));
         gl.uniform3fv(u.tint, tintVec);
         gl.uniform1f(u.camp, st.camp === 'claude' ? 1.0 : 0.0);
         const accentNum = st.accentTone === 'mono' ? 3.0 : st.accentTone === 'amber' ? 2.0 : st.accentTone === 'iris' ? 1.0 : 0.0;
@@ -1525,30 +1549,11 @@
         gl.uniform1f(u.wetL, snap.wetLeft);
         gl.uniform1f(u.wetR, snap.wetRight);
         gl.uniform1f(u.hoverSlice, st.hoveredSlice);
-        gl.uniform1fv(u.wave, phys.waveH);
         gl.uniform4fv(u.drops, dropArr);
         gl.uniform4fv(u.bubbles, bubArr);
         gl.uniform2fv(u.bubShape, bubShapeArr);
-        gl.uniform1fv(u.raySlope, raySlopeArr);
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-
-        if (layeredGl) {
-          if (glCanvas.style && glCanvas.style.display === 'none') glCanvas.style.display = '';
-          const sSig = `${st.isDark ? 1 : 0}|${st.accentTone}|${st.critical ? 1 : 0}|${st.maxTokens}|${snap.fill >= 0.238 ? 1 : 0}${snap.fill >= 0.488 ? 1 : 0}${snap.fill >= 0.738 ? 1 : 0}|${targetW}x${targetH}`;
-          if (sSig !== lastScaleSig) {
-            ctx2d.setTransform(dpr, 0, 0, dpr, 0, 0);
-            ctx2d.clearRect(0, 0, cssW, cssH);
-            drawScaleMarks(ctx2d, st, snap.fill);
-            lastScaleSig = sSig;
-          }
-        } else {
-          ctx2d.setTransform(dpr, 0, 0, dpr, 0, 0);
-          ctx2d.clearRect(0, 0, cssW, cssH);
-          ctx2d.drawImage(glCanvas, 0, 0, cssW, cssH);
-          drawScaleMarks(ctx2d, st, snap.fill);
-        }
-      } else {
-        if (layeredGl && glCanvas?.style) glCanvas.style.display = 'none';
+      } else if (ctx2d) {
         lastScaleSig = '';
         ctx2d.setTransform(dpr, 0, 0, dpr, 0, 0);
         ctx2d.clearRect(0, 0, cssW, cssH);
@@ -1611,7 +1616,8 @@
       getDebugState() {
         return {
           rendererMode: getRendererMode(),
-          zeroCopy: Boolean(layeredGl && glState && !glContextLost),
+          zeroCopy: Boolean(glState && !glContextLost),
+          singleCanvas: true,
           settled: isSettled(),
           settleClock: Number(settleClock.toFixed(3)),
           ...phys.getSnapshot(),
@@ -1622,18 +1628,14 @@
           canvas.removeEventListener('pointermove', onPointerMove);
           canvas.removeEventListener('pointerdown', onPointerDown);
           canvas.removeEventListener('pointerleave', onPointerLeave);
-        }
-        if (glCanvas && typeof glCanvas.removeEventListener === 'function') {
-          glCanvas.removeEventListener('webglcontextlost', onGlLost);
-          glCanvas.removeEventListener('webglcontextrestored', onGlRestored);
-        }
-        if (layeredGl && glCanvas) {
-          try { glCanvas.remove?.(); } catch {}
-          layeredGl = false;
+          canvas.removeEventListener('webglcontextlost', onGlLost);
+          canvas.removeEventListener('webglcontextrestored', onGlRestored);
         }
         if (glState) {
-          const { gl, prog, buf } = glState;
+          const { gl, prog, buf, waveTex, scaleTex } = glState;
           try {
+            if (waveTex) gl.deleteTexture?.(waveTex);
+            if (scaleTex) gl.deleteTexture?.(scaleTex);
             gl.deleteProgram(prog);
             gl.deleteBuffer(buf);
             const ext = gl.getExtension('WEBGL_lose_context');
@@ -1641,7 +1643,11 @@
           } catch {}
           glState = null;
         }
-        glCanvas = null;
+        if (scaleCanvas) {
+          try { scaleCanvas.width = scaleCanvas.height = 0; } catch {}
+          scaleCanvas = scaleCtx = null;
+        }
+        ctx2d = null;
       },
     };
   }

@@ -1,13 +1,4 @@
-/**
- * Obsidian Prism — On-Demand 3D Custom Mechanical Periodic Model Picker Controller
- * Slim orchestrator shell consuming the 7 modular vendor/periodic-picker/* sibling units:
- *   pbr-grain-assets.js -> audio-fx.js -> model-catalog.js -> host-bridge.js
- *   -> oled-cyber-screen.js -> keyboard-3d-gl.js -> bento-ui.js -> periodic-picker.js
- *
- * Contract:
- *   globalThis.__agPrismPeriodicPickerFactory / module.exports
- *   globalThis.__agPrismPeriodicPicker (mounted singleton controller)
- */
+/* Obsidian Prism — On-Demand 3D Periodic Model Picker Controller */
 (function (root, factory) {
   var api = factory();
   if (typeof module === 'object' && module && typeof module.exports === 'object') {
@@ -91,34 +82,15 @@
 
     /* ── Interaction & Layout Constants (Preserving Native Tactile Tuning) ─── */
 
-    var HOLD_RING_DELAY_MS = 110;
-    var HOLD_PREWARM_DELAY_MS = 120;
-    var HOLD_OPEN_DELAY_MS = 420;
-    var HOLD_MAX_DRIFT_PX = 10;
-    var SESSION_SYNC_DEBOUNCE_MS = 80;
-    var SESSION_SYNC_CLICK_FOLLOWUP_MS = 200;
-    var SESSION_SYNC_ROUTE_FOLLOWUP_MS = 220;
-    var OPEN_LOCK_GUARD_INTERVAL_MS = 280;
-    var SESSION_BADGE_DURATION_MS = 1200;
-    var SHORT_VIEWPORT_HEIGHT_PX = 560;
-    var SUPPRESS_CLICK_WINDOW_MS = 800;
-    var BLIND_HOVER_DWELL_MS = 150;
-    var CONFIRM_SLAM_DELAY_MS = 115;
-    var ORBIT_DRAG_THRESHOLD_PX = 6;
-    var SLIDER_SCRUB_THRESHOLD_PX = 3;
-    var ORBIT_PITCH_RAD_PER_PX = 0.0046;
-    var ORBIT_YAW_RAD_PER_PX = 0.0046;
-    var ORBIT_FLING_WINDOW_MS = 50;
-    var ORBIT_MAX_VEL_RAD = 6.2;
-    var ORBIT_FALLBACK_FLING_SCALE = 0.88;
-    var POST_DRAG_SUPPRESS_MS = 360;
-    var DOCK_WIDE_BREAKPOINT_PX = 1180;
-    var DOCK_MEDIUM_BREAKPOINT_PX = 960;
-    var DOCK_OPEN_TRANSITION_MS = 300;
-    var DOCK_CLOSE_TRANSITION_MS = 260;
-    var BLIND_FLASH_DURATION_MS = 1000;
-    var EXT_RIM_PROXIMITY_PX = 150;
-    var AUX_WHEEL_THROTTLE_MS = 140;
+    var HOLD_RING_DELAY_MS = 110, HOLD_PREWARM_DELAY_MS = 120, HOLD_OPEN_DELAY_MS = 420, HOLD_MAX_DRIFT_PX = 10;
+    var SESSION_SYNC_DEBOUNCE_MS = 80, SESSION_SYNC_CLICK_FOLLOWUP_MS = 200, SESSION_SYNC_ROUTE_FOLLOWUP_MS = 220;
+    var OPEN_LOCK_GUARD_INTERVAL_MS = 280, SESSION_BADGE_DURATION_MS = 1200, SHORT_VIEWPORT_HEIGHT_PX = 560;
+    var SUPPRESS_CLICK_WINDOW_MS = 800, BLIND_HOVER_DWELL_MS = 150, CONFIRM_SLAM_DELAY_MS = 115;
+    var ORBIT_DRAG_THRESHOLD_PX = 6, SLIDER_SCRUB_THRESHOLD_PX = 3, ORBIT_PITCH_RAD_PER_PX = 0.0046, ORBIT_YAW_RAD_PER_PX = 0.0046;
+    var ORBIT_FLING_WINDOW_MS = 50, ORBIT_MAX_VEL_RAD = 6.2, ORBIT_FALLBACK_FLING_SCALE = 0.88, POST_DRAG_SUPPRESS_MS = 360;
+    var DOCK_WIDE_BREAKPOINT_PX = 1180, DOCK_MEDIUM_BREAKPOINT_PX = 960, DOCK_OPEN_TRANSITION_MS = 300, DOCK_CLOSE_TRANSITION_MS = 260;
+    var BLIND_FLASH_DURATION_MS = 1000, EXT_RIM_PROXIMITY_PX = 150, AUX_WHEEL_THROTTLE_MS = 140;
+    var STANDBY_RECLAIM_MS = 20000, STANDBY_HIDDEN_MS = 2000;
 
     function isNodeConnectedToDoc(docRef, node) {
       if (!node || typeof node !== 'object') return false;
@@ -618,13 +590,13 @@
       var hudPillEl = null;
       var swatchesWrapEl = null;
       var activeRenderer = null;
+      var standbyRenderer = null;
+      var standbyDisposeTimer = 0;
       var dockResizeObserver = null;
-      /* 离屏 DOM 壳与遥测缓存（正常 close 保留以便热开 <16ms，hidden/destroy/releaseHeavyCaches 立即释放） */
       var cachedShell = null;
       var cachedHostTelemetry = null;
       var activeHudElementsKey = '';
 
-      /* Zero-reflow cached geometry (updated ONLY in open / resize / ResizeObserver / transitionend) */
       var cachedOverlayWidth = 1280;
       var cachedComposerHeight = 0;
       var cachedDockBounds = { left: 60, top: 220, width: 1280, height: 340 };
@@ -874,10 +846,26 @@
         pendingTimers.clear();
       }
 
-      /* ── Immediate VRAM / Offscreen / Audio Cache Release ──────────────── */
-
-      function releaseAllHeavyCaches() {
-        cachedShell = null;
+      function clearStandbyTimer() { if (standbyDisposeTimer) { clearTimer(standbyDisposeTimer); standbyDisposeTimer = 0; } }
+      function disposeStandbyRenderer(releaseHeavy) {
+        clearStandbyTimer();
+        if (standbyRenderer) {
+          if (releaseHeavy) {
+            try { if (typeof standbyRenderer.releaseCaches === 'function') standbyRenderer.releaseCaches(); } catch (e) {}
+            try { if (standbyRenderer.oledPainter && typeof standbyRenderer.oledPainter.releaseCaches === 'function') standbyRenderer.oledPainter.releaseCaches(); } catch (e2) {}
+          }
+          try { if (typeof standbyRenderer.dispose === 'function') standbyRenderer.dispose(); } catch (e3) {}
+          standbyRenderer = null;
+        }
+        if (!overlayEl) cachedShell = null;
+      }
+      function scheduleStandbyReclaim(delayMs) {
+        clearStandbyTimer();
+        if (!standbyRenderer || isDestroyed || currentMode === 'off') return;
+        standbyDisposeTimer = setTimer(function () { standbyDisposeTimer = 0; disposeStandbyRenderer(false); }, Math.max(0, Number(delayMs) || STANDBY_RECLAIM_MS));
+      }
+      function releaseAllHeavyCaches(preserveStandbyShell) {
+        if (!preserveStandbyShell) { disposeStandbyRenderer(false); cachedShell = null; }
         cachedHostTelemetry = null;
         if (activeRenderer) {
           if (typeof activeRenderer.releaseCaches === 'function') {
@@ -2740,7 +2728,6 @@
           rimGlowWasActive = true;
           overlayEl.setAttribute('data-pointer-near', '1');
         }
-        // 仅写入各自独立的零子节点光环层，禁止向 #ag-prism-periodic-picker-root 写入高频 CSS 变量
         if (dockTopRimEl) {
           if (dockNear) {
             rimDockWasActive = true;
@@ -3405,7 +3392,6 @@
         var payload = buildCurrentDeckPayload(langCode);
         var dInfo = payload.deckInfo;
         var committed = resolveCommittedTelemetrySpec(zh);
-        // 纯悬停扫键禁止同步读取宿主 DOM 遥测，直接复用缓存；首帧开放可选跳过 DOM 扫描
         var telemetry;
         if (hoverOnly) {
           telemetry = cachedHostTelemetry || { available: false, reason: 'offline' };
@@ -4975,7 +4961,6 @@
 
         var reusedShell = Boolean(cachedShell && cachedShell.doc === doc && cachedShell.overlayEl);
         if (reusedShell) {
-          // 复用离屏 501 节点 DOM 壳（仅替换 1 个全新 WebGL <canvas>），大幅削减热开同步开销
           var shell = cachedShell;
           cachedShell = null;
           overlayEl = shell.overlayEl;
@@ -5025,7 +5010,6 @@
           overlayEl.setAttribute('data-open', '0');
           if (hudPillEl) hudPillEl.setAttribute('aria-label', pk.hudAria);
 
-          // 重置局部光环、地板投影与 Bento 差分缓存
           if (dockTopRimEl) {
             setStyleVar(dockTopRimEl, '--ag-pp-dock-rim-alpha', '0');
             setStyleVar(dockTopRimEl, '--ag-pp-px', '-999px');
@@ -5058,7 +5042,6 @@
             if (uiRefs.resetBtn) uiRefs.resetBtn.setAttribute('data-rotated', '0');
           }
 
-          // 增量同步 90 颗主键盘键帽与 6 颗副盘键帽的可用状态（避免跨打开周期宿主模型变化后状态过期）
           for (var rIdx = 0; rIdx < ELEMENTS_90.length; rIdx += 1) {
             var rSlot = ELEMENTS_90[rIdx];
             var rBtn = keyNodesByZ.get(rSlot.z);
@@ -5122,18 +5105,21 @@
             rebuildHudSwatches(swatchesWrapEl, hudElements, profile);
           }
 
-          // 替换全新 <canvas>（避免上次 dispose() 调用 WEBGL_lose_context 导致上下文永久失效）
-          var freshCanvas = mkEl(doc, 'canvas', 'ag-pp-gl-canvas');
-          freshCanvas.setAttribute('aria-hidden', 'true');
-          if (stageEl && hitLayerEl && typeof stageEl.insertBefore === 'function') {
-            stageEl.insertBefore(freshCanvas, hitLayerEl);
-          } else if (stageEl) {
-            stageEl.appendChild(freshCanvas);
+          clearStandbyTimer();
+          if (standbyRenderer && shell.canvasEl && (typeof standbyRenderer.isContextLost !== 'function' || !standbyRenderer.isContextLost())) {
+            canvasEl = shell.canvasEl; activeRenderer = standbyRenderer; standbyRenderer = null;
+            try { if (typeof activeRenderer.setPaused === 'function') activeRenderer.setPaused(false); } catch (e) {}
+          } else {
+            disposeStandbyRenderer(false);
+            var freshCanvas = mkEl(doc, 'canvas', 'ag-pp-gl-canvas');
+            freshCanvas.setAttribute('aria-hidden', 'true');
+            if (stageEl && hitLayerEl && typeof stageEl.insertBefore === 'function') stageEl.insertBefore(freshCanvas, hitLayerEl);
+            else if (stageEl) stageEl.appendChild(freshCanvas);
+            if (shell.canvasEl) safeRemove(shell.canvasEl);
+            canvasEl = freshCanvas; bindCanvasClickHandler(canvasEl);
           }
-          if (shell.canvasEl) safeRemove(shell.canvasEl);
-          canvasEl = freshCanvas;
-          bindCanvasClickHandler(canvasEl);
         } else {
+          disposeStandbyRenderer(false);
           overlayEl = mkEl(doc, 'div', 'ag-periodic-picker-backdrop');
           overlayEl.id = ROOT_ID;
           overlayEl.setAttribute('id', ROOT_ID);
@@ -5409,24 +5395,25 @@
           }
         }
 
-        var kbFactory = resolveKeyboard3DFactory(root);
-        if (kbFactory) {
-          try {
-            activeRenderer = kbFactory.createKeyboard3DRenderer({
-              canvas: canvasEl,
-              doc: doc,
-              root: root,
-              slots: ELEMENTS_90,
-              auxModels: auxSlots,
-              auxPage: activeAuxPage,
-              auxPageCount: auxPageCount,
-            });
-          } catch (e) {
-            activeRenderer = null;
+        if (!activeRenderer) {
+          var kbFactory = resolveKeyboard3DFactory(root);
+          if (kbFactory) {
+            try {
+              activeRenderer = kbFactory.createKeyboard3DRenderer({
+                canvas: canvasEl,
+                doc: doc,
+                root: root,
+                slots: ELEMENTS_90,
+                auxModels: auxSlots,
+                auxPage: activeAuxPage,
+                auxPageCount: auxPageCount,
+              });
+            } catch (e) {
+              activeRenderer = null;
+            }
           }
         }
 
-        // 3D/Canvas 舞台启用拾取时，屏蔽命中层 100+ 透明按钮的鼠标命中测试，杜绝跨按钮 pointerover/pointerenter 风暴
         var useGlStagePick = Boolean(activeRenderer && typeof activeRenderer.pick === 'function');
         overlayEl.setAttribute('data-gl-stage', useGlStagePick ? '1' : '0');
 
@@ -5920,7 +5907,6 @@
               var rafTierChanged = syncDockCompactState();
               resizeCanvasToStage(!rafTierChanged);
               syncHitLayerRects(true);
-              // 首帧后异步补齐宿主 DOM 遥测扫描，避免阻塞 open() 首帧绘制
               if (cachedHostTelemetry && cachedHostTelemetry.domScanDeferred) {
                 var fullTele = hostBridge.readHostContextTelemetry(doc, root, { anchorBtn: activeAnchorBtn });
                 cachedHostTelemetry = fullTele;
@@ -5989,30 +5975,26 @@
           try { doc.documentElement.removeAttribute('data-ag-pp-open'); } catch (eAttr) {}
         }
 
-        var hadOverlay = Boolean(overlayEl);
-
+        var hadOverlay = Boolean(overlayEl), keepWarmStandby = Boolean(!co.releaseHeavyCaches && !isDestroyed && currentMode !== 'off' && hadOverlay);
+        clearStandbyTimer();
         if (activeRenderer) {
-          if (co.releaseHeavyCaches) {
-            if (typeof activeRenderer.releaseCaches === 'function') {
-              try { activeRenderer.releaseCaches(); } catch (eRc) {}
+          if (keepWarmStandby) {
+            try { if (typeof activeRenderer.setPaused === 'function') activeRenderer.setPaused(true); } catch (eP) {}
+            try { if (typeof activeRenderer.cancelAnimLoop === 'function') activeRenderer.cancelAnimLoop(); } catch (eC) {}
+            try { if (activeRenderer.oledPainter && typeof activeRenderer.oledPainter.setPaused === 'function') activeRenderer.oledPainter.setPaused(true); } catch (eOp) {}
+            if (standbyRenderer && standbyRenderer !== activeRenderer) { try { if (typeof standbyRenderer.dispose === 'function') standbyRenderer.dispose(); } catch (ePrev) {} }
+            standbyRenderer = activeRenderer; activeRenderer = null;
+          } else {
+            if (co.releaseHeavyCaches) {
+              try { if (typeof activeRenderer.releaseCaches === 'function') activeRenderer.releaseCaches(); } catch (eRc) {}
+              try { if (activeRenderer.oledPainter && typeof activeRenderer.oledPainter.releaseCaches === 'function') activeRenderer.oledPainter.releaseCaches(); } catch (eRc2) {}
             }
-            if (activeRenderer.oledPainter && typeof activeRenderer.oledPainter.releaseCaches === 'function') {
-              try { activeRenderer.oledPainter.releaseCaches(); } catch (eRc2) {}
-            }
+            try { if (typeof activeRenderer.dispose === 'function') activeRenderer.dispose(); } catch (eDisp) {}
+            activeRenderer = null; disposeStandbyRenderer(Boolean(co.releaseHeavyCaches));
           }
-          if (typeof activeRenderer.dispose === 'function') {
-            try { activeRenderer.dispose(); } catch (eDisp) {}
-          }
-          activeRenderer = null;
-        }
-
-        if (audioEngine && typeof audioEngine.dispose === 'function') {
-          try { audioEngine.dispose(); } catch (eAud) {}
-        }
-
-        if (co.releaseHeavyCaches) {
-          releaseAllHeavyCaches();
-        }
+        } else if (!keepWarmStandby) { disposeStandbyRenderer(Boolean(co.releaseHeavyCaches)); }
+        try { if (audioEngine && typeof audioEngine.dispose === 'function') audioEngine.dispose(); } catch (eAud) {}
+        if (co.releaseHeavyCaches) releaseAllHeavyCaches(false);
 
         if (bentoRefs) {
           if (typeof bentoUi.clearBentoSessionSwitchFade === 'function') {
@@ -6032,7 +6014,6 @@
         if (hadOverlay) {
           var toRemove = overlayEl;
           if (!co.releaseHeavyCaches && !isDestroyed && currentMode !== 'off') {
-            // 正常关闭保留离屏 DOM 壳，仍立即卸载出 document 确保关闭态零残留节点
             cachedShell = {
               doc: doc,
               overlayEl: overlayEl,
@@ -6099,6 +6080,9 @@
           hudChipByZ.clear();
           safeRemove(toRemove);
           syncMiniKeycapBadges();
+          if (keepWarmStandby && standbyRenderer) {
+            scheduleStandbyReclaim(isDocHiddenNow() ? STANDBY_HIDDEN_MS : STANDBY_RECLAIM_MS);
+          }
         }
 
         /* Restore host desktop pet immediately out of peek mode */
@@ -6467,12 +6451,13 @@
 
       function onDocVisibilityChange() {
         if (isDocHiddenNow()) {
-          pendingLongPressReleaseBtn = null;
-          if (holdState) cancelHold(false);
-          clearDragAndPointerOnBlur();
-          releaseAllHeavyCaches();
+          pendingLongPressReleaseBtn = null; if (holdState) cancelHold(false); clearDragAndPointerOnBlur();
+          var hasWarm = Boolean(standbyRenderer && !overlayEl);
+          releaseAllHeavyCaches(hasWarm);
+          if (hasWarm) scheduleStandbyReclaim(STANDBY_HIDDEN_MS);
         } else {
           clearStaleBlurIfActive();
+          if (standbyRenderer && !overlayEl && standbyDisposeTimer) scheduleStandbyReclaim(STANDBY_RECLAIM_MS);
         }
         syncHostPauseState();
       }
@@ -6766,6 +6751,7 @@
             orchLatched: Boolean(orchLatched),
             cardFlipped: Boolean(cardFlipped),
             open: Boolean(overlayEl && !isDrawerClosing),
+            standbyActive: Boolean(standbyRenderer),
             selectedZ: selectedZ,
             selectedAuxIndex: selectedGlobalAuxIndex,
             auxPage: activeAuxPage,
@@ -6819,95 +6805,23 @@
 
       activate();
       if (root && typeof root === 'object') {
-        root.__agPrismPeriodicPicker = instanceApi;
+        root.__agPrismPeriodicPicker = instanceApi; root.__agPeriodicFullLoaded = true;
+        var po = root.__agPeriodicPendingOpen;
+        if (po && typeof po === 'object') {
+          try { delete root.__agPeriodicPendingOpen; } catch (_d) { root.__agPeriodicPendingOpen = null; }
+          var pa = Date.now() - Number(po.pointerDownAt);
+          if (Number.isFinite(pa) && pa >= 0 && pa < 2500 && po.autoOpen) { try { open(po.trigger || null); } catch (_e) {} }
+        }
       }
       return instanceApi;
     }
 
-    /* ── Public Module Exports (Backward-Compatible Re-Exports + Factory) ──── */
-
-    return {
-      mountPeriodicPicker: mountPeriodicPicker,
-      createPeriodicModelPickerController: mountPeriodicPicker,
-
-      /* Re-exports from model-catalog.js */
-      ELEMENTS_90: defaultCatalog.ELEMENTS_90,
-      SLOT_BY_Z: defaultCatalog.SLOT_BY_Z,
-      ELEMENT_BY_NAME: defaultCatalog.ELEMENT_BY_NAME,
-      GROUP_META: defaultCatalog.GROUP_META,
-      ELEMENT_LORE: defaultCatalog.ELEMENT_LORE,
-      ELEMENT_SPEC_PROFILES: defaultCatalog.ELEMENT_SPEC_PROFILES,
-      BENCHMARK_2026Q4_DB: defaultCatalog.BENCHMARK_2026Q4_DB,
-      AUX_MODEL_PRESETS: defaultCatalog.AUX_MODEL_PRESETS,
-      AUX_PAGE_SIZE: defaultCatalog.AUX_PAGE_SIZE,
-      EFFORT_ORDER: defaultCatalog.EFFORT_ORDER,
-      EFFORT_NORM_MAP: defaultCatalog.EFFORT_NORM_MAP,
-      EFFORT_LABELS: defaultCatalog.EFFORT_LABELS,
-      EFFORT_LABELS_ZH: defaultCatalog.EFFORT_LABELS_ZH,
-      normalizeZhEffortWord: defaultCatalog.normalizeZhEffortWord,
-      normalizeEnEffortWord: defaultCatalog.normalizeEnEffortWord,
-      stripEffortSuffixFromLabel: defaultCatalog.stripEffortSuffixFromLabel,
-      parseElementModelLabel: defaultCatalog.parseElementModelLabel,
-      matchGoogleElementModels: defaultCatalog.matchGoogleElementModels,
-      resolveBenchmarkMetrics: defaultCatalog.resolveBenchmarkMetrics,
-      classifyNonElementOption: defaultCatalog.classifyNonElementOption,
-      matchHostAuxModels: defaultCatalog.matchHostAuxModels,
-      getAuxPageCount: defaultCatalog.getAuxPageCount,
-      getAuxPageSlice: defaultCatalog.getAuxPageSlice,
-      findAuxPageForId: defaultCatalog.findAuxPageForId,
-      padAuxPageSlots: defaultCatalog.padAuxPageSlots,
-      resolveElementDisplay: defaultCatalog.resolveElementDisplay,
-      resolveAuxSlotDisplay: defaultCatalog.resolveAuxSlotDisplay,
-      getLocalizedEffortLabel: defaultCatalog.getLocalizedEffortLabel,
-
-      /* Re-exports from host-bridge.js */
-      readHostModelContext: defaultHostBridge.readHostModelContext,
-      readHostModelContextFromFiber: defaultHostBridge.readHostModelContextFromFiber,
-      readHostModelContextFromDomMenu: defaultHostBridge.readHostModelContextFromDomMenu,
-      commitModelOption: defaultHostBridge.commitModelOption,
-      commitOrchestratorPlannerPick: defaultHostBridge.commitOrchestratorPlannerPick,
-      syncHostWithActiveState: defaultHostBridge.syncHostWithActiveState,
-      readHostContextTelemetry: defaultHostBridge.readHostContextTelemetry,
-      suppressNativeTooltip: defaultHostBridge.suppressNativeTooltip,
-      setHoldTooltipSuppression: defaultHostBridge.setHoldTooltipSuppression,
-      setOpenTooltipSuppression: defaultHostBridge.setOpenTooltipSuppression,
-      readSharedEffortMemory: defaultHostBridge.readSharedEffortMemory,
-      writeSharedEffortMemory: defaultHostBridge.writeSharedEffortMemory,
-      getRememberedEffort: defaultHostBridge.getRememberedEffort,
-      isEffortMemoryEnabled: defaultHostBridge.isEffortMemoryEnabled,
-      normalizeEffortToken: defaultHostBridge.normalizeEffortToken,
-      findFallbackModelTrigger: defaultHostBridge.findFallbackModelTrigger,
-      isModelTriggerLocked: defaultHostBridge.isModelTriggerLocked,
-      collectVisibleModelTriggerButtons: defaultHostBridge.collectVisibleModelTriggerButtons,
-      matchModelTriggerButton: defaultHostBridge.matchModelTriggerButton,
-      dismissNativeHostMenu: defaultHostBridge.dismissNativeHostMenu,
-
-      /* Re-exports from bento-ui.js */
-      STYLE_ID: defaultBentoUi.STYLE_ID,
-      ROOT_ID: defaultBentoUi.ROOT_ID,
-      ROOT_MARKER_ATTR: defaultBentoUi.ROOT_MARKER_ATTR,
-      PICKER_CSS: defaultBentoUi.PICKER_CSS,
-      buildPickerCss: defaultBentoUi.buildPickerCss,
-      ensureStyles: defaultBentoUi.ensureStyles,
-      cleanupUiResiduals: defaultBentoUi.cleanupUiResiduals,
-      markPeriodicOwnedRoot: defaultBentoUi.markPeriodicOwnedRoot,
-      isZhLocale: defaultBentoUi.isZhLocale,
-      isReducedMotion: defaultBentoUi.isReducedMotion,
-      resolvePrismThemeProfile: defaultBentoUi.resolvePrismThemeProfile,
-      detectLightDarkMode: defaultBentoUi.detectLightDarkMode,
-      invalidateComputedThemeCache: defaultBentoUi.invalidateComputedThemeCache,
-      buildBentoTwinCards: defaultBentoUi.buildBentoTwinCards,
-      syncBentoTwinCardsDom: defaultBentoUi.syncBentoTwinCardsDom,
-      updateBentoTwinCards: defaultBentoUi.updateBentoTwinCards,
-      syncAuxPagerDom: defaultBentoUi.syncAuxPagerDom,
-      triggerBentoSessionSwitchFade: defaultBentoUi.triggerBentoSessionSwitchFade,
-      clearBentoSessionSwitchFade: defaultBentoUi.clearBentoSessionSwitchFade,
-
-      /* Re-exports from audio-fx.js */
-      MUTE_STORAGE_KEY: defaultAudioFx.MUTE_STORAGE_KEY,
-      readMutedPref: defaultAudioFx.readMutedPref,
-      writeMutedPref: defaultAudioFx.writeMutedPref,
-      createAudioFxEngine: defaultAudioFx.createAudioFxEngine,
-    };
+    return Object.assign(
+      { mountPeriodicPicker: mountPeriodicPicker, createPeriodicModelPickerController: mountPeriodicPicker },
+      defaultCatalog,
+      defaultHostBridge,
+      defaultBentoUi,
+      defaultAudioFx
+    );
   }
 );
