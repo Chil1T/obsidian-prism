@@ -5321,7 +5321,12 @@ test('V13.1 Review Hardening: Daemon hash-level hot-heal upgrade, AUX-06 anti-sm
   const glSrc = fs.readFileSync(KEYBOARD_3D_FILE, 'utf8');
   const bentoSrc = fs.readFileSync(BENTO_UI_FILE, 'utf8');
   const pickerSrc = fs.readFileSync(PERIODIC_PICKER_FILE, 'utf8');
-  const daemonSrc = fs.readFileSync(path.join(ROOT_DIR, 'sidecars', 'daemon', 'main.mjs'), 'utf8');
+  const daemonSrc =
+    fs.readFileSync(path.join(ROOT_DIR, 'src', 'daemon', 'session-heal.mjs'), 'utf8') +
+    '\n' +
+    fs.readFileSync(path.join(ROOT_DIR, 'src', 'daemon', 'session-heal-channels.mjs'), 'utf8') +
+    '\n' +
+    fs.readFileSync(path.join(ROOT_DIR, 'src', 'daemon', 'channel-coordinator.mjs'), 'utf8');
 
   // 1) Daemon verifyPage probes periodicPickerCodeHash & upgrades stale mounted codeHash
   assert.ok(

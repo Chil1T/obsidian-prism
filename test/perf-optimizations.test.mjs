@@ -988,7 +988,7 @@ test('perf guard 17: pulse-dashboard keep-alive agent & includeMessages:false, b
   const bgWorkSrc = fs.readFileSync(path.join(ROOT, 'vendor/pulse-dashboard/sidecars/panel/background-worker.mjs'), 'utf8');
   const usageSrc = fs.readFileSync(path.join(ROOT, 'vendor/pulse-dashboard/sidecars/panel/usage.mjs'), 'utf8');
   const thoughtSrc = fs.readFileSync(path.join(ROOT, 'vendor/thought-translator/translator-service.mjs'), 'utf8');
-  const mainSrc = fs.readFileSync(path.join(ROOT, 'sidecars/daemon/main.mjs'), 'utf8');
+  const telemetrySrc = fs.readFileSync(path.join(ROOT, 'src/daemon/telemetry-service.mjs'), 'utf8');
 
   assert.ok(readerSrc.includes('budgetBytes=4*1024*1024') && readerSrc.includes('summaryAt>=6000') && readerSrc.includes('trajectoryVerbosity:2'), 'trajectory-reader must use 4 MiB budget, 6s summary TTL, and compact trajectoryVerbosity:2');
   assert.ok(storeSrc.includes('updatedAt < 4500') && storeSrc.includes('this.sessions.size > 32'), 'store must use 4.5s hot TTL and 32-session cap');
@@ -997,7 +997,7 @@ test('perf guard 17: pulse-dashboard keep-alive agent & includeMessages:false, b
   assert.ok(bgWorkSrc.includes('++revisions>1') && bgWorkSrc.includes('sleep(8000)') && bgWorkSrc.includes('trajectoryVerbosity:2'), 'background-worker must cap active-session restarts to 1 with 8s backoff and verbosity 2');
   assert.ok(usageSrc.includes('maxOldGenerationSizeMb:32') && usageSrc.includes('livePollMs=3000') && usageSrc.includes('maxCandidates=10'), 'usage worker V8 cap must be 32 MB, live poll 3s, and maxCandidates 10');
   assert.ok(thoughtSrc.includes('opts.maxCacheEntries || 400'), 'thought-translator in-memory cache default must be capped at 400');
-  assert.equal((mainSrc.match(/includeMessages:\s*false/g) || []).length >= 2, true, 'main.mjs generator metadata calls must pass includeMessages:false');
+  assert.equal((telemetrySrc.match(/includeMessages:\s*false/g) || []).length >= 2, true, 'telemetry-service.mjs generator metadata calls must pass includeMessages:false');
 
   // 2b) TrajectoryJson zero-allocation discard fast-path preserves strict JSON validation
   const { TrajectoryJson } = await import('../vendor/pulse-dashboard/sidecars/panel/trajectory-json.mjs');

@@ -1142,9 +1142,9 @@ test('PR #19: isMainEntry handles Windows Junction / symlinked CLI entrypoints i
     });
     assert.deepEqual(JSON.parse(cliOut), [], 'CLI invoked via junction/symlink must enter CLI main branch and output JSON batches');
 
-    // Security redline preserved in daemon/main.mjs
-    const mainSrc = fs.readFileSync(mainFile, 'utf8');
-    assert.ok(mainSrc.includes('assertNotSymlinkSync'), 'assertNotSymlinkSync security boundary must remain intact in sidecars/daemon/main.mjs');
+    // Security redline preserved in src/daemon/fs-atomic.mjs
+    const fsAtomicSrc = fs.readFileSync(path.resolve(daemonDir, '..', '..', 'src', 'daemon', 'fs-atomic.mjs'), 'utf8');
+    assert.ok(fsAtomicSrc.includes('assertNotSymlinkSync'), 'assertNotSymlinkSync security boundary must remain intact in src/daemon/fs-atomic.mjs');
   } finally {
     fs.rmSync(tmpBase, { recursive: true, force: true });
   }
@@ -1235,8 +1235,8 @@ test('PR #22: usage rollup disk cache uses ~/.gemini/config, enforces non-symlin
     if (process.platform !== 'win32') {
       assert.equal(st.mode & 0o777, 0o600, 'POSIX cache file mode must be 0o600');
     }
-    const mainSrc = fs.readFileSync(new URL('../sidecars/daemon/main.mjs', import.meta.url), 'utf8');
-    assert.match(mainSrc, /writeFileAtomicSync\(cacheFile,\s*serialized,\s*\{\s*mode:\s*0o600\s*\}\)/, 'Must write cache via writeFileAtomicSync with mode 0o600');
+    const cacheSrc = fs.readFileSync(new URL('../src/daemon/telemetry-cache.mjs', import.meta.url), 'utf8');
+    assert.match(cacheSrc, /writeFileAtomicSync\(cacheFile,\s*serialized,\s*\{\s*mode:\s*0o600\s*\}\)/, 'Must write cache via writeFileAtomicSync with mode 0o600');
 
     // 3. Cold restart: Daemon #2 serves list-summaries & fetch-batch with 0 trajectory RPCs
     const daemon2 = new PrismDaemon({ rootDir: repoRoot, usageCachePath: explicitPath, silent: true });

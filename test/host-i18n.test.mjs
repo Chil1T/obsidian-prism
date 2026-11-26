@@ -1642,9 +1642,12 @@ test('[P1-1 & P2-1] settings-panel shows yield hint only when mode=auto, and dae
   const descOff = env.doc.querySelector('[data-ag-cs-row="hostLocalization"] [data-k="d"]').textContent;
   assert.equal(descOff.includes('自动礼让'), false, 'Yield hint must NOT appear when hostLocalization=off');
 
-  const daemonSrc = fs.readFileSync(path.join(ROOT, 'sidecars', 'daemon', 'main.mjs'), 'utf8');
-  assert.ok(daemonSrc.includes('!probe.hasHostI18n || !entry.hostI18nScriptId'));
-  assert.ok(daemonSrc.includes('if (evalRes && evalRes.ok)'));
+  const daemonHealSrc =
+    fs.readFileSync(path.join(ROOT, 'src', 'daemon', 'session-heal.mjs'), 'utf8') +
+    '\n' +
+    fs.readFileSync(path.join(ROOT, 'src', 'daemon', 'session-heal-channels.mjs'), 'utf8');
+  assert.ok(daemonHealSrc.includes('!probe.hasHostI18n || !entry.hostI18nScriptId'));
+  assert.ok(daemonHealSrc.includes('if (evalRes && evalRes.ok)'));
 });
 
 test('[P2-2 & P2-4] ReDoS patterns complete in linear time, English sentences are uncorrupted, and __proto__ text is safe', () => {

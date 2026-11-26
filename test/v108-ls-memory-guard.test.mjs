@@ -1860,10 +1860,20 @@ test('Follow-up 1: language="auto" resolves live target page data-ag-cs-lang (an
 });
 
 test('Follow-up 2: main.mjs statically imports conversation-archive.mjs, stop() synchronously flushes index & spawns detached archiver, and Win/macOS Watchers enforce autoArchiveOnExit fallback contracts', async () => {
-  // 1) Static import contract (zero dynamic await import('./conversation-archive.mjs') race)
+  // 1) Static import contract (zero dynamic await import('./conversation-archive.mjs') race across daemon entry & modules)
+  const loopSrc = fs.readFileSync(path.join(ROOT, 'src/daemon/daemon-loop.mjs'), 'utf8');
   const mainSrc = fs.readFileSync(path.join(ROOT, 'sidecars/daemon/main.mjs'), 'utf8');
-  assert.match(mainSrc, /^import \* as conversationArchive from '\.\/conversation-archive\.mjs';/m, 'main.mjs must statically import conversation-archive.mjs at top level');
-  assert.equal(/await\s+import\([^)]*conversation-archive\.mjs/.test(mainSrc), false, 'main.mjs must have 0 dynamic await import() calls to conversation-archive.mjs');
+  const storageActionsSrc = fs.readFileSync(path.join(ROOT, 'src/daemon/storage-guard-actions.mjs'), 'utf8');
+  const storageCoordSrc = fs.readFileSync(path.join(ROOT, 'src/daemon/storage-guard-coordinator.mjs'), 'utf8');
+  assert.match(loopSrc, /^import \* as conversationArchive from '\.\.\/\.\.\/sidecars\/daemon\/conversation-archive\.mjs';/m, 'daemon-loop.mjs must statically import conversation-archive.mjs at top level');
+  for (const [label, src] of [
+    ['sidecars/daemon/main.mjs', mainSrc],
+    ['src/daemon/daemon-loop.mjs', loopSrc],
+    ['src/daemon/storage-guard-actions.mjs', storageActionsSrc],
+    ['src/daemon/storage-guard-coordinator.mjs', storageCoordSrc],
+  ]) {
+    assert.equal(/await\s+import\([^)]*conversation-archive\.mjs/.test(src), false, `${label} must have 0 dynamic await import() calls to conversation-archive.mjs`);
+  }
 
   // 2) Synchronous stop() flush & detached archive spawn BEFORE any microtask/await completes
   const tmpRoot = mkTmp('prism-sync-stop-');
