@@ -1135,7 +1135,7 @@ namespace AgyClaudeStyle
                         }
                         if (kv.Key == "autoPromptCdpRelaunch" || kv.Key == "autoRelaunchOnBareLaunch")
                         {
-                            if (kv.Value is bool || kv.Value is string) cfg[kv.Key] = kv.Value;
+                            if (kv.Value is bool) cfg[kv.Key] = kv.Value;
                             continue;
                         }
                         bool isKnown = BuiltinValidators.ContainsKey(kv.Key) || (manifest != null && manifest.Validators != null && manifest.Validators.ContainsKey(kv.Key));

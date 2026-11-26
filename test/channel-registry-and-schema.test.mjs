@@ -618,4 +618,29 @@ test('Native CdpClient.cs & CdpClient.swift align 100% bidirectionally with all 
       '"eco"',
     ],
   });
+
+  // Strict boolean enforcement in ReadConfig / readConfig (reject string values for optional strictBoolean keys)
+  assert.match(
+    cdpCs,
+    /if\s*\(\s*kv\.Key\s*==\s*"autoPromptCdpRelaunch"\s*\|\|\s*kv\.Key\s*==\s*"autoRelaunchOnBareLaunch"\s*\)\s*\{\s*if\s*\(\s*kv\.Value\s+is\s+bool\s*\)\s*cfg\[kv\.Key\]\s*=\s*kv\.Value;/,
+    'CdpClient.cs ReadConfig must enforce strict boolean (reject string) for autoPromptCdpRelaunch/autoRelaunchOnBareLaunch'
+  );
+  assert.match(
+    cdpSwift,
+    /if\s+k\s*==\s*"autoPromptCdpRelaunch"\s*\|\|\s*k\s*==\s*"autoRelaunchOnBareLaunch"\s*\{\s*if\s+v\.boolValue\s*!=\s*nil\s*\{\s*cfg\[k\]\s*=\s*v\s*\}/,
+    'CdpClient.swift readConfig must enforce strict boolean (reject string) for autoPromptCdpRelaunch/autoRelaunchOnBareLaunch'
+  );
+
+  // CdpClient.swift updateConfigBatch must reuse atomicWriteJsonObject (symlink + O_NOFOLLOW + 0o600 protection)
+  const swiftBatchMatch = cdpSwift.match(/static\s+func\s+updateConfigBatch\([\s\S]*?\n    \}/);
+  assert.ok(swiftBatchMatch, 'CdpClient.swift must define updateConfigBatch');
+  assert.ok(
+    swiftBatchMatch[0].includes('try atomicWriteJsonObject(next, toFile: cfgPath)'),
+    'CdpClient.swift updateConfigBatch must delegate writes to atomicWriteJsonObject'
+  );
+  assert.equal(
+    swiftBatchMatch[0].includes('.tmp'),
+    false,
+    'CdpClient.swift updateConfigBatch must not construct predictable .tmp paths'
+  );
 });

@@ -58,6 +58,7 @@ const SYNC_ROOT_FILES = [
   'inject.js',
   'remove.js',
   'style.css',
+  'tools/install-plugin.cjs',
   ...DEFERRED_ROOT_MODULES,
   ...RUNTIME_PARTS.filter((p) => !p.includes('/')),
 ];

@@ -299,12 +299,16 @@ function collectLinuxPortableEntries({ configPath = null, version = cdp.PLUGIN_V
     pushEntry(`${ARCHIVE_ROOT_PREFIX}/${item.name}`, item.data, 0o644);
   }
 
+  const pluginEntryNames = new Set(pluginManifestInputs.map((e) => e.name));
   for (const toolRel of ['tools/install-plugin.cjs']) {
+    const nativeRel = `native-plugin/${toolRel}`;
+    if (pluginEntryNames.has(nativeRel)) continue;
     const abs = path.join(ROOT_DIR, ...toolRel.split('/'));
     if (fs.existsSync(abs) && fs.statSync(abs).isFile()) {
       const buf = fs.readFileSync(abs);
-      pushEntry(`${ARCHIVE_ROOT_PREFIX}/native-plugin/${toolRel}`, buf, 0o644);
-      pluginManifestInputs.push({ name: `native-plugin/${toolRel}`, data: buf });
+      pushEntry(`${ARCHIVE_ROOT_PREFIX}/${nativeRel}`, buf, 0o644);
+      pluginManifestInputs.push({ name: nativeRel, data: buf });
+      pluginEntryNames.add(nativeRel);
     }
   }
 

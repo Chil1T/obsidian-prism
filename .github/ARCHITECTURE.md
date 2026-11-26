@@ -51,10 +51,10 @@
 1. **按需延迟通道优先**：新功能与重型交互能力优先设计为独立按需通道（`CHANNEL_REGISTRY` 注册的 16 条延迟/按需通道，含 Phase 3B 下沉的 `telemetry` / `effortSlider` / `workbenchEnhancer` / `contextMenu` 四条通道，或独立 Sidecar 服务），而非塞入主入口 Channel 1。
 2. **开关关闭三零保障**：功能开关处于 `off` 时，必须保证 **0 编译开销、0 页面注入、0 运行期常驻内存**。
 3. **核心入口与 16 通道独立字节预算（实测基线）**：
-   - **Channel 1 全语种（`auto` + 9 语：`zh-CN`/`zh-TW`/`en`/`ja`/`ko`/`es`/`fr`/`de`/`tr`）**：硬上限 `< 390,000 B`（当前实测 `auto = 388,903 B`，9 语单包 `388,050–388,381 B`，含 `tr = 388,237 B`）；
+   - **Channel 1 全语种（`auto` + 9 语：`zh-CN`/`zh-TW`/`en`/`ja`/`ko`/`es`/`fr`/`de`/`tr`）**：硬上限 `< 390,000 B`（当前实测 `auto = 385,783 B`，9 语单包 `384,930–385,261 B`，含 `tr = 385,117 B`）；
    - **`pulse-vial-bridge.js`**：硬上限 `< 31,000 B`（当前实测 `30,964 B`）；
-   - **增量 `configRefresh` 表达式**（不含语言包切换）：硬上限 `< 4,096 B`（当前实测 `3,972 B`）；
-   - **16 条按需通道实测 / 预算对照**：`omni` `69,747 / 81,920 B`、`sidebar` `137,802 / 147,456 B`、`hostI18n` `537,865 B`（`tr` `277,677 B`）`/ 573,440 B`、`swarmI18n` `33,298 B`（`tr` `34,138 B`）`/ 49,152 B`、`thought` `149,071 / 163,840 B`、`inlineDiff` `50,433 / 57,344 B`、`wallpaper` `47,717 / 65,536 B`、`periodicPicker` `829,949 / 839,680 B`、`settings` `507,055 / 512,000 B`、`mascot` `124,264 / 131,072 B`、`suggester` `60,184 / 73,728 B`、`homeStudio` `57,220 / 57,344 B`、`telemetry` `112,680 / 131,072 B`、`effortSlider` `92,153 / 98,304 B`、`workbenchEnhancer` `50,974 / 57,344 B`、`contextMenu` `24,698 / 28,672 B`；
+   - **增量 `configRefresh` 表达式**（不含语言包切换）：硬上限 `< 4,096 B`（当前实测 `3,943 B`）；
+   - **16 条按需通道实测 / 预算对照**：`omni` `69,747 / 81,920 B`、`sidebar` `137,802 / 147,456 B`、`hostI18n` `537,865 B`（`tr` `277,677 B`）`/ 573,440 B`、`swarmI18n` `33,298 B`（`tr` `34,138 B`）`/ 49,152 B`、`thought` `149,532 / 163,840 B`、`inlineDiff` `50,433 / 57,344 B`、`wallpaper` `47,717 / 65,536 B`、`periodicPicker` `829,949 / 839,680 B`、`settings` `507,055 / 512,000 B`、`mascot` `124,764 / 131,072 B`、`suggester` `60,184 / 73,728 B`、`homeStudio` `57,220 / 57,344 B`、`telemetry` `115,340 / 131,072 B`、`effortSlider` `92,153 / 98,304 B`、`workbenchEnhancer` `51,002 / 57,344 B`、`contextMenu` `24,698 / 28,672 B`；
    - 任何涉及 Channel 1 的变更须保持字节中性或同步无损瘦身。
 
 ---
