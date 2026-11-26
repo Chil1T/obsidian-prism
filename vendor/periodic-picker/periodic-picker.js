@@ -581,14 +581,9 @@
       var hudChipByZ = new Map();
       var uiRefs = null;
 
-      var openRafId = 0;
-      var modeLayoutRafId = 0;
-      var orbitSyncRafId = 0;
-      var badgeSyncTimer = 0;
-      var blindDwellTimer = 0;
-      var blindFlashTimer = 0;
-      var confirmCloseTimer = 0;
-      var drawerClosingTimer = 0;
+      var openRafId = 0, modeLayoutRafId = 0, orbitSyncRafId = 0, dockResizeRafId = 0;
+      var badgeSyncTimer = 0, blindDwellTimer = 0, blindFlashTimer = 0, confirmCloseTimer = 0, drawerClosingTimer = 0, drawerTransTmr = 0;
+      var drawerTrans = false, drawerLockW = 0, a11yKeysOk = false;
       var pendingTimers = new Set();
 
       /* Lightweight documentElement-only attribute observer (NEVER observes document.body!) */
@@ -692,36 +687,33 @@
         }
       }
 
+      function clrDrawerTrans() {
+        if (drawerTransTmr) { clearTimer(drawerTransTmr); pendingTimers.delete(drawerTransTmr); drawerTransTmr = 0; }
+        drawerTrans = false; drawerLockW = 0;
+      }
+      function endDrawerTrans() {
+        var was = drawerTrans; clrDrawerTrans();
+        if (!was || !overlayEl || isDestroyed || isConfirmClosing || isDrawerClosing) return;
+        if (dockResizeRafId && cancelRaf) cancelRaf(dockResizeRafId);
+        dockResizeRafId = 0; lastBoundsSyncMs = readClockMs();
+        refreshCachedLayoutRects();
+        resizeCanvasToStage(!syncDockCompactState(), true);
+        if (!isOrbitDragging) syncHitLayerRects(true);
+        syncSceneAndDom(true);
+      }
       function clearTransientAsync() {
         if (openRafId && cancelRaf) cancelRaf(openRafId);
-        openRafId = 0;
         if (modeLayoutRafId && cancelRaf) cancelRaf(modeLayoutRafId);
-        modeLayoutRafId = 0;
-        stopOrbitFollowSync();
-        cancelPendingPointerMoveRaf();
-        clearSessionSyncTimer();
-        clearSessionSyncFollowupTimer();
-        clearOpenLockGuardTimer();
-        blindDwellTimer = 0;
-        blindFlashTimer = 0;
-        blindFlashZ = null;
-        extNearRendererActive = false;
-        confirmCloseTimer = 0;
-        drawerClosingTimer = 0;
-        isConfirmClosing = false;
-        isDrawerClosing = false;
-        confirmSlamZ = null;
-        confirmSlamAuxIndex = null;
-        lockedShakeAuxIndex = null;
-        isOrbitDragging = false;
-        gestureState = null;
-        pendingServoOrbit = null;
-        dragEffortProgress = null;
-        suppressPostDragClickUntil = 0;
-        pendingTimers.forEach(function (tid) {
-          clearTimer(tid);
-        });
-        pendingTimers.clear();
+        if (dockResizeRafId && cancelRaf) cancelRaf(dockResizeRafId);
+        openRafId = 0; modeLayoutRafId = 0; dockResizeRafId = 0;
+        drawerTrans = false; drawerTransTmr = 0; drawerLockW = 0;
+        stopOrbitFollowSync(); cancelPendingPointerMoveRaf();
+        clearSessionSyncTimer(); clearSessionSyncFollowupTimer(); clearOpenLockGuardTimer();
+        blindDwellTimer = 0; blindFlashTimer = 0; blindFlashZ = null; extNearRendererActive = false;
+        confirmCloseTimer = 0; drawerClosingTimer = 0; isConfirmClosing = false; isDrawerClosing = false;
+        confirmSlamZ = null; confirmSlamAuxIndex = null; lockedShakeAuxIndex = null;
+        isOrbitDragging = false; gestureState = null; pendingServoOrbit = null; dragEffortProgress = null; suppressPostDragClickUntil = 0;
+        pendingTimers.forEach(function (tid) { clearTimer(tid); }); pendingTimers.clear();
       }
 
       function clearStandbyTimer() { if (standbyDisposeTimer) { clearTimer(standbyDisposeTimer); standbyDisposeTimer = 0; } }
@@ -2388,6 +2380,11 @@
 
       /* ── Zero-Reflow Geometry Cache & Dock Compact Tier ────────────────── */
 
+      function readBoxRect(el, minW, minH, dw, dh) {
+        if (!el || typeof el.getBoundingClientRect !== 'function') return null;
+        var r = el.getBoundingClientRect();
+        return r && r.width > minW && r.height > minH ? { left: Number(r.left) || 0, top: Number(r.top) || 0, width: Number(r.width) || dw, height: Number(r.height) || dh } : null;
+      }
       function refreshCachedLayoutRects() {
         if (!overlayEl) return;
         try {
@@ -2395,77 +2392,32 @@
             var or = overlayEl.getBoundingClientRect();
             if (or && or.width > 160) cachedOverlayWidth = Number(or.width) || 0;
           }
-          var targetDock = spatialDockEl || stageEl || overlayEl;
-          if (targetDock && typeof targetDock.getBoundingClientRect === 'function') {
-            var dr = targetDock.getBoundingClientRect();
-            if (dr && dr.width > 40 && dr.height > 40) {
-              cachedDockBounds = {
-                left: Number(dr.left) || 0,
-                top: Number(dr.top) || 0,
-                width: Number(dr.width) || 1280,
-                height: Number(dr.height) || 340,
-              };
-              if (cachedOverlayWidth <= 160 && dr.width > 160) cachedOverlayWidth = Number(dr.width) || 0;
-            }
-          }
+          var dr = readBoxRect(spatialDockEl || stageEl || overlayEl, 40, 40, 1280, 340);
+          if (dr) { cachedDockBounds = dr; if (cachedOverlayWidth <= 160 && dr.width > 160) cachedOverlayWidth = dr.width; }
           if (cachedOverlayWidth <= 160 && overlayEl.parentElement) {
             var pw = Number(overlayEl.parentElement.clientWidth) || 0;
-            if (pw > 160) {
-              cachedOverlayWidth = pw;
-            } else if (typeof overlayEl.parentElement.getBoundingClientRect === 'function') {
+            if (pw > 160) cachedOverlayWidth = pw;
+            else if (typeof overlayEl.parentElement.getBoundingClientRect === 'function') {
               var pr = overlayEl.parentElement.getBoundingClientRect();
               if (pr && pr.width > 160) cachedOverlayWidth = Number(pr.width) || 0;
             }
           }
           var hostBox = overlayEl.parentElement;
-          var composerBox =
-            (hostBox && typeof hostBox.querySelector === 'function' && hostBox.querySelector('[data-testid="agent-input-box"]')) ||
+          var composerBox = (hostBox && typeof hostBox.querySelector === 'function' && hostBox.querySelector('[data-testid="agent-input-box"]')) ||
             (doc && typeof doc.querySelector === 'function' ? doc.querySelector('[data-testid="agent-input-box"]') : null);
-          if (composerBox && typeof composerBox.getBoundingClientRect === 'function') {
-            var compR = composerBox.getBoundingClientRect();
-            cachedComposerHeight = compR && compR.height > 28 ? Number(compR.height) : 0;
-          } else {
-            cachedComposerHeight = 0;
-          }
-          if (bentoRefs && bentoRefs.grid && typeof bentoRefs.grid.getBoundingClientRect === 'function') {
-            var cr = bentoRefs.grid.getBoundingClientRect();
-            if (cr && cr.width > 20 && cr.height > 20) {
-              cachedCardBounds = {
-                left: Number(cr.left) || 0,
-                top: Number(cr.top) || 0,
-                width: Number(cr.width) || 300,
-                height: Number(cr.height) || 316,
-              };
-            }
-          }
-          if (bentoRefs && bentoRefs.rightWing && typeof bentoRefs.rightWing.getBoundingClientRect === 'function') {
-            var rr = bentoRefs.rightWing.getBoundingClientRect();
-            if (rr && rr.width > 20 && rr.height > 20) {
-              cachedRightCardBounds = {
-                left: Number(rr.left) || 0,
-                top: Number(rr.top) || 0,
-                width: Number(rr.width) || 246,
-                height: Number(rr.height) || 316,
-              };
-            }
-          }
+          var compR = composerBox && typeof composerBox.getBoundingClientRect === 'function' ? composerBox.getBoundingClientRect() : null;
+          cachedComposerHeight = compR && compR.height > 28 ? Number(compR.height) : 0;
+          var cr = bentoRefs ? readBoxRect(bentoRefs.grid, 20, 20, 300, 316) : null;
+          if (cr) cachedCardBounds = cr;
+          var rr = bentoRefs ? readBoxRect(bentoRefs.rightWing, 20, 20, 246, 316) : null;
+          if (rr) cachedRightCardBounds = rr;
           if (stageEl && typeof stageEl.getBoundingClientRect === 'function') {
-            var sr = stageEl.getBoundingClientRect();
+            var sr = readBoxRect(stageEl, 80, 60, 1280, 680);
             lastStageRectFn = stageEl.getBoundingClientRect;
-            if (sr && sr.width > 80 && sr.height > 60) {
-              cachedStageBounds = {
-                left: Number(sr.left) || 0,
-                top: Number(sr.top) || 0,
-                width: Number(sr.width) || 1280,
-                height: Number(sr.height) || 680,
-                valid: true,
-              };
-              if (activeRenderer && typeof activeRenderer.syncCanvasBounds === 'function') {
-                activeRenderer.syncCanvasBounds(cachedStageBounds);
-              }
-            } else {
-              cachedStageBounds.valid = false;
-            }
+            if (sr) {
+              sr.valid = true; cachedStageBounds = sr;
+              if (activeRenderer && typeof activeRenderer.syncCanvasBounds === 'function') activeRenderer.syncCanvasBounds(cachedStageBounds);
+            } else cachedStageBounds.valid = false;
           }
         } catch (e) {}
       }
@@ -2768,126 +2720,76 @@
         setStyleVar(el, 'height', h + 'px');
       }
 
-      function syncHitLayerRects(skipBoundsMeasure) {
+      function applyEffortBtnRects(projEfforts, stageW, stageH) {
+        if (!uiRefs.effortButtons || !uiRefs.effortButtons.length) return;
+        for (var ei = 0; ei < uiRefs.effortButtons.length; ei += 1) {
+          var eb = uiRefs.effortButtons[ei], effCode = eb.getAttribute('data-ag-pp-effort'), matchedRect = null;
+          if (projEfforts) for (var pe = 0; pe < projEfforts.length; pe += 1) { if (projEfforts[pe].effort === effCode) { matchedRect = projEfforts[pe]; break; } }
+          applyBoxRect(eb, matchedRect || { left: stageW * 0.42 + ei * 58, top: stageH * 0.34, width: 52, height: 24 });
+        }
+      }
+
+      function syncHitLayerRects(skipBoundsMeasure, hitOpts) {
         if (!overlayEl || !stageEl || !uiRefs || isOrbitDragging) return;
         syncOrbitParallaxAndHud();
         if (!skipBoundsMeasure) refreshCachedLayoutRects();
         var stageRect = readStageBoundsZeroReflow();
         var stageW = stageRect && stageRect.valid && stageRect.width > 80 ? stageRect.width : 1280;
         var stageH = stageRect && stageRect.valid && stageRect.height > 60 ? stageRect.height : 680;
-
+        var isGl = overlayEl.getAttribute('data-gl-stage') === '1';
+        var wantKeys = !isGl || Boolean(hitOpts && hitOpts.includeKeys === true);
         var proj = null;
         if (activeRenderer && typeof activeRenderer.getInteractiveProjectedRects === 'function') {
-          try { proj = activeRenderer.getInteractiveProjectedRects(); } catch (e) { proj = null; }
+          try { proj = activeRenderer.getInteractiveProjectedRects(wantKeys ? undefined : { includeKeys: false }); } catch (e) { proj = null; }
         }
-
-        var keyRectMap = new Map();
-        if (proj && Array.isArray(proj.availableKeys)) {
-          for (var i = 0; i < proj.availableKeys.length; i += 1) {
-            var pk = proj.availableKeys[i];
-            keyRectMap.set(pk.slotZ || pk.z, { left: pk.left, top: pk.top, width: pk.width, height: pk.height });
+        if (wantKeys) {
+          if (isGl) a11yKeysOk = true;
+          var keyRectMap = new Map();
+          if (proj && Array.isArray(proj.availableKeys)) {
+            for (var i = 0; i < proj.availableKeys.length; i += 1) {
+              var pk = proj.availableKeys[i];
+              keyRectMap.set(pk.slotZ || pk.z, { left: pk.left, top: pk.top, width: pk.width, height: pk.height });
+            }
+          } else if (proj && Array.isArray(proj.keys)) {
+            for (var k = 0; k < proj.keys.length; k += 1) {
+              var item = proj.keys[k];
+              if (item.available) keyRectMap.set(item.slotZ || item.z, { left: item.left, top: item.top, width: item.width, height: item.height });
+            }
+          } else {
+            availableByZ.forEach(function (_, z) { var slot = SLOT_BY_Z.get(z); if (slot) keyRectMap.set(z, fallbackKeyRect(slot, stageW, stageH)); });
           }
-        } else if (proj && Array.isArray(proj.keys)) {
-          for (var k = 0; k < proj.keys.length; k += 1) {
-            var item = proj.keys[k];
-            if (!item.available) continue;
-            keyRectMap.set(item.slotZ || item.z, { left: item.left, top: item.top, width: item.width, height: item.height });
-          }
-        } else {
-          availableByZ.forEach(function (_, z) {
-            var slot = SLOT_BY_Z.get(z);
-            if (slot) keyRectMap.set(z, fallbackKeyRect(slot, stageW, stageH));
+          keyRectMap.forEach(function (rUpper, zUpper) {
+            if (zUpper === selectedZ) return;
+            var sUpper = SLOT_BY_Z.get(zUpper); if (!sUpper) return;
+            keyRectMap.forEach(function (rLower, zLower) {
+              if (zUpper === zLower || zLower === selectedZ) return;
+              var sLower = SLOT_BY_Z.get(zLower);
+              if (!sLower || sLower.col !== sUpper.col || sLower.row <= sUpper.row) return;
+              if (rUpper.top + rUpper.height > rLower.top - 1) rUpper.height = Math.max(12, rLower.top - rUpper.top - 1);
+            });
           });
-        }
-
-        keyRectMap.forEach(function (rUpper, zUpper) {
-          if (zUpper === selectedZ) return;
-          var sUpper = SLOT_BY_Z.get(zUpper);
-          if (!sUpper) return;
-          keyRectMap.forEach(function (rLower, zLower) {
-            if (zUpper === zLower || zLower === selectedZ) return;
-            var sLower = SLOT_BY_Z.get(zLower);
-            if (!sLower || sLower.col !== sUpper.col || sLower.row <= sUpper.row) return;
-            if (rUpper.top + rUpper.height > rLower.top - 1) {
-              rUpper.height = Math.max(12, rLower.top - rUpper.top - 1);
+          keyRectMap.forEach(function (rectVal, zKey) { var btn = keyNodesByZ.get(zKey); if (btn) applyBoxRect(btn, rectVal); });
+          if (auxKeyNodes.length > 0) {
+            var projAux = proj && Array.isArray(proj.auxKeys) ? proj.auxKeys : null;
+            for (var ai = 0; ai < auxKeyNodes.length; ai += 1) {
+              var ab = auxKeyNodes[ai], aSlot = auxSlots[ai];
+              if (!ab || !aSlot || !aSlot.available) continue;
+              var matchedAuxRect = null;
+              if (projAux) for (var pa = 0; pa < projAux.length; pa += 1) { var cand = projAux[pa]; if (cand && (cand.auxIndex === ai || cand.slotIndex === ai)) { matchedAuxRect = cand; break; } }
+              applyBoxRect(ab, matchedAuxRect || fallbackAuxKeyRect(ai, stageW, stageH));
             }
-          });
-        });
-
-        keyRectMap.forEach(function (rectVal, zKey) {
-          var btn = keyNodesByZ.get(zKey);
-          if (btn) applyBoxRect(btn, rectVal);
-        });
-
-        if (auxKeyNodes.length > 0) {
-          var projAux = proj && Array.isArray(proj.auxKeys) ? proj.auxKeys : null;
-          for (var ai = 0; ai < auxKeyNodes.length; ai += 1) {
-            var ab = auxKeyNodes[ai];
-            var aSlot = auxSlots[ai];
-            if (!ab || !aSlot || !aSlot.available) continue;
-            var matchedAuxRect = null;
-            if (projAux) {
-              for (var pa = 0; pa < projAux.length; pa += 1) {
-                var cand = projAux[pa];
-                if (cand && (cand.auxIndex === ai || cand.slotIndex === ai)) {
-                  matchedAuxRect = cand;
-                  break;
-                }
-              }
-            }
-            applyBoxRect(ab, matchedAuxRect || fallbackAuxKeyRect(ai, stageW, stageH));
           }
         }
-
-        if (uiRefs.effortButtons && uiRefs.effortButtons.length > 0) {
-          var projEfforts = proj && Array.isArray(proj.efforts) ? proj.efforts : null;
-          for (var ei = 0; ei < uiRefs.effortButtons.length; ei += 1) {
-            var eb = uiRefs.effortButtons[ei];
-            var effCode = eb.getAttribute('data-ag-pp-effort');
-            var matchedRect = null;
-            if (projEfforts) {
-              for (var pe = 0; pe < projEfforts.length; pe += 1) {
-                if (projEfforts[pe].effort === effCode) {
-                  matchedRect = projEfforts[pe];
-                  break;
-                }
-              }
-            }
-            applyBoxRect(
-              eb,
-              matchedRect || { left: stageW * 0.42 + ei * 58, top: stageH * 0.34, width: 52, height: 24 }
-            );
-          }
-        }
+        applyEffortBtnRects(proj && Array.isArray(proj.efforts) ? proj.efforts : null, stageW, stageH);
       }
 
       function syncEffortButtonRectsOnly() {
         if (!overlayEl || !stageEl || !uiRefs || isOrbitDragging) return;
-        if (!uiRefs.effortButtons || uiRefs.effortButtons.length === 0) return;
         var stageRect = readStageBoundsZeroReflow();
-        var stageW = stageRect && stageRect.valid && stageRect.width > 80 ? stageRect.width : 1280;
-        var stageH = stageRect && stageRect.valid && stageRect.height > 60 ? stageRect.height : 680;
-        var projEfforts = getProjectedEffortsSafe();
-        for (var ei = 0; ei < uiRefs.effortButtons.length; ei += 1) {
-          var eb = uiRefs.effortButtons[ei];
-          var effCode = eb.getAttribute('data-ag-pp-effort');
-          var matchedRect = null;
-          if (projEfforts) {
-            for (var pe = 0; pe < projEfforts.length; pe += 1) {
-              if (projEfforts[pe].effort === effCode) {
-                matchedRect = projEfforts[pe];
-                break;
-              }
-            }
-          }
-          applyBoxRect(
-            eb,
-            matchedRect || { left: stageW * 0.42 + ei * 58, top: stageH * 0.34, width: 52, height: 24 }
-          );
-        }
+        applyEffortBtnRects(getProjectedEffortsSafe(), stageRect && stageRect.valid && stageRect.width > 80 ? stageRect.width : 1280, stageRect && stageRect.valid && stageRect.height > 60 ? stageRect.height : 680);
       }
 
-      function resizeCanvasToStage(skipRectRefresh) {
+      function resizeCanvasToStage(skipRectRefresh, deferRender) {
         if (!stageEl || !canvasEl) return;
         if (!skipRectRefresh || !cachedStageBounds.valid) refreshCachedLayoutRects();
         var sBounds = readStageBoundsZeroReflow();
@@ -2895,22 +2797,19 @@
         var cssH = sBounds.valid ? sBounds.height : 680;
         var dpr = Math.min(2, Math.max(1, Number(root && root.devicePixelRatio) || 1));
         if (activeRenderer && typeof activeRenderer.resize === 'function') {
-          try { activeRenderer.resize(cssW, cssH, dpr, sBounds.valid ? sBounds : null); } catch (e) {}
+          try { activeRenderer.resize(cssW, cssH, dpr, sBounds.valid ? sBounds : null, deferRender ? { deferRender: true } : undefined); } catch (e) {}
         }
       }
 
       function resolveStageLocalPoint(clientX, clientY) {
         var sRect = readStageBoundsZeroReflow();
-        return {
-          x: (Number(clientX) || 0) - (sRect.valid ? sRect.left : 0),
-          y: (Number(clientY) || 0) - (sRect.valid ? sRect.top : 0),
-        };
+        return { x: (Number(clientX) || 0) - (sRect.valid ? sRect.left : 0), y: (Number(clientY) || 0) - (sRect.valid ? sRect.top : 0) };
       }
 
       function getProjectedEffortsSafe() {
         if (!activeRenderer || typeof activeRenderer.getInteractiveProjectedRects !== 'function') return null;
         try {
-          var proj = activeRenderer.getInteractiveProjectedRects();
+          var proj = activeRenderer.getInteractiveProjectedRects({ includeKeys: false });
           if (proj && Array.isArray(proj.efforts) && proj.efforts.length > 0) return proj.efforts;
         } catch (e) {}
         return null;
@@ -3305,120 +3204,68 @@
         var bannerSig = (dInfo.sessionBanner || '') + '|' + nextSrTitle + '|' + dInfo.chemLabel + '|' + dInfo.subtitle;
         if (bannerSig !== lastDomBannerSig) {
           lastDomBannerSig = bannerSig;
-          if (dInfo.sessionBanner) {
-            uiRefs.bannerText.textContent = dInfo.sessionBanner;
-            uiRefs.banner.setAttribute('data-show', '1');
-          } else {
-            uiRefs.bannerText.textContent = '';
-            uiRefs.banner.setAttribute('data-show', '0');
-          }
-          uiRefs.srTitle.textContent = nextSrTitle;
-          uiRefs.srChem.textContent = dInfo.chemLabel;
-          uiRefs.srSub.textContent = dInfo.subtitle;
+          uiRefs.bannerText.textContent = dInfo.sessionBanner || '';
+          uiRefs.banner.setAttribute('data-show', dInfo.sessionBanner ? '1' : '0');
+          uiRefs.srTitle.textContent = nextSrTitle; uiRefs.srChem.textContent = dInfo.chemLabel; uiRefs.srSub.textContent = dInfo.subtitle;
         }
 
-        var effSig =
-          (dInfo.isAuxModel ? 'aux:' + dInfo.globalAuxIndex : String(dInfo.z)) +
-          ':' + (orchLatched ? 'orch' : 'solo') +
-          '|' + dInfo.levels.map(function (l) { return l.effort + ':' + (l.active ? '1' : '0'); }).join(',');
+        var effSig = (dInfo.isAuxModel ? 'aux:' + dInfo.globalAuxIndex : String(dInfo.z)) + ':' + (orchLatched ? 'orch' : 'solo') + '|' +
+          dInfo.levels.map(function (l) { return l.effort + ':' + (l.active ? '1' : '0'); }).join(',');
 
         var effortLayoutChanged = false;
         if (uiRefs.lastEffortSig !== effSig) {
           var prevEffCount = uiRefs.effortButtons.length;
           uiRefs.lastEffortSig = effSig;
           if (!Array.isArray(uiRefs.effortButtonPool)) uiRefs.effortButtonPool = [];
-          if (!uiRefs.effortTargetInfo) {
-            uiRefs.effortTargetInfo = { isAuxModel: false, globalAuxIndex: null, z: null, effortTitle: '' };
-          }
+          if (!uiRefs.effortTargetInfo) uiRefs.effortTargetInfo = { isAuxModel: false, globalAuxIndex: null, z: null, effortTitle: '' };
           uiRefs.effortTargetInfo.isAuxModel = Boolean(dInfo.isAuxModel);
-          uiRefs.effortTargetInfo.globalAuxIndex =
-            dInfo.globalAuxIndex !== undefined ? dInfo.globalAuxIndex : null;
-          uiRefs.effortTargetInfo.z = dInfo.z;
-          uiRefs.effortTargetInfo.effortTitle = dInfo.effortTitle || '';
+          uiRefs.effortTargetInfo.globalAuxIndex = dInfo.globalAuxIndex !== undefined ? dInfo.globalAuxIndex : null;
+          uiRefs.effortTargetInfo.z = dInfo.z; uiRefs.effortTargetInfo.effortTitle = dInfo.effortTitle || '';
 
-          var effPool = uiRefs.effortButtonPool;
-          uiRefs.effortButtons.length = 0;
-
+          var effPool = uiRefs.effortButtonPool; uiRefs.effortButtons.length = 0;
           for (var li = 0; li < dInfo.levels.length; li += 1) {
-            var lvl = dInfo.levels[li];
-            var eBtn = effPool[li];
+            var lvl = dInfo.levels[li], eBtn = effPool[li];
             if (!eBtn) {
-              eBtn = mkEl(doc, 'button', 'ag-pp-hit-btn ag-pp-seg-btn', lvl.label);
-              eBtn.type = 'button';
+              eBtn = mkEl(doc, 'button', 'ag-pp-hit-btn ag-pp-seg-btn', lvl.label); eBtn.type = 'button';
               (function (pooledBtn) {
                 pooledBtn.addEventListener('focus', function () {
                   var ef = pooledBtn.getAttribute('data-effort');
-                  if (ef && hoveredEffort !== ef) {
-                    hoveredEffort = ef;
-                    syncSceneAndDom(true, { hoverOnly: true, deferRender: true });
-                  }
+                  if (ef && hoveredEffort !== ef) { hoveredEffort = ef; syncSceneAndDom(true, { hoverOnly: true, deferRender: true }); }
                 });
                 pooledBtn.addEventListener('blur', function () {
                   var ef = pooledBtn.getAttribute('data-effort');
-                  if (ef && hoveredEffort === ef) {
-                    hoveredEffort = null;
-                    syncSceneAndDom(true, { hoverOnly: true, deferRender: true });
-                  }
+                  if (ef && hoveredEffort === ef) { hoveredEffort = null; syncSceneAndDom(true, { hoverOnly: true, deferRender: true }); }
                 });
                 pooledBtn.addEventListener('click', function (ev) {
                   ev.stopPropagation();
                   if (hasPointerCoords(ev) && activeRenderer && typeof activeRenderer.pick === 'function') {
                     var picked = activeRenderer.pick(ev.clientX, ev.clientY);
-                    if (picked) {
-                      dispatchPickedTarget(picked);
-                      return;
-                    }
+                    if (picked) { dispatchPickedTarget(picked); return; }
                   }
-                  var ef = pooledBtn.getAttribute('data-effort');
-                  if (!ef) return;
+                  var ef = pooledBtn.getAttribute('data-effort'); if (!ef) return;
                   var tgt = uiRefs && uiRefs.effortTargetInfo ? uiRefs.effortTargetInfo : {};
-                  if (tgt.isAuxModel && tgt.globalAuxIndex !== null && tgt.globalAuxIndex !== undefined) {
-                    handleAuxEffortSelect(tgt.globalAuxIndex, ef);
-                  } else {
-                    handleEffortSelect(ef, tgt.z);
-                  }
+                  if (tgt.isAuxModel && tgt.globalAuxIndex !== null && tgt.globalAuxIndex !== undefined) handleAuxEffortSelect(tgt.globalAuxIndex, ef);
+                  else handleEffortSelect(ef, tgt.z);
                 });
               })(eBtn);
-              hitLayerEl.appendChild(eBtn);
-              effPool.push(eBtn);
-              effortLayoutChanged = true;
+              hitLayerEl.appendChild(eBtn); effPool.push(eBtn); effortLayoutChanged = true;
             }
             if (eBtn.textContent !== lvl.label) eBtn.textContent = lvl.label;
-            if (eBtn.getAttribute('data-ag-pp-effort') !== lvl.effort) {
-              eBtn.setAttribute('data-ag-pp-effort', lvl.effort);
-              effortLayoutChanged = true;
-            }
-            if (eBtn.getAttribute('data-effort') !== lvl.effort) {
-              eBtn.setAttribute('data-effort', lvl.effort);
-            }
+            if (eBtn.getAttribute('data-ag-pp-effort') !== lvl.effort) { eBtn.setAttribute('data-ag-pp-effort', lvl.effort); effortLayoutChanged = true; }
+            if (eBtn.getAttribute('data-effort') !== lvl.effort) eBtn.setAttribute('data-effort', lvl.effort);
             var eAct = lvl.active ? '1' : '0';
-            if (eBtn.getAttribute('data-active') !== eAct) {
-              eBtn.setAttribute('data-active', eAct);
-              eBtn.setAttribute('aria-pressed', lvl.active ? 'true' : 'false');
-            }
+            if (eBtn.getAttribute('data-active') !== eAct) { eBtn.setAttribute('data-active', eAct); eBtn.setAttribute('aria-pressed', lvl.active ? 'true' : 'false'); }
             var eAria = dInfo.effortTitle + ': ' + lvl.label;
             if (eBtn.getAttribute('aria-label') !== eAria) eBtn.setAttribute('aria-label', eAria);
-            if (eBtn.hidden) {
-              setStyleVar(eBtn, 'display', '');
-              eBtn.hidden = false;
-              eBtn.removeAttribute('aria-hidden');
-              eBtn.removeAttribute('tabindex');
-            }
+            if (eBtn.hidden) { setStyleVar(eBtn, 'display', ''); eBtn.hidden = false; eBtn.removeAttribute('aria-hidden'); eBtn.removeAttribute('tabindex'); }
             uiRefs.effortButtons.push(eBtn);
           }
 
           for (var xi = dInfo.levels.length; xi < effPool.length; xi += 1) {
             var unusedBtn = effPool[xi];
-            if (!unusedBtn.hidden) {
-              setStyleVar(unusedBtn, 'display', 'none');
-              unusedBtn.hidden = true;
-              unusedBtn.setAttribute('aria-hidden', 'true');
-              unusedBtn.setAttribute('tabindex', '-1');
-            }
-            unusedBtn.setAttribute('data-active', '0');
-            unusedBtn.setAttribute('aria-pressed', 'false');
-            unusedBtn.removeAttribute('data-ag-pp-effort');
-            unusedBtn.removeAttribute('data-effort');
+            if (!unusedBtn.hidden) { setStyleVar(unusedBtn, 'display', 'none'); unusedBtn.hidden = true; unusedBtn.setAttribute('aria-hidden', 'true'); unusedBtn.setAttribute('tabindex', '-1'); }
+            unusedBtn.setAttribute('data-active', '0'); unusedBtn.setAttribute('aria-pressed', 'false');
+            unusedBtn.removeAttribute('data-ag-pp-effort'); unusedBtn.removeAttribute('data-effort');
           }
           if (uiRefs.effortButtons.length !== prevEffCount) effortLayoutChanged = true;
         }
@@ -3428,69 +3275,39 @@
         if (ctrlSig !== lastDomCtrlSig) {
           lastDomCtrlSig = ctrlSig;
           if (uiRefs.resetBtn) {
-            var resetLbl = pk.resetTitle;
-            uiRefs.resetBtn.setAttribute('aria-label', resetLbl);
-            uiRefs.resetBtn.title = resetLbl;
+            uiRefs.resetBtn.setAttribute('aria-label', pk.resetTitle); uiRefs.resetBtn.title = pk.resetTitle;
             if (uiRefs.resetLabel) uiRefs.resetLabel.textContent = pk.resetLbl;
-            uiRefs.lastRotatedFlag = rotFlagNow;
-            uiRefs.resetBtn.setAttribute('data-rotated', rotFlagNow);
+            uiRefs.lastRotatedFlag = rotFlagNow; uiRefs.resetBtn.setAttribute('data-rotated', rotFlagNow);
           }
           if (uiRefs.muteBtn) {
             var muteLbl = muted ? pk.muteOn : pk.muteOff;
-            uiRefs.muteBtn.setAttribute('data-muted', muted ? '1' : '0');
-            uiRefs.muteBtn.setAttribute('aria-pressed', muted ? 'true' : 'false');
-            uiRefs.muteBtn.setAttribute('aria-label', muteLbl);
-            uiRefs.muteBtn.title = muteLbl;
+            uiRefs.muteBtn.setAttribute('data-muted', muted ? '1' : '0'); uiRefs.muteBtn.setAttribute('aria-pressed', muted ? 'true' : 'false');
+            uiRefs.muteBtn.setAttribute('aria-label', muteLbl); uiRefs.muteBtn.title = muteLbl;
           }
-          if (uiRefs.closeBtn) {
-            var closeLbl = pk.closeLbl;
-            uiRefs.closeBtn.setAttribute('aria-label', closeLbl);
-            uiRefs.closeBtn.title = closeLbl;
-          }
+          if (uiRefs.closeBtn) { uiRefs.closeBtn.setAttribute('aria-label', pk.closeLbl); uiRefs.closeBtn.title = pk.closeLbl; }
         }
 
         var litTierCount = payload && payload.bentoSpec ? Number(payload.bentoSpec.litDots) || 2 : 2;
-        var hardwareStatePayload = {
-          muted: Boolean(muted),
-          hoveredControl: hoveredBtn,
-          pressedControl: pressedBtn,
-          effortTier: Math.max(0, Math.min(3, litTierCount - 1)),
-        };
+        var hardwareStatePayload = { muted: Boolean(muted), hoveredControl: hoveredBtn, pressedControl: pressedBtn, effortTier: Math.max(0, Math.min(3, litTierCount - 1)) };
         if (activeRenderer && typeof activeRenderer.setHardwareState === 'function') {
-          try { activeRenderer.setHardwareState(hardwareStatePayload); } catch (e) {}
+          var deferHw = Boolean(deferRender || typeof activeRenderer.setState === 'function');
+          try { activeRenderer.setHardwareState(hardwareStatePayload, deferHw ? { deferRender: true } : undefined); } catch (e) {}
         }
         if (activeRenderer && typeof activeRenderer.setState === 'function') {
           try {
             var nextRendererState = {
-              themeProfile: profile,
-              stageMode: stageMode,
-              paused: isHostPaused,
-              orchLatched: Boolean(orchLatched),
-              availableByZ: availableByZ,
-              selectedZ: selectedZ,
-              confirmSlamZ: confirmSlamZ,
-              hoveredZ: hoveredZ,
-              pressedZ: pressedZ,
-              lockedShakeZ: lockedShakeZ,
-              lockedShakeAuxIndex: lockedShakeAuxIndex,
-              auxModels: auxSlots,
-              auxPage: activeAuxPage,
-              auxPageCount: auxPageCount,
-              selectedAuxIndex: localSelAux,
-              hoveredAuxIndex: hoveredAuxIndex,
-              pressedAuxIndex: pressedAuxIndex,
-              confirmSlamAuxIndex: confirmSlamAuxIndex,
+              themeProfile: profile, stageMode: stageMode, paused: isHostPaused, orchLatched: Boolean(orchLatched),
+              availableByZ: availableByZ, selectedZ: selectedZ, confirmSlamZ: confirmSlamZ, hoveredZ: hoveredZ,
+              pressedZ: pressedZ, lockedShakeZ: lockedShakeZ, lockedShakeAuxIndex: lockedShakeAuxIndex,
+              auxModels: auxSlots, auxPage: activeAuxPage, auxPageCount: auxPageCount, selectedAuxIndex: localSelAux,
+              hoveredAuxIndex: hoveredAuxIndex, pressedAuxIndex: pressedAuxIndex, confirmSlamAuxIndex: confirmSlamAuxIndex,
               confirmSlamActive: Boolean(isConfirmClosing && (confirmSlamZ !== null || confirmSlamAuxIndex !== null)),
-              deckInfo: dInfo,
-              hardwareState: hardwareStatePayload,
+              deckInfo: dInfo, hardwareState: hardwareStatePayload,
               topControls: { muted: muted, hoveredBtn: hoveredBtn, pressedBtn: pressedBtn },
               reducedMotion: bentoUi.isReducedMotion(doc, root),
             };
-            if (deferRender) {
-              activeRenderer.setState(nextRendererState, { deferRender: true });
-            } else {
-              activeRenderer.setState(nextRendererState);
-            }
+            if (deferRender) activeRenderer.setState(nextRendererState, { deferRender: true });
+            else activeRenderer.setState(nextRendererState);
           } catch (e2) {}
         }
 
@@ -3852,6 +3669,7 @@
           }
         }
         if (beforeOrbit.isRotated || didReset || fromHardwareControl) playSound('reset');
+        a11yKeysOk = false;
         syncHitLayerRects(true);
         if (didReset && !bentoUi.isReducedMotion(doc, root)) {
           stopOrbitFollowSync();
@@ -3954,9 +3772,10 @@
         }
 
         if (prevMode !== stageMode) playSound('step', stageMode === 'fullscreen' ? 3 : 1);
+        clrDrawerTrans(); a11yKeysOk = false;
         refreshCachedLayoutRects();
         syncDockCompactState();
-        resizeCanvasToStage();
+        resizeCanvasToStage(false, true);
         syncSceneAndDom(true);
         if (!isOrbitDragging) syncHitLayerRects(true);
 
@@ -3967,7 +3786,7 @@
             if (overlayEl && !isDestroyed) {
               refreshCachedLayoutRects();
               syncDockCompactState();
-              resizeCanvasToStage();
+              resizeCanvasToStage(false, true);
               if (!isOrbitDragging) syncHitLayerRects(true);
             }
           });
@@ -4781,50 +4600,18 @@
           if (triggerEl && typeof triggerEl.blur === 'function') triggerEl.blur();
         } catch (eBlur) {}
 
-        cardFlipped = false;
-        compactExpanded = false;
-        activeAuxPage = 0;
-        hoveredZ = null;
-        hoveredAuxIndex = null;
-        inspectedBlindZ = null;
-        inspectedBlindAuxIndex = null;
-        blindFlashZ = null;
-        extNearRendererActive = false;
-        pressedZ = null;
-        pressedAuxIndex = null;
-        hoveredEffort = null;
-        pressedEffort = null;
-        dragEffortProgress = null;
-        hoveredBtn = null;
-        pressedBtn = null;
-        lockedShakeZ = null;
-        lockedShakeAuxIndex = null;
-        isConfirmClosing = false;
-        isDrawerClosing = false;
-        confirmSlamZ = null;
-        confirmSlamAuxIndex = null;
-        pointerDownOutside = false;
-        isOrbitDragging = false;
-        gestureState = null;
-        pendingServoOrbit = null;
-        suppressPostDragClickUntil = 0;
-        lastPointerClient.x = -9999;
-        lastPointerClient.y = -9999;
-        lastPointerClient.active = false;
-        lastFlushedPointer.x = NaN;
-        lastFlushedPointer.y = NaN;
-        lastFlushedPointer.target = null;
-        lastFlushedPointer.inside = false;
-        lastDomSelectedZ = undefined;
-        lastDomHoveredZ = null;
-        lastDomSelectedAuxLocal = undefined;
-        lastDomOrchLatched = undefined;
-        lastDomChromeSig = '';
-        lastDomHaloSig = '';
-        lastDomHudSig = '';
-        lastDomCtrlSig = '';
-        lastDomBannerSig = '';
-        lastDomAvailVersion = -1;
+        cardFlipped = false; compactExpanded = false; activeAuxPage = 0;
+        hoveredZ = null; hoveredAuxIndex = null; inspectedBlindZ = null; inspectedBlindAuxIndex = null;
+        blindFlashZ = null; extNearRendererActive = false; pressedZ = null; pressedAuxIndex = null;
+        hoveredEffort = null; pressedEffort = null; dragEffortProgress = null; hoveredBtn = null; pressedBtn = null;
+        lockedShakeZ = null; lockedShakeAuxIndex = null; isConfirmClosing = false; isDrawerClosing = false;
+        confirmSlamZ = null; confirmSlamAuxIndex = null; pointerDownOutside = false; isOrbitDragging = false;
+        gestureState = null; pendingServoOrbit = null; suppressPostDragClickUntil = 0;
+        clrDrawerTrans(); a11yKeysOk = false;
+        lastPointerClient.x = -9999; lastPointerClient.y = -9999; lastPointerClient.active = false;
+        lastFlushedPointer.x = NaN; lastFlushedPointer.y = NaN; lastFlushedPointer.target = null; lastFlushedPointer.inside = false;
+        lastDomSelectedZ = undefined; lastDomHoveredZ = null; lastDomSelectedAuxLocal = undefined; lastDomOrchLatched = undefined;
+        lastDomChromeSig = ''; lastDomHaloSig = ''; lastDomHudSig = ''; lastDomCtrlSig = ''; lastDomBannerSig = ''; lastDomAvailVersion = -1;
 
         syncSelectionStateFromHostCtx(activeHostCtx);
         lastSessionSig = computeSessionContextSignature(activeHostCtx, activeAnchorBtn);
@@ -4839,86 +4626,29 @@
 
         var reusedShell = Boolean(cachedShell && cachedShell.doc === doc && cachedShell.overlayEl);
         if (reusedShell) {
-          var shell = cachedShell;
-          cachedShell = null;
-          overlayEl = shell.overlayEl;
-          deskmatEl = shell.deskmatEl;
-          dockTopRimEl = shell.dockTopRimEl;
-          dockGripEl = shell.dockGripEl;
-          spatialDockEl = shell.spatialDockEl;
-          bentoRefs = shell.bentoRefs;
-          stageEl = shell.stageEl;
-          floorShadowEl = shell.floorShadowEl;
-          hitLayerEl = shell.hitLayerEl;
-          hudPillEl = shell.hudPillEl;
-          swatchesWrapEl = shell.swatchesWrapEl;
-          uiRefs = shell.uiRefs;
+          var shell = cachedShell; cachedShell = null;
+          overlayEl = shell.overlayEl; deskmatEl = shell.deskmatEl; dockTopRimEl = shell.dockTopRimEl; dockGripEl = shell.dockGripEl;
+          spatialDockEl = shell.spatialDockEl; bentoRefs = shell.bentoRefs; stageEl = shell.stageEl; floorShadowEl = shell.floorShadowEl;
+          hitLayerEl = shell.hitLayerEl; hudPillEl = shell.hudPillEl; swatchesWrapEl = shell.swatchesWrapEl; uiRefs = shell.uiRefs;
+          keyNodesByZ.clear(); shell.keyNodesByZ.forEach(function (btn, zKey) { keyNodesByZ.set(zKey, btn); });
+          auxKeyNodes.length = 0; for (var ra = 0; ra < shell.auxKeyNodes.length; ra += 1) auxKeyNodes.push(shell.auxKeyNodes[ra]);
+          hudChipByZ.clear(); shell.hudChipByZ.forEach(function (obj, zKey) { hudChipByZ.set(zKey, obj); });
 
-          keyNodesByZ.clear();
-          shell.keyNodesByZ.forEach(function (btn, zKey) {
-            keyNodesByZ.set(zKey, btn);
-          });
-          auxKeyNodes.length = 0;
-          for (var ra = 0; ra < shell.auxKeyNodes.length; ra += 1) {
-            auxKeyNodes.push(shell.auxKeyNodes[ra]);
-          }
-          hudChipByZ.clear();
-          shell.hudChipByZ.forEach(function (obj, zKey) {
-            hudChipByZ.set(zKey, obj);
-          });
-
-          overlayEl.removeAttribute('data-closing');
-          overlayEl.removeAttribute('data-confirm-slam');
-          overlayEl.removeAttribute('data-orbit-dragging');
-          overlayEl.removeAttribute('data-effort-dragging');
-          overlayEl.removeAttribute('data-in-flow');
-          overlayEl.removeAttribute('data-short-viewport');
+          overlayEl.removeAttribute('data-closing'); overlayEl.removeAttribute('data-confirm-slam');
+          overlayEl.removeAttribute('data-orbit-dragging'); overlayEl.removeAttribute('data-effort-dragging');
+          overlayEl.removeAttribute('data-in-flow'); overlayEl.removeAttribute('data-short-viewport');
           setStyleVar(overlayEl, '--ag-pp-short-dock-h', null);
-          overlayEl.setAttribute('aria-modal', stageMode === 'fullscreen' ? 'true' : 'false');
-          overlayEl.setAttribute('aria-label', pk.pickerAria);
-          overlayEl.setAttribute('data-stage-mode', stageMode);
-          overlayEl.setAttribute('data-theme', profile.theme);
-          overlayEl.setAttribute('data-kit', profile.id);
-          overlayEl.setAttribute('data-rim-tone', profile.rimTone || 'default');
-          overlayEl.setAttribute('data-corners', profile.corners);
-          overlayEl.setAttribute('data-mono', profile.isMono ? '1' : '0');
-          overlayEl.setAttribute('data-card-flipped', '0');
-          overlayEl.setAttribute('data-orch-latched', orchLatched ? '1' : '0');
-          overlayEl.setAttribute('data-pointer-near', '0');
-          overlayEl.setAttribute('data-open', '0');
           if (hudPillEl) hudPillEl.setAttribute('aria-label', pk.hudAria);
-
-          if (dockTopRimEl) {
-            setStyleVar(dockTopRimEl, '--ag-pp-dock-rim-alpha', '0');
-            setStyleVar(dockTopRimEl, '--ag-pp-px', '-999px');
-          }
+          if (dockTopRimEl) { setStyleVar(dockTopRimEl, '--ag-pp-dock-rim-alpha', '0'); setStyleVar(dockTopRimEl, '--ag-pp-px', '-999px'); }
           if (bentoRefs) {
-            bentoRefs._lastDomSig = '';
-            bentoRefs._lastCommittedCssSig = '';
-            bentoRefs._lastPagerSig = '';
-            bentoRefs.lastBentoEffSig = '';
-            if (bentoRefs.specCardRim) {
-              setStyleVar(bentoRefs.specCardRim, '--ag-pp-card-rim-alpha', '0');
-              setStyleVar(bentoRefs.specCardRim, '--ag-pp-card-px', '-999px');
-              setStyleVar(bentoRefs.specCardRim, '--ag-pp-card-py', '-999px');
-            }
-            if (bentoRefs.telePodRim) {
-              setStyleVar(bentoRefs.telePodRim, '--ag-pp-right-rim-alpha', '0');
-              setStyleVar(bentoRefs.telePodRim, '--ag-pp-right-px', '-999px');
-              setStyleVar(bentoRefs.telePodRim, '--ag-pp-right-py', '-999px');
-            }
+            bentoRefs._lastDomSig = ''; bentoRefs._lastCommittedCssSig = ''; bentoRefs._lastPagerSig = ''; bentoRefs.lastBentoEffSig = '';
+            if (bentoRefs.specCardRim) { setStyleVar(bentoRefs.specCardRim, '--ag-pp-card-rim-alpha', '0'); setStyleVar(bentoRefs.specCardRim, '--ag-pp-card-px', '-999px'); setStyleVar(bentoRefs.specCardRim, '--ag-pp-card-py', '-999px'); }
+            if (bentoRefs.telePodRim) { setStyleVar(bentoRefs.telePodRim, '--ag-pp-right-rim-alpha', '0'); setStyleVar(bentoRefs.telePodRim, '--ag-pp-right-px', '-999px'); setStyleVar(bentoRefs.telePodRim, '--ag-pp-right-py', '-999px'); }
             if (bentoRefs.specCard && bentoRefs.specCard.classList) bentoRefs.specCard.classList.remove('is-session-switching');
             if (bentoRefs.telePod && bentoRefs.telePod.classList) bentoRefs.telePod.classList.remove('is-session-switching');
           }
-          if (floorShadowEl) {
-            setStyleVar(floorShadowEl, '--pp-shadow-px', '0px');
-            setStyleVar(floorShadowEl, '--pp-shadow-py', '0px');
-          }
-          if (uiRefs) {
-            uiRefs.lastEffortSig = '';
-            uiRefs.lastRotatedFlag = '0';
-            if (uiRefs.resetBtn) uiRefs.resetBtn.setAttribute('data-rotated', '0');
-          }
+          if (floorShadowEl) { setStyleVar(floorShadowEl, '--pp-shadow-px', '0px'); setStyleVar(floorShadowEl, '--pp-shadow-py', '0px'); }
+          if (uiRefs) { uiRefs.lastEffortSig = ''; uiRefs.lastRotatedFlag = '0'; if (uiRefs.resetBtn) uiRefs.resetBtn.setAttribute('data-rotated', '0'); }
 
           for (var rIdx = 0; rIdx < ELEMENTS_90.length; rIdx += 1) {
             var rSlot = ELEMENTS_90[rIdx];
@@ -4999,72 +4729,32 @@
         } else {
           disposeStandbyRenderer(false);
           overlayEl = mkEl(doc, 'div', 'ag-periodic-picker-backdrop');
-          overlayEl.id = ROOT_ID;
-          overlayEl.setAttribute('id', ROOT_ID);
-          markPeriodicOwnedRoot(overlayEl);
+          overlayEl.id = ROOT_ID; overlayEl.setAttribute('id', ROOT_ID); markPeriodicOwnedRoot(overlayEl);
           overlayEl.setAttribute('role', 'dialog');
-          overlayEl.setAttribute('aria-modal', stageMode === 'fullscreen' ? 'true' : 'false');
-          overlayEl.setAttribute('aria-label', pk.pickerAria);
-          overlayEl.setAttribute('data-stage-mode', stageMode);
-          overlayEl.setAttribute('data-theme', profile.theme);
-          overlayEl.setAttribute('data-kit', profile.id);
-          overlayEl.setAttribute('data-rim-tone', profile.rimTone || 'default');
-          overlayEl.setAttribute('data-corners', profile.corners);
-          overlayEl.setAttribute('data-mono', profile.isMono ? '1' : '0');
-          overlayEl.setAttribute('data-card-flipped', '0');
-          overlayEl.setAttribute('data-orch-latched', orchLatched ? '1' : '0');
-          overlayEl.setAttribute('data-pointer-near', '0');
-          overlayEl.setAttribute('data-open', '0');
 
           deskmatEl = bentoUi.buildDeskmatStage(doc, root);
-          dockTopRimEl = mkEl(doc, 'div', 'ag-pp-dock-top-rim');
-          dockTopRimEl.setAttribute('aria-hidden', 'true');
-          dockGripEl = mkEl(doc, 'div', 'ag-pp-dock-grip');
-          dockGripEl.setAttribute('aria-hidden', 'true');
+          dockTopRimEl = mkEl(doc, 'div', 'ag-pp-dock-top-rim'); dockTopRimEl.setAttribute('aria-hidden', 'true');
+          dockGripEl = mkEl(doc, 'div', 'ag-pp-dock-grip'); dockGripEl.setAttribute('aria-hidden', 'true');
           spatialDockEl = mkEl(doc, 'div', 'ag-pp-spatial-dock');
 
-          bentoRefs = bentoUi.buildBentoTwinCards(
-            doc,
-            {
-              onToggleCardFlip: toggleCardFlipAction,
-              onToggleCompactExpand: toggleCompactExpandAction,
-              onToggleStageMode: toggleStageModeAction,
-              onToggleMute: function () {
-                toggleMuteAction();
-                if (activeRenderer && typeof activeRenderer.triggerControlPress === 'function') {
-                  try { activeRenderer.triggerControlPress('mute'); } catch (e) {}
-                }
-              },
-              onConfirmClose: confirmAndClose,
-              onEffortSelect: handleEffortSelect,
-              onAuxEffortSelect: handleAuxEffortSelect,
-              onAuxPageChange: setAuxPageAction,
-            },
-            { lang: langCode, zh: zh, root: root }
-          );
+          bentoRefs = bentoUi.buildBentoTwinCards(doc, {
+            onToggleCardFlip: toggleCardFlipAction, onToggleCompactExpand: toggleCompactExpandAction, onToggleStageMode: toggleStageModeAction,
+            onToggleMute: function () { toggleMuteAction(); if (activeRenderer && typeof activeRenderer.triggerControlPress === 'function') { try { activeRenderer.triggerControlPress('mute'); } catch (e) {} } },
+            onConfirmClose: confirmAndClose, onEffortSelect: handleEffortSelect, onAuxEffortSelect: handleAuxEffortSelect, onAuxPageChange: setAuxPageAction,
+          }, { lang: langCode, zh: zh, root: root });
 
           stageEl = mkEl(doc, 'div', 'ag-pp-stage ag-pp-modal');
           var floorRig = bentoUi.mountStudioFloorRig(doc, stageEl);
           floorShadowEl = (floorRig && floorRig.shadowEl) || null;
-          canvasEl = mkEl(doc, 'canvas', 'ag-pp-gl-canvas');
-          canvasEl.setAttribute('aria-hidden', 'true');
+          canvasEl = mkEl(doc, 'canvas', 'ag-pp-gl-canvas'); canvasEl.setAttribute('aria-hidden', 'true');
           hitLayerEl = mkEl(doc, 'div', 'ag-pp-hit-layer');
 
           var srDeck = mkEl(doc, 'div', 'ag-pp-sr-only');
-          srDeck.setAttribute('data-testid', 'ag-pp-inspector-deck');
-          srDeck.setAttribute('aria-live', 'polite');
-          var srBanner = mkEl(doc, 'div', '');
-          srBanner.setAttribute('data-testid', 'ag-pp-session-banner');
-          srBanner.setAttribute('data-show', '0');
-          var srBannerText = mkEl(doc, 'span', '', '');
-          srBanner.appendChild(srBannerText);
-          var srTitle = mkEl(doc, 'span', '', '');
-          var srChem = mkEl(doc, 'span', '', '');
-          var srSub = mkEl(doc, 'span', '', '');
-          srDeck.appendChild(srBanner);
-          srDeck.appendChild(srTitle);
-          srDeck.appendChild(srChem);
-          srDeck.appendChild(srSub);
+          srDeck.setAttribute('data-testid', 'ag-pp-inspector-deck'); srDeck.setAttribute('aria-live', 'polite');
+          var srBanner = mkEl(doc, 'div', ''); srBanner.setAttribute('data-testid', 'ag-pp-session-banner'); srBanner.setAttribute('data-show', '0');
+          var srBannerText = mkEl(doc, 'span', '', ''); srBanner.appendChild(srBannerText);
+          var srTitle = mkEl(doc, 'span', '', ''), srChem = mkEl(doc, 'span', '', ''), srSub = mkEl(doc, 'span', '', '');
+          srDeck.appendChild(srBanner); srDeck.appendChild(srTitle); srDeck.appendChild(srChem); srDeck.appendChild(srSub);
           hitLayerEl.appendChild(srDeck);
 
           keyNodesByZ.clear();
@@ -5145,6 +4835,10 @@
 
           stageEl.appendChild(canvasEl);
           stageEl.appendChild(hitLayerEl);
+          hitLayerEl.addEventListener('focusin', function () {
+            if (!overlayEl || isDestroyed || isDrawerClosing || a11yKeysOk) return;
+            if (overlayEl.getAttribute('data-gl-stage') === '1') syncHitLayerRects(true, { includeKeys: true });
+          });
 
           hudPillEl = mkEl(doc, 'div', 'ag-pp-hud-pill');
           hudPillEl.setAttribute('role', 'toolbar');
@@ -5176,68 +4870,42 @@
 
           var hudActions = mkEl(doc, 'div', 'ag-pp-hud-actions ag-pp-sr-only');
           var muteBtn = mkEl(doc, 'button', 'ag-pp-hud-icon-btn ag-pp-hud-mute-btn ag-pp-sr-only');
-          muteBtn.type = 'button';
-          muteBtn.setAttribute('data-ag-pp-action', 'mute');
-          muteBtn.setAttribute('data-testid', 'ag-pp-mute-btn');
-          muteBtn.setAttribute('data-muted', muted ? '1' : '0');
-          muteBtn.setAttribute('aria-pressed', muted ? 'true' : 'false');
-          muteBtn.setAttribute('aria-label', pk.muteInit);
-          muteBtn.appendChild(bentoUi.buildHudMuteSvg(doc));
+          muteBtn.type = 'button'; muteBtn.setAttribute('data-ag-pp-action', 'mute'); muteBtn.setAttribute('data-testid', 'ag-pp-mute-btn');
+          muteBtn.setAttribute('data-muted', muted ? '1' : '0'); muteBtn.setAttribute('aria-pressed', muted ? 'true' : 'false');
+          muteBtn.setAttribute('aria-label', pk.muteInit); muteBtn.appendChild(bentoUi.buildHudMuteSvg(doc));
           muteBtn.addEventListener('click', function (ev) {
-            ev.stopPropagation();
-            toggleMuteAction();
-            if (activeRenderer && typeof activeRenderer.triggerControlPress === 'function') {
-              try { activeRenderer.triggerControlPress('mute'); } catch (e) {}
-            }
+            ev.stopPropagation(); toggleMuteAction();
+            if (activeRenderer && typeof activeRenderer.triggerControlPress === 'function') { try { activeRenderer.triggerControlPress('mute'); } catch (e) {} }
           });
 
           var closeBtn = mkEl(doc, 'button', 'ag-pp-hud-icon-btn ag-pp-hud-close-btn ag-pp-sr-only');
-          closeBtn.type = 'button';
-          closeBtn.setAttribute('data-ag-pp-action', 'close');
-          closeBtn.setAttribute('data-testid', 'ag-pp-close-btn');
-          closeBtn.setAttribute('aria-label', pk.closeLbl);
-          closeBtn.appendChild(bentoUi.buildHudCloseSvg(doc));
-          closeBtn.addEventListener('click', function (ev) {
-            ev.stopPropagation();
-            confirmAndClose();
-          });
+          closeBtn.type = 'button'; closeBtn.setAttribute('data-ag-pp-action', 'close'); closeBtn.setAttribute('data-testid', 'ag-pp-close-btn');
+          closeBtn.setAttribute('aria-label', pk.closeLbl); closeBtn.appendChild(bentoUi.buildHudCloseSvg(doc));
+          closeBtn.addEventListener('click', function (ev) { ev.stopPropagation(); confirmAndClose(); });
 
-          hudActions.appendChild(muteBtn);
-          hudActions.appendChild(closeBtn);
-          hudPillEl.appendChild(resetBtn);
-          hudPillEl.appendChild(swatchesWrapEl);
-          hudPillEl.appendChild(hudActions);
-
-          spatialDockEl.appendChild(bentoRefs.compactBar);
-          spatialDockEl.appendChild(bentoRefs.grid);
-          spatialDockEl.appendChild(stageEl);
-          spatialDockEl.appendChild(bentoRefs.rightWing);
-          spatialDockEl.appendChild(hudPillEl);
-
-          overlayEl.appendChild(deskmatEl);
-          overlayEl.appendChild(dockTopRimEl);
-          overlayEl.appendChild(dockGripEl);
-          overlayEl.appendChild(spatialDockEl);
+          hudActions.appendChild(muteBtn); hudActions.appendChild(closeBtn);
+          hudPillEl.appendChild(resetBtn); hudPillEl.appendChild(swatchesWrapEl); hudPillEl.appendChild(hudActions);
+          spatialDockEl.appendChild(bentoRefs.compactBar); spatialDockEl.appendChild(bentoRefs.grid);
+          spatialDockEl.appendChild(stageEl); spatialDockEl.appendChild(bentoRefs.rightWing); spatialDockEl.appendChild(hudPillEl);
+          overlayEl.appendChild(deskmatEl); overlayEl.appendChild(dockTopRimEl); overlayEl.appendChild(dockGripEl); overlayEl.appendChild(spatialDockEl);
 
           uiRefs = {
-            banner: srBanner,
-            bannerText: srBannerText,
-            srTitle: srTitle,
-            srChem: srChem,
-            srSub: srSub,
-            resetBtn: resetBtn,
-            resetLabel: resetLabelSpan,
-            muteBtn: muteBtn,
-            closeBtn: closeBtn,
-            effortButtons: [],
-            effortButtonPool: [],
-            effortTargetInfo: { isAuxModel: false, globalAuxIndex: null, z: null, effortTitle: '' },
-            lastEffortSig: '',
-            lastRotatedFlag: '0',
+            banner: srBanner, bannerText: srBannerText, srTitle: srTitle, srChem: srChem, srSub: srSub,
+            resetBtn: resetBtn, resetLabel: resetLabelSpan, muteBtn: muteBtn, closeBtn: closeBtn,
+            effortButtons: [], effortButtonPool: [], effortTargetInfo: { isAuxModel: false, globalAuxIndex: null, z: null, effortTitle: '' },
+            lastEffortSig: '', lastRotatedFlag: '0',
           };
-
           bindCanvasClickHandler(canvasEl);
         }
+
+        var oa = [
+          ['aria-modal', stageMode === 'fullscreen' ? 'true' : 'false'], ['aria-label', pk.pickerAria],
+          ['data-stage-mode', stageMode], ['data-theme', profile.theme], ['data-kit', profile.id],
+          ['data-rim-tone', profile.rimTone || 'default'], ['data-corners', profile.corners],
+          ['data-mono', profile.isMono ? '1' : '0'], ['data-card-flipped', '0'],
+          ['data-orch-latched', orchLatched ? '1' : '0'], ['data-pointer-near', '0'], ['data-open', '0'],
+        ];
+        for (var oai = 0; oai < oa.length; oai += 1) overlayEl.setAttribute(oa[oai][0], oa[oai][1]);
 
         var pinnedScrollEl = null;
         if (stageMode === 'drawer') {
@@ -5258,19 +4926,33 @@
         var ResizeObsCtor = (root && root.ResizeObserver) || (typeof ResizeObserver === 'function' ? ResizeObserver : null);
         if (ResizeObsCtor && overlayEl) {
           try {
-            dockResizeObserver = new ResizeObsCtor(function () {
+            dockResizeObserver = new ResizeObsCtor(function (entries) {
               if (!overlayEl || isDestroyed || isDrawerClosing) return;
-              refreshCachedLayoutRects();
-              var roTierChanged = syncDockCompactState();
-              resizeCanvasToStage(!roTierChanged);
-              if (!isOrbitDragging) syncHitLayerRects(true);
-              if (!isConfirmClosing) syncSceneAndDom(true);
+              if (drawerTrans && stageMode === 'drawer') {
+                var wChg = false;
+                if (entries && entries.length && drawerLockW > 0) {
+                  for (var ei = 0; ei < entries.length; ei += 1) {
+                    var ent = entries[ei];
+                    if (ent && ent.target === overlayEl && ent.contentRect && ent.contentRect.width > 80 && Math.abs(ent.contentRect.width - drawerLockW) > 2) { wChg = true; break; }
+                  }
+                }
+                if (!wChg) return;
+                clrDrawerTrans();
+              }
+              if (dockResizeRafId) return;
+              var flushRo = function () {
+                dockResizeRafId = 0;
+                if (!overlayEl || isDestroyed || isDrawerClosing || (drawerTrans && stageMode === 'drawer')) return;
+                refreshCachedLayoutRects();
+                resizeCanvasToStage(!syncDockCompactState(), !isConfirmClosing);
+                if (!isOrbitDragging) syncHitLayerRects(true);
+                if (!isConfirmClosing) syncSceneAndDom(true);
+              };
+              if (reqRaf) dockResizeRafId = reqRaf(flushRo); else flushRo();
             });
             dockResizeObserver.observe(overlayEl);
             if (spatialDockEl) dockResizeObserver.observe(spatialDockEl);
-          } catch (e) {
-            dockResizeObserver = null;
-          }
+          } catch (e) { dockResizeObserver = null; }
         }
 
         if (!activeRenderer) {
@@ -5278,17 +4960,10 @@
           if (kbFactory) {
             try {
               activeRenderer = kbFactory.createKeyboard3DRenderer({
-                canvas: canvasEl,
-                doc: doc,
-                root: root,
-                slots: ELEMENTS_90,
-                auxModels: auxSlots,
-                auxPage: activeAuxPage,
-                auxPageCount: auxPageCount,
+                canvas: canvasEl, doc: doc, root: root, slots: ELEMENTS_90,
+                auxModels: auxSlots, auxPage: activeAuxPage, auxPageCount: auxPageCount,
               });
-            } catch (e) {
-              activeRenderer = null;
-            }
+            } catch (e) { activeRenderer = null; }
           }
         }
 
@@ -5298,8 +4973,9 @@
         clearStaleBlurIfActive();
         isHostPaused = computeHostPaused();
         refreshCachedLayoutRects();
-        var initTierChanged = syncDockCompactState();
-        resizeCanvasToStage(!initTierChanged);
+        resizeCanvasToStage(!syncDockCompactState(), true);
+        drawerTrans = Boolean(stageMode === 'drawer' && reqRaf && !bentoUi.isReducedMotion(doc, root));
+        drawerLockW = drawerTrans ? (cachedOverlayWidth || cachedDockBounds.width || 0) : 0;
         syncSceneAndDom(true, { deferTelemetryDomScan: Boolean(reqRaf) });
         if (isHostPaused) applyRendererPausedState(true);
 
@@ -5700,6 +5376,7 @@
                   }
                 }
               }
+              a11yKeysOk = false;
               if (!needsAsyncSettleSync) syncHitLayerRects(true);
               else syncOrbitParallaxAndHud();
             } else if (gs.kind === 'knob' && (gs.rotated || gs.dragged)) {
@@ -5723,9 +5400,9 @@
         overlayEl.addEventListener('transitionend', function (ev) {
           if (!overlayEl || isDestroyed || isConfirmClosing || isDrawerClosing) return;
           if (!ev || ev.target === overlayEl) {
-            lastBoundsSyncMs = readClockMs();
-            refreshCachedLayoutRects();
-            syncDockCompactState();
+            if (ev && ev.propertyName && ev.propertyName !== 'height') return;
+            if (drawerTrans) endDrawerTrans();
+            else { lastBoundsSyncMs = readClockMs(); refreshCachedLayoutRects(); syncDockCompactState(); }
           }
         });
 
@@ -5773,6 +5450,10 @@
             openRafId = 0;
             if (overlayEl && !isDrawerClosing) {
               overlayEl.setAttribute('data-open', '1');
+              if (drawerTrans) {
+                if (drawerTransTmr) { clearTimer(drawerTransTmr); pendingTimers.delete(drawerTransTmr); }
+                drawerTransTmr = scheduleTrackedTimer(endDrawerTrans, DOCK_OPEN_TRANSITION_MS + 32);
+              }
               if (pinnedScrollEl) {
                 try { pinnedScrollEl.scrollTop = pinnedScrollEl.scrollHeight; } catch (e) {}
                 scheduleTrackedTimer(function () {
@@ -5783,7 +5464,11 @@
               }
               refreshCachedLayoutRects();
               var rafTierChanged = syncDockCompactState();
-              resizeCanvasToStage(!rafTierChanged);
+              var rafW = cachedOverlayWidth || cachedDockBounds.width || 0;
+              if (!drawerTrans || rafTierChanged || (drawerLockW > 0 && Math.abs(rafW - drawerLockW) > 2)) {
+                if (drawerTrans) drawerLockW = rafW;
+                resizeCanvasToStage(!rafTierChanged, true);
+              }
               syncHitLayerRects(true);
               if (cachedHostTelemetry && cachedHostTelemetry.domScanDeferred) {
                 var fullTele = hostBridge.readHostContextTelemetry(doc, root, { anchorBtn: activeAnchorBtn });
@@ -5810,25 +5495,13 @@
 
         detachOpenSessionSyncWatchers();
         clearTransientAsync();
+        a11yKeysOk = false;
 
-        hoveredZ = null;
-        hoveredAuxIndex = null;
-        inspectedBlindZ = null;
-        inspectedBlindAuxIndex = null;
-        blindFlashZ = null;
-        extNearRendererActive = false;
-        pressedZ = null;
-        pressedAuxIndex = null;
-        hoveredEffort = null;
-        pressedEffort = null;
-        hoveredBtn = null;
-        pressedBtn = null;
-        lockedShakeZ = null;
-        lockedShakeAuxIndex = null;
-        pointerDownOutside = false;
-        lastPointerClient.x = -9999;
-        lastPointerClient.y = -9999;
-        lastPointerClient.active = false;
+        hoveredZ = null; hoveredAuxIndex = null; inspectedBlindZ = null; inspectedBlindAuxIndex = null;
+        blindFlashZ = null; extNearRendererActive = false; pressedZ = null; pressedAuxIndex = null;
+        hoveredEffort = null; pressedEffort = null; hoveredBtn = null; pressedBtn = null;
+        lockedShakeZ = null; lockedShakeAuxIndex = null; pointerDownOutside = false;
+        lastPointerClient.x = -9999; lastPointerClient.y = -9999; lastPointerClient.active = false;
 
         if (dockResizeObserver) {
           try { dockResizeObserver.disconnect(); } catch (e) {}
@@ -5891,76 +5564,24 @@
         }
         if (hadOverlay) {
           var toRemove = overlayEl;
-          if (!co.releaseHeavyCaches && !isDestroyed && currentMode !== 'off') {
-            cachedShell = {
-              doc: doc,
-              overlayEl: overlayEl,
-              deskmatEl: deskmatEl,
-              dockTopRimEl: dockTopRimEl,
-              dockGripEl: dockGripEl,
-              spatialDockEl: spatialDockEl,
-              bentoRefs: bentoRefs,
-              stageEl: stageEl,
-              floorShadowEl: floorShadowEl,
-              canvasEl: canvasEl,
-              hitLayerEl: hitLayerEl,
-              hudPillEl: hudPillEl,
-              swatchesWrapEl: swatchesWrapEl,
-              uiRefs: uiRefs,
-              hudElementsKey: activeHudElementsKey,
-              keyNodesByZ: new Map(keyNodesByZ),
-              auxKeyNodes: auxKeyNodes.slice(),
-              hudChipByZ: new Map(hudChipByZ),
-            };
-          } else {
-            cachedShell = null;
-          }
-          cachedHostTelemetry = null;
-          overlayEl = null;
-          deskmatEl = null;
-          dockTopRimEl = null;
-          dockGripEl = null;
-          spatialDockEl = null;
-          bentoRefs = null;
-          stageEl = null;
-          floorShadowEl = null;
-          canvasEl = null;
-          hitLayerEl = null;
-          hudPillEl = null;
-          swatchesWrapEl = null;
-          uiRefs = null;
-          lastStageRectFn = null;
-          cachedStageBounds.valid = false;
-          rimGlowWasActive = false;
-          rimDockWasActive = false;
-          rimCardWasActive = false;
-          rimRightWasActive = false;
-          lastDockCompactSig = '';
-          lastShadowPxStr = '';
-          lastShadowPyStr = '';
-          lastStageCursor = '';
-          lastFlushedPointer.x = NaN;
-          lastFlushedPointer.y = NaN;
-          lastFlushedPointer.target = null;
-          lastFlushedPointer.inside = false;
-          lastDomSelectedZ = undefined;
-          lastDomHoveredZ = null;
-          lastDomSelectedAuxLocal = undefined;
-          lastDomOrchLatched = undefined;
-          lastDomChromeSig = '';
-          lastDomHaloSig = '';
-          lastDomHudSig = '';
-          lastDomCtrlSig = '';
-          lastDomBannerSig = '';
-          lastDomAvailVersion = -1;
-          keyNodesByZ.clear();
-          auxKeyNodes.length = 0;
-          hudChipByZ.clear();
-          safeRemove(toRemove);
-          syncMiniKeycapBadges();
-          if (keepWarmStandby && standbyRenderer) {
-            scheduleStandbyReclaim(isDocHiddenNow() ? STANDBY_HIDDEN_MS : STANDBY_RECLAIM_MS);
-          }
+          cachedShell = (!co.releaseHeavyCaches && !isDestroyed && currentMode !== 'off') ? {
+            doc: doc, overlayEl: overlayEl, deskmatEl: deskmatEl, dockTopRimEl: dockTopRimEl, dockGripEl: dockGripEl,
+            spatialDockEl: spatialDockEl, bentoRefs: bentoRefs, stageEl: stageEl, floorShadowEl: floorShadowEl,
+            canvasEl: canvasEl, hitLayerEl: hitLayerEl, hudPillEl: hudPillEl, swatchesWrapEl: swatchesWrapEl,
+            uiRefs: uiRefs, hudElementsKey: activeHudElementsKey, keyNodesByZ: new Map(keyNodesByZ),
+            auxKeyNodes: auxKeyNodes.slice(), hudChipByZ: new Map(hudChipByZ),
+          } : null;
+          cachedHostTelemetry = null; overlayEl = null; deskmatEl = null; dockTopRimEl = null; dockGripEl = null;
+          spatialDockEl = null; bentoRefs = null; stageEl = null; floorShadowEl = null; canvasEl = null;
+          hitLayerEl = null; hudPillEl = null; swatchesWrapEl = null; uiRefs = null; lastStageRectFn = null;
+          cachedStageBounds.valid = false; rimGlowWasActive = false; rimDockWasActive = false; rimCardWasActive = false; rimRightWasActive = false;
+          lastDockCompactSig = ''; lastShadowPxStr = ''; lastShadowPyStr = ''; lastStageCursor = '';
+          lastFlushedPointer.x = NaN; lastFlushedPointer.y = NaN; lastFlushedPointer.target = null; lastFlushedPointer.inside = false;
+          lastDomSelectedZ = undefined; lastDomHoveredZ = null; lastDomSelectedAuxLocal = undefined; lastDomOrchLatched = undefined;
+          lastDomChromeSig = ''; lastDomHaloSig = ''; lastDomHudSig = ''; lastDomCtrlSig = ''; lastDomBannerSig = ''; lastDomAvailVersion = -1;
+          keyNodesByZ.clear(); auxKeyNodes.length = 0; hudChipByZ.clear();
+          safeRemove(toRemove); syncMiniKeycapBadges();
+          if (keepWarmStandby && standbyRenderer) scheduleStandbyReclaim(isDocHiddenNow() ? STANDBY_HIDDEN_MS : STANDBY_RECLAIM_MS);
         }
 
         /* Restore host desktop pet immediately out of peek mode */
@@ -6002,6 +5623,7 @@
           pendingServoOrbit = null;
           stopOrbitFollowSync();
           activeRenderer.setChassisOrbit(Number(pitchRad) || 0, Number(yawRad) || 0);
+          a11yKeysOk = false;
           syncHitLayerRects(true);
           return true;
         } catch (e) {
@@ -6388,6 +6010,10 @@
         if (holdState) cancelHold(false);
         if (!overlayEl || isDrawerClosing || !ev) return;
 
+        if (ev.key === 'Tab') {
+          if (!a11yKeysOk && overlayEl.getAttribute('data-gl-stage') === '1') syncHitLayerRects(true, { includeKeys: true });
+          return;
+        }
         /* Esc cleanly closes the dock WITHOUT rolling back any selected host model */
         if (ev.key === 'Escape') {
           if (typeof ev.preventDefault === 'function') ev.preventDefault();
@@ -6443,10 +6069,10 @@
       function onWindowResize() {
         if (holdState) cancelHold(false);
         if (overlayEl && !isDrawerClosing) {
+          clrDrawerTrans();
           refreshCachedLayoutRects();
-          var resTierChanged = syncDockCompactState();
-          resizeCanvasToStage(!resTierChanged);
-          syncHitLayerRects(true);
+          resizeCanvasToStage(!syncDockCompactState(), !isConfirmClosing);
+          syncHitLayerRects(true, { includeKeys: true });
           if (!isConfirmClosing) syncSceneAndDom(true);
         }
       }
