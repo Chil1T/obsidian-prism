@@ -174,7 +174,6 @@ function createCh1Templates({
           else if (de && pm) de.setAttribute('data-ag-cs-perf-mode', pm === 'eco' ? 'performance' : pm === 'auto' ? 'balanced' : pm);
           W.__agPrismApplyIgnoreReducedMotion?.(!!e?.ignoreReducedMotion);
           W.__agPrismFontCustomizer?.applyCustomFonts?.(e, D);
-          W.__agPrismCssMgr?.sync?.(e);
         });
         return { refreshed: true, version: api.version };
       }
@@ -220,116 +219,64 @@ function createCh1Templates({
           if (o && (!W.__agPrism || Number(o.version) <= 2)) { if (isF(o.destroy)) o.destroy(); delete W.__agClaudeStyle; }
         });
       };
-      const parseBuckets = (raw) => {
-        const b = {}, pfx = '/*@ag:';
-        let pos = raw.indexOf(pfx);
-        if (pos < 0) return { core: raw };
-        if (pos > 0) b.core = raw.slice(0, pos);
-        while (pos >= 0) {
-          const e = raw.indexOf('*/', pos + 6);
-          if (e < 0) break;
-          const k = raw.slice(pos + 6, e), nx = raw.indexOf(pfx, e + 2);
-          b[k] = (b[k] || '') + (nx < 0 ? raw.slice(e + 2) : raw.slice(e + 2, nx));
-          pos = nx;
-        }
-        return b;
-      };
       const ensureCssMgr = () => {
         const fk = __AG_INJ_CSSHASH__, prev = W.__agPrismCssMgr;
         if (prev && prev.cssHash === fk && !prev._disposed) return prev;
         T(() => prev?.destroy?.());
-        const buckets = parseBuckets(getCss()), SC = W.CSSStyleSheet || (typeof CSSStyleSheet === 'function' ? CSSStyleSheet : null);
+        const css = getCss(), SC = W.CSSStyleSheet || (typeof CSSStyleSheet === 'function' ? CSSStyleSheet : null);
         const canA = () => Boolean(T(() => SC && isF(SC.prototype?.replaceSync) && isF(D.adoptedStyleSheets?.[Symbol.iterator])));
-        const sheets = new Map(), owned = new Set();
-        let lastSig = '', mo = null, moB = null, bPend = 0, lastCfg = null;
-        const calcKeys = (cfg, h) => {
-          const de = D.documentElement, hc = isO(cfg), c = hc ? cfg : lastCfg || W.__agPrism?.getState?.()?.cfg || {};
-          const ga = (k) => de?.getAttribute?.(k), on = (hv, fn) => hv === true || (hv !== false && fn());
-          h = isO(h) ? h : {};
-          const pal = h.palette || (hc && cfg.palette) || ga('data-ag-cs-palette') || c.palette || 'obsidian';
-          const acc = h.accent || (hc && cfg.accentTone) || ga('data-ag-cs-accent') || c.accentTone || 'follow';
-          const mot = h.motion || (hc && cfg.motionLevel) || ga('data-ag-cs-motion') || c.motionLevel || 'standard';
-          const ta = ga('data-ag-cs-theme'), th = h.theme || (ta === 'light' || ta === 'dark' ? ta : (/\b(?:theme-light|light-theme|light)\b/.test(String(D.body?.className || '')) ? 'light' : 'dark'));
-          const ks = ['core'];
-          if (pal === 'warm') ks.push('paletteWarm'); else if (pal === 'host') ks.push('paletteHost');
-          if (acc && acc !== 'follow') ks.push('accentCustom');
-          if (on(h.convRipple, () => ga('data-ag-cs-conv-ripple') === '1' || (c.convRipple && c.convRipple !== 'off'))) ks.push('convRipple');
-          if (on(h.thought, () => Boolean(ga('data-ag-prism-thought-view')) || (c.thoughtTranslate && c.thoughtTranslate !== 'off'))) ks.push('thoughtExt');
-          if (on(h.home, () => ga('data-ag-cs-home') !== 'off' && c.homeLayout !== 'off' && Boolean(qs('.agy-home,.ag-cs-home-panel')))) ks.push('viewHome');
-          if (on(h.sidebar, () => ga('data-ag-cs-sidebar') !== 'off' && c.sidebarRestyle !== false)) ks.push('viewSidebar');
-          if (on(h.settings, () => Boolean(gid('ag-cs-settings-sec') || qs('div[role="dialog"],.agy-dialog,[data-ag-cs-settings-dlg="1"]')))) ks.push('viewSettings');
-          ks.push(mot === 'off' ? 'motionOff' : mot === 'subtle' ? 'motionSubtle' : 'motionFull');
-          if (th === 'light') ks.push('themeLight');
-          return ks.filter((k) => Boolean(buckets[k]));
-        };
+        let sh = null;
         const setSent = (txt, ad) => {
           const p = D.head || D.documentElement;
           if (!p) return;
           let st = gid(SID);
           if (!st) { st = D.createElement('style'); st.id = SID; }
-          if (ad) { if (st.textContent) st.textContent = ''; st.setAttribute?.('data-ag-cs-adopted', '1'); }
-          else { st.removeAttribute?.('data-ag-cs-adopted'); if (st.textContent !== txt) st.textContent = txt; }
-          st.setAttribute?.('data-ag-cs-css-hash', fk);
-          st.setAttribute?.('data-ag-cs-flat', fk + ':' + (ad ? 0 : txt.length));
-          if (st.parentNode !== p || p.lastElementChild !== st) p.appendChild(st);
+          const sa = (k, v) => { if (st.getAttribute?.(k) !== v) st.setAttribute?.(k, v); };
+          if (ad) { if (st.textContent) st.textContent = ''; sa('data-ag-cs-adopted', '1'); }
+          else { if (st.hasAttribute?.('data-ag-cs-adopted')) st.removeAttribute?.('data-ag-cs-adopted'); if (st.textContent !== txt) st.textContent = txt; }
+          sa('data-ag-cs-css-hash', fk);
+          sa('data-ag-cs-flat', fk + ':' + (ad ? 0 : txt.length));
+          if (st.parentNode !== p || (!ad && p.lastElementChild !== st)) p.appendChild(st);
         };
         const mgr = {
-          cssHash: fk, mode: canA() ? 'adopted' : 'style', buckets, activeKeys: [], activeBytes: 0, _disposed: false,
-          sync(cfg, hints) {
+          cssHash: fk, mode: canA() ? 'adopted' : 'style', singlePack: true, activeKeys: ['all'], activeBytes: css.length, _disposed: false,
+          sync() {
             if (mgr._disposed) return mgr;
-            if (isO(cfg)) lastCfg = cfg;
-            const keys = calcKeys(cfg, hints), sig = keys.join(','), ad = canA();
+            const ad = canA();
             mgr.mode = ad ? 'adopted' : 'style';
-            let bytes = 0;
-            for (const k of keys) bytes += buckets[k].length;
-            mgr.activeKeys = keys; mgr.activeBytes = bytes;
+            mgr.activeKeys = ['all']; mgr.activeBytes = css.length;
             if (ad) {
+              if (!sh) { sh = new SC(); sh.replaceSync(css); }
               const cur = Array.from(D.adoptedStyleSheets);
-              if (sig !== lastSig || !owned.size || !cur.some((s) => owned.has(s))) {
-                const nx = keys.map((k) => { let sh = sheets.get(k); if (!sh) { sh = new SC(); sh.replaceSync(buckets[k]); sheets.set(k, sh); } return sh; });
-                const kept = cur.filter((s) => !owned.has(s));
-                owned.clear(); nx.forEach((s) => owned.add(s));
-                D.adoptedStyleSheets = kept.concat(nx); lastSig = sig;
-              }
+              if (!cur.includes(sh)) D.adoptedStyleSheets = cur.concat(sh);
               setSent('', true);
-            } else if (sig !== lastSig || !gid(SID)?.textContent) {
-              setSent(keys.map((k) => buckets[k]).join(''), false); lastSig = sig;
+            } else {
+              if (sh && isF(D.adoptedStyleSheets?.[Symbol.iterator])) T(() => { D.adoptedStyleSheets = Array.from(D.adoptedStyleSheets).filter((s) => s !== sh); });
+              setSent(css, false);
             }
             return mgr;
-          },
-          _armObserver() {
-            if (mgr._disposed || mo || !canA() || !D.documentElement || !isF(W.MutationObserver)) return;
-            const sched = () => { if (bPend || mgr._disposed) return; bPend = 1; Promise.resolve().then(() => { bPend = 0; if (!mgr._disposed) T(() => mgr.sync(null)); }); };
-            T(() => {
-              mo = new W.MutationObserver(() => T(() => mgr.sync(null)));
-              mo.observe(D.documentElement, { attributes: true, attributeFilter: sp('theme,palette,light-preset,accent,motion,sidebar,home,conv-ripple').map((s) => 'data-ag-cs-' + s).concat('data-ag-prism-thought-view') });
-              if (D.body) { moB = new W.MutationObserver(sched); moB.observe(D.body, { childList: true }); }
-            });
           },
           destroy(opts) {
             if (mgr._disposed) return;
             mgr._disposed = true;
-            T(() => mo?.disconnect?.()); T(() => moB?.disconnect?.()); mo = moB = null;
-            if (owned.size && isF(D.adoptedStyleSheets?.[Symbol.iterator])) T(() => { D.adoptedStyleSheets = Array.from(D.adoptedStyleSheets).filter((s) => !owned.has(s)); });
-            owned.clear(); sheets.clear(); lastSig = ''; mgr.activeKeys = []; mgr.activeBytes = 0;
+            if (sh && isF(D.adoptedStyleSheets?.[Symbol.iterator])) T(() => { D.adoptedStyleSheets = Array.from(D.adoptedStyleSheets).filter((s) => s !== sh); });
+            sh = null; mgr.activeKeys = []; mgr.activeBytes = 0;
             T(() => { const s = gid(SID); if (s) { if (opts?.keepStyleNode) s.textContent = ''; else s.remove?.(); } });
           },
         };
         return (W.__agPrismCssMgr = G.__agPrismCssMgr = mgr);
       };
-      const applyStyle = (cfg, hints) => {
+      const applyStyle = () => {
         if (!(D.head || D.documentElement)) return;
         cleanOld();
-        ensureCssMgr().sync(cfg, hints);
+        ensureCssMgr().sync();
         T(() => { if (W.__agPrismCssMgr?.mode !== 'adopted') W.__agPrism?.flattenCss?.(); });
       };
       const hookApiCssMgr = (api) => {
         if (!api || api.__agCssMgrHooked) return;
         api.__agCssMgrHooked = true;
-        const wrap = (k, fn) => { const o = isF(api[k]) ? api[k].bind(api) : null; if (o) api[k] = (...a) => fn(o, a); };
-        wrap('refreshConfig', (o, a) => { const r = o(...a); T(() => W.__agPrismCssMgr?.sync?.(api.getState?.()?.cfg || a[0])); return r; });
-        wrap('sync', (o, a) => { const r = o(...a); T(() => W.__agPrismCssMgr?.sync?.(api.getState?.()?.cfg)); return r; });
-        wrap('destroy', (o, a) => { T(() => W.__agPrismCssMgr?.destroy?.()); return o(...a); });
+        const d = isF(api.destroy) ? api.destroy.bind(api) : null;
+        if (d) api.destroy = (...a) => { T(() => W.__agPrismCssMgr?.destroy?.()); return d(...a); };
       };
 
       const mkRpc = (bk, lim, onTo, onErr, disp) => {
@@ -457,8 +404,8 @@ function createCh1Templates({
         try {
           cleanOld(); ensureRepo(); ensureThought(); ensureUsage();
           const bootCfg = __AG_INJ_BOOTCFG__;
-          if (D.head) applyStyle(bootCfg);
-          else D.addEventListener('DOMContentLoaded', () => applyStyle(bootCfg), { once: true });
+          if (D.head) applyStyle();
+          else D.addEventListener('DOMContentLoaded', applyStyle, { once: true });
           const cur = W.__agPrism || W.__agClaudeStyle;
           if (cur && cur.version === VER && cur.codeHash === __AG_INJ_CODEHASH__) cur.refreshConfig(bootCfg);
           else {
@@ -471,7 +418,7 @@ function createCh1Templates({
           else if (W.__agPrism) W.__agClaudeStyle = W.__agPrism;
           hookApiCssMgr(W.__agPrism);
           const eCfg = (isF(W.__agPrism?.getState) ? W.__agPrism.getState()?.cfg : null) || bootCfg;
-          T(() => { W.__agPrismCssMgr?.sync?.(eCfg); W.__agPrismCssMgr?._armObserver?.(); });
+          T(() => W.__agPrismCssMgr?.sync?.());
           T(() => (eCfg?.omniModule === 'off' ? W.__agPrismOmni?.destroy?.() : W.__agPrismOmni?.sync?.(eCfg, W.__agPrismOmniServerMeta || null)));
           const de = D.documentElement;
           if (de) {

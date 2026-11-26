@@ -178,18 +178,25 @@ test('2. css-flatten.cjs + css-pack.cjs: eliminates +126.8 KB cartesian bloat, s
     `Active dark-chat CSS (${(darkChatActiveBytes / 1024).toFixed(2)} KB) must stay strictly < 180 KB`
   );
 
-  // Packed expression still evaluates cleanly to a valid CSS string with 0 & and Ch1 < 390,000 B
+  // Default packCssJsExpr outputs single-block flat CSS (0 /*@ag: markers, beats legacy bucketed LZSS, 0 &, Ch1 < 390,000 B)
   const packedExpr = cssPack.packCssJsExpr(minRaw);
+  const bucketedExpr = cssPack.packCssJsExpr(minRaw, { bucketize: true });
   const unpacked = vm.runInNewContext(packedExpr);
   assert.equal(typeof unpacked, 'string');
-  assert.ok(unpacked.includes('/*@ag:core*/') && unpacked.includes('/*@ag:themeLight*/'));
+  assert.equal(unpacked, flatCompact, 'Default packCssJsExpr must preserve single-block flattened CSS verbatim');
+  assert.equal(unpacked.includes('/*@ag:'), false, 'Default single-block packCssJsExpr must contain 0 /*@ag: bucket markers');
+  assert.ok(unpacked.includes('[data-ag-cs-theme="light"]') && unpacked.includes('div[role="dialog"]'), 'Single-block CSS must include light theme and deep dialog rules');
+  assert.ok(
+    Buffer.byteLength(packedExpr, 'utf8') < Buffer.byteLength(bucketedExpr, 'utf8'),
+    `Single-block packed CSS (${Buffer.byteLength(packedExpr, 'utf8')} B) must save bytes over bucketed CSS (${Buffer.byteLength(bucketedExpr, 'utf8')} B)`
+  );
   assert.equal((unpacked.match(/(?<!["'=\w])&(?![\w])/g) || []).length, 0);
 
   const ch1Bytes = Buffer.byteLength(cdp.buildInjectExpression({ ...cdp.DEFAULT_CONFIG, language: 'auto' }, { noDiskCache: true }), 'utf8');
   assert.ok(ch1Bytes < 390000, `Ch1(auto) ${ch1Bytes} B must stay < 390,000 B`);
 });
 
-test('3. window.__agPrismCssMgr: adoptedStyleSheets dynamic bucket mount/unmount, host sheet preservation, fallback <style>, and lightweight inject return', () => {
+test('3. window.__agPrismCssMgr: single-block adoptedStyleSheets mount, 0 extra MOs, host sheet preservation, idempotent self-heal, fallback <style>, and lightweight inject return', () => {
   class MockCSSStyleSheet {
     constructor() { this.text = ''; this.replaceCalls = 0; }
     replaceSync(t) { this.text = String(t); this.replaceCalls++; }
@@ -221,6 +228,7 @@ test('3. window.__agPrismCssMgr: adoptedStyleSheets dynamic bucket mount/unmount
     removeEventListener() {},
   };
 
+  const moObservedTargets = [];
   const sandbox = {
     document: doc,
     CSSStyleSheet: MockCSSStyleSheet,
@@ -230,7 +238,10 @@ test('3. window.__agPrismCssMgr: adoptedStyleSheets dynamic bucket mount/unmount
     removeEventListener() {},
     getComputedStyle: () => ({ getPropertyValue: () => '' }),
     matchMedia: () => ({ matches: false }),
-    MutationObserver: class { observe() {} disconnect() {} },
+    MutationObserver: class {
+      observe(target, opts) { moObservedTargets.push({ target, opts }); }
+      disconnect() {}
+    },
     ResizeObserver: class { observe() {} disconnect() {} },
     requestAnimationFrame: () => 1,
     cancelAnimationFrame() {},
@@ -252,31 +263,97 @@ test('3. window.__agPrismCssMgr: adoptedStyleSheets dynamic bucket mount/unmount
   const mgr = sandbox.window.__agPrismCssMgr;
   assert.ok(mgr, '__agPrismCssMgr must be exposed on window');
   assert.equal(mgr.mode, 'adopted', 'Must use adoptedStyleSheets when CSSStyleSheet is available');
+  assert.equal(mgr.singlePack, true, 'CssMgr must run in single-pack flat CSS mode');
+  assert.deepEqual(Array.from(mgr.activeKeys), ['all']);
+  assert.equal(doc.adoptedStyleSheets.length, 2, 'Must mount strictly 1 single-pack Prism sheet alongside hostSheet');
   assert.equal(doc.adoptedStyleSheets[0], hostSheet, 'Host-owned sheet must stay intact');
-  assert.ok(mgr.activeKeys.includes('core') && mgr.activeKeys.includes('motionFull'));
-  assert.equal(mgr.activeKeys.includes('themeLight'), false, 'Dark conversation must not mount themeLight');
-  assert.equal(mgr.activeKeys.includes('viewHome'), false, 'Conversation view must not mount viewHome');
-  assert.equal(mgr.activeKeys.includes('viewSettings'), false, 'Closed settings must not mount viewSettings');
-  assert.ok(mgr.activeBytes < 180 * 1024, `Runtime activeBytes (${mgr.activeBytes} B) must stay < 180 KB`);
+  const prismSheet = doc.adoptedStyleSheets[1];
+  assert.equal(prismSheet.replaceCalls, 1, 'Single-pack sheet must replaceSync exactly once');
+  assert.equal(prismSheet.text.includes('/*@ag:'), false, 'Single-pack sheet must contain 0 bucket markers');
+  assert.ok(
+    prismSheet.text.includes('[data-ag-cs-theme="light"]') &&
+      prismSheet.text.includes('div[role="dialog"]') &&
+      prismSheet.text.includes('#ag-cs-settings-sec') &&
+      prismSheet.text.includes('.agy-home'),
+    'Single-pack sheet must always cover light theme, deep nested dialogs, settings & home without fragile MO activation'
+  );
+  assert.equal(mgr.activeBytes, prismSheet.text.length);
+  assert.equal(
+    moObservedTargets.some((m) => m.target === body && m.opts && m.opts.childList === true && !m.opts.subtree),
+    false,
+    'CssMgr must no longer attach fragile D.body childList-only MutationObserver'
+  );
 
   // Sentinel <style id="ag-prism-css" data-ag-cs-adopted="1"> stays empty for cross-module presence checks with 0 parsed rules
   const sentinel = doc.getElementById('ag-prism-css');
   assert.ok(sentinel && sentinel.getAttribute('data-ag-cs-adopted') === '1' && sentinel.textContent === '');
 
-  // Switch to light + warm + home + settings dynamically
-  mgr.sync({ palette: 'warm', motionLevel: 'subtle' }, { theme: 'light', home: true, settings: true });
-  assert.ok(mgr.activeKeys.includes('themeLight'));
-  assert.ok(mgr.activeKeys.includes('paletteWarm'));
-  assert.ok(mgr.activeKeys.includes('viewHome'));
-  assert.ok(mgr.activeKeys.includes('viewSettings'));
-  assert.ok(mgr.activeKeys.includes('motionSubtle'));
-  assert.equal(mgr.activeKeys.includes('motionFull'), false);
-  assert.equal(doc.adoptedStyleSheets[0], hostSheet, 'Host sheet must survive dynamic sync()');
+  // Repeated sync() is idempotent (0 extra replaceSync calls) and self-heals if host resets adoptedStyleSheets
+  mgr.sync({ palette: 'warm', motionLevel: 'subtle' });
+  assert.equal(prismSheet.replaceCalls, 1, 'Idempotent sync() must not re-parse CSS');
+  assert.deepEqual(Array.from(doc.adoptedStyleSheets), [hostSheet, prismSheet]);
+  doc.adoptedStyleSheets = [hostSheet];
+  mgr.sync();
+  assert.deepEqual(Array.from(doc.adoptedStyleSheets), [hostSheet, prismSheet], 'sync() must re-attach single Prism sheet if evicted');
 
-  // destroy() removes ONLY Prism-owned sheets and never touches hostSheet
-  mgr.destroy();
-  assert.deepEqual(doc.adoptedStyleSheets, [hostSheet], 'destroy() must clean Prism sheets without removing host adoptedStyleSheets');
+  // destroy() via __agPrism.destroy() hook removes ONLY Prism-owned sheet and never touches hostSheet
+  sandbox.window.__agPrism.destroy();
+  assert.deepEqual(Array.from(doc.adoptedStyleSheets), [hostSheet], 'destroy() must clean Prism sheet without removing host adoptedStyleSheets');
   assert.equal(doc.getElementById('ag-prism-css'), null);
+  assert.equal(mgr._disposed, true);
+
+  // Fallback <style> mode (no CSSStyleSheet): mounts single-block flat CSS directly into #ag-prism-css without data-ag-cs-adopted
+  const fbHtml = makeMiniEl('html');
+  const fbHead = makeMiniEl('head');
+  const fbBody = makeMiniEl('body', { className: 'theme-dark' });
+  fbHtml.appendChild(fbHead);
+  fbHtml.appendChild(fbBody);
+  const fbDoc = {
+    documentElement: fbHtml,
+    head: fbHead,
+    body: fbBody,
+    hidden: false,
+    readyState: 'complete',
+    createElement: (t) => makeMiniEl(t),
+    getElementById: (id) => fbHtml.querySelector('#' + id),
+    querySelector: (s) => fbHtml.querySelector(s),
+    querySelectorAll: (s) => fbHtml.querySelectorAll(s),
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  const fbSandbox = {
+    document: fbDoc,
+    navigator: { language: 'zh-CN' },
+    location: { pathname: '/', href: 'vscode-file://vscode-app/index.html' },
+    addEventListener() {},
+    removeEventListener() {},
+    getComputedStyle: () => ({ getPropertyValue: () => '' }),
+    matchMedia: () => ({ matches: false }),
+    MutationObserver: class { observe() {} disconnect() {} },
+    ResizeObserver: class { observe() {} disconnect() {} },
+    requestAnimationFrame: () => 1,
+    cancelAnimationFrame() {},
+    setTimeout: () => 1,
+    clearTimeout() {},
+    setInterval: () => 1,
+    clearInterval() {},
+    performance: { now: () => 1000 },
+    Math, Date, JSON, Map, Set, Array, Object, String, Number, Boolean, Promise, Uint8Array, Float32Array, Intl, Symbol,
+  };
+  fbSandbox.window = fbSandbox;
+  fbSandbox.globalThis = fbSandbox;
+  const fbRes = vm.runInNewContext(cdp.buildInjectExpression({ ...cdp.DEFAULT_CONFIG }, { noDiskCache: true }), fbSandbox);
+  assert.equal(fbRes.status, 'ok');
+  const fbMgr = fbSandbox.window.__agPrismCssMgr;
+  assert.equal(fbMgr.mode, 'style');
+  assert.equal(fbMgr.singlePack, true);
+  assert.deepEqual(Array.from(fbMgr.activeKeys), ['all']);
+  const fbStyle = fbDoc.getElementById('ag-prism-css');
+  assert.ok(fbStyle && fbStyle.getAttribute('data-ag-cs-adopted') === null);
+  assert.equal(fbStyle.textContent.includes('/*@ag:'), false);
+  assert.ok(fbStyle.textContent.includes('div[role="dialog"]') && fbStyle.textContent.includes('[data-ag-cs-theme="light"]'));
+  fbSandbox.window.__agPrism.destroy();
+  assert.equal(fbDoc.getElementById('ag-prism-css'), null);
 });
 
 test('4. @property (inherits:false) & variable sinking: wallpaper-client, upstream-client, and style.css pseudo-element safety redline', () => {
