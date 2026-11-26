@@ -83,6 +83,7 @@ const REMOVE_EXPRESSION = `(() => {
     }
   }
   delete globalThis.__agCsCleanups;
+  try { (window.__agPrismDomBus || globalThis.__agPrismDomBus)?.dispose?.(document, window); } catch (e) {}
   try { (window.__agPrismFontCustomizer || globalThis.__agPrismFontCustomizer)?.dispose?.(document); } catch (e) {}
   try { (window.__agPrismReducedMotionGuard || globalThis.__agPrismReducedMotionGuard)?.dispose?.(document); } catch (e) {}
   try { (window.__agPrismSettingsExtBeta4 || globalThis.__agPrismSettingsExtBeta4)?.dispose?.(document); } catch (e) {}
@@ -257,7 +258,7 @@ const REMOVE_EXPRESSION = `(() => {
   delete globalThis.__agCsRippleCore;
   delete globalThis.__agCsUsageCore;
   delete globalThis.__agCsI18nCore;
-  for (const k of ['__agPrismReducedMotion', '__agPrismApplyIgnoreReducedMotion', '__agPrismReducedMotionGuard', '__agPrismFontCustomizer', '__agPrismI18nExtBeta4', '__agPrismSettingsExtBeta4', '__agPrismRippleWorker']) {
+  for (const k of ['__agPrismDomBus', '__agPrismPerfCaps', '__agPrismReducedMotion', '__agPrismApplyIgnoreReducedMotion', '__agPrismReducedMotionGuard', '__agPrismFontCustomizer', '__agPrismI18nExtBeta4', '__agPrismSettingsExtBeta4', '__agPrismRippleWorker']) {
     try { delete window[k]; } catch {}
     try { delete globalThis[k]; } catch {}
   }
@@ -272,6 +273,9 @@ const REMOVE_EXPRESSION = `(() => {
       'data-ag-cs-light-preset',
       'data-ag-cs-motion',
       'data-ag-cs-ignore-rm',
+      'data-ag-cs-perf-mode',
+      'data-ag-perf-busy',
+      'data-ag-cs-stream-active',
       'data-ag-cs-target-fps',
       'data-ag-cs-telemetry',
       'data-ag-cs-effort-slider',

@@ -1212,243 +1212,215 @@
         }
       } catch {}
     }
-
-    function onWinPointerOver(ev) {
-      try {
-        const t = ev?.target;
-        if (isDead() || !t?.closest) return;
-        if (typeof win?.__agPrismInlineDiffCall !== 'function' || cl(t, '.ag-cs-inline-diff-box')) {
-          clearHoverPrefetchTimer();
-          return;
-        }
-        const db = resolveDiffBadgeFromTarget(t);
-        if (!db || ga(db, 'data-ag-inline-diff-open') === '1') {
-          clearHoverPrefetchTimer();
-          return;
-        }
-        clearHoverPrefetchTimer();
-        inlineDiffHoverTimer = setTimeout(() => {
-          inlineDiffHoverTimer = 0;
-          if (isDead() || db.isConnected === false) return;
-          const p = extractInlineDiffPayload(db, null);
-          if (p.uri && !p.lines.length) {
-            requestInlineDiffFromDaemon(p.uri, { additions: p.additions || 0, deletions: p.deletions || 0 });
-          }
-        }, 110);
-      } catch {}
-    }
-
-    function onWinPointerOut(ev) {
-      try {
-        if (!inlineDiffHoverTimer) return;
-        const rel = ev?.relatedTarget;
-        if (!rel || !rel.closest || !resolveDiffBadgeFromTarget(rel)) {
-          clearHoverPrefetchTimer();
-        }
-      } catch {}
-    }
-
-    function onWinScrollCapture(ev) {
-      try {
-        if (!diffCtxMenuEl) return;
-        const t = ev?.target;
-        if (t && diffCtxMenuEl.contains?.(t)) return;
-        closeDiffContextMenu();
-      } catch {}
-    }
-
-    function onWinBlurOrResize() {
-      try {
-        if (diffCtxMenuEl) closeDiffContextMenu();
-      } catch {}
-    }
-
-    function onCtxOpenBus(ev) {
-      try {
-        if (ev?.detail?.source !== 'inline-diff') {
-          closeDiffContextMenu();
-        }
-      } catch {}
-    }
-
-    if (win && typeof win.addEventListener === 'function') {
-      win.addEventListener('click', onDocClickCapture, true);
-      win.addEventListener('pointerdown', onWinPointerDownCapture, true);
-      win.addEventListener('contextmenu', onWinContextMenu, true);
-      win.addEventListener('keydown', onWinKeyDownCapture, true);
-      win.addEventListener('pointerover', onWinPointerOver, { passive: true });
-      win.addEventListener('pointerout', onWinPointerOut, { passive: true });
-      win.addEventListener('scroll', onWinScrollCapture, true);
-      win.addEventListener('blur', onWinBlurOrResize);
-      win.addEventListener('resize', onWinBlurOrResize);
-      win.addEventListener('ag-prism:ctx-open', onCtxOpenBus);
-    }
-
-    ensureStyleMounted();
-
-    function bindHooks(hooks) {
-      if (!hooks || typeof hooks !== 'object') return;
-      if (typeof hooks.t === 'function') hookTFn = hooks.t;
-      if (typeof hooks.getLang === 'function') hookGetLang = hooks.getLang;
-      if (typeof hooks.runGuardedMut === 'function') hookMut = hooks.runGuardedMut;
-      if (typeof hooks.setAttrIfChanged === 'function') hookSetA = hooks.setAttrIfChanged;
-    }
-
-    function unbindHooks() {
-      hookTFn = baseTFn;
-      hookGetLang = baseGetLang;
-      hookMut = baseMut;
-      hookSetA = baseSetA;
-    }
-
-    function sync(cfg, hooks) {
-      if (isDead()) return;
-      if (cfg && typeof cfg === 'object') {
-        currentConfig = { ...currentConfig, ...cfg };
-      }
-      if (hooks && typeof hooks === 'object') {
-        bindHooks(hooks);
-      }
-      ensureStyleMounted();
-      syncInlineDiffChips();
-    }
-
-    function closeMenuIfOpen() {
-      return closeDiffContextMenu();
-    }
-
-    function getDebugState() {
-      return {
-        inlineDiffToggleCount: stats.inlineDiffToggleCount,
-        cacheSize: inlineDiffCache.size,
-        pendingSize: inlineDiffPending.size,
-        menuOpen: Boolean(diffCtxMenuEl),
-        styleMounted: Boolean(doc?.getElementById?.(INLINE_DIFF_STYLE_ID)),
-        destroyed: Boolean(localDestroyed),
-      };
-    }
-
-    function destroy() {
-      if (localDestroyed) return;
-      localDestroyed = true;
-      for (const tid of inlineDiffAnimTimers) clearTimeout(tid);
-      inlineDiffAnimTimers.clear();
-      clearHoverPrefetchTimer();
-      if (chipSyncDebounceTimer) {
-        clearTimeout(chipSyncDebounceTimer);
-        chipSyncDebounceTimer = 0;
-      }
-      closeDiffContextMenu();
-      for (const entry of inlineDiffPending.values()) {
-        if (entry?.timer) clearTimeout(entry.timer);
-        try {
-          entry?.resolve?.(null);
-        } catch {}
-      }
-      inlineDiffPending.clear();
-      inlineDiffInflight.clear();
-      inlineDiffCache.clear();
-      if (win && win.__agPrismInlineDiffResolve === onInlineDiffResolve) {
-        try {
-          delete win.__agPrismInlineDiffResolve;
-        } catch {}
-      }
-      if (win && typeof win.removeEventListener === 'function') {
-        try {
-          win.removeEventListener('click', onDocClickCapture, true);
-          win.removeEventListener('pointerdown', onWinPointerDownCapture, true);
-          win.removeEventListener('contextmenu', onWinContextMenu, true);
-          win.removeEventListener('keydown', onWinKeyDownCapture, true);
-          win.removeEventListener('pointerover', onWinPointerOver);
-          win.removeEventListener('pointerout', onWinPointerOut);
-          win.removeEventListener('scroll', onWinScrollCapture, true);
-          win.removeEventListener('blur', onWinBlurOrResize);
-          win.removeEventListener('resize', onWinBlurOrResize);
-          win.removeEventListener('ag-prism:ctx-open', onCtxOpenBus);
-        } catch {}
-      }
-      if (doc && typeof doc.querySelectorAll === 'function') {
-        mut(() => {
-          for (const sel of ['.ag-cs-inline-diff-box', '.ag-cs-diff-ctx-menu']) {
-            qa(doc, sel).forEach((n) => n.remove());
-          }
-          qa(doc, '[data-testid="diff-line-count"], [data-ag-diff-chip-file="1"]').forEach((el) => {
-            if (el._agOrigTooltipId) {
-              sa(el, 'data-tooltip-id', el._agOrigTooltipId);
-              delete el._agOrigTooltipId;
-            }
-            delete el._agSyncedTxt;
-            delete el._agSyncedChip;
-          });
-          for (const k of 'diff-chip|diff-chip-file|diff-chip-row|diff-stat|inline-diff-open|inline-diff-host|diff-anim|diff-state|cs-inline-diff'.split(
-            '|'
-          )) {
-            const a = 'data-ag-' + k;
+function onWinPointerOver(ev) {
+try {
+const t = ev?.target;
+if (isDead() || !t?.closest) return;
+if (typeof win?.__agPrismInlineDiffCall !== 'function') { clearHoverPrefetchTimer(); return; }
+const hit = cl(t, '.ag-cs-inline-diff-box, [data-testid="diff-line-count"], [data-ag-diff-chip="1"]');
+if (!hit || hit.classList?.contains?.('ag-cs-inline-diff-box') || cl(hit, '[data-testid="changed-files-card"]')) { clearHoverPrefetchTimer(); return; }
+const db = ga(hit, 'data-testid') === 'diff-line-count' ? hit : qs(hit, '[data-testid="diff-line-count"]');
+if (!db || ga(db, 'data-ag-inline-diff-open') === '1') { clearHoverPrefetchTimer(); return; }
+clearHoverPrefetchTimer();
+inlineDiffHoverTimer = setTimeout(() => {
+inlineDiffHoverTimer = 0;
+if (isDead() || db.isConnected === false) return;
+const p = extractInlineDiffPayload(db, null);
+if (p.uri && !p.lines.length) requestInlineDiffFromDaemon(p.uri, { additions: p.additions || 0, deletions: p.deletions || 0 });
+}, 110);
+} catch {}
+}
+function onWinPointerOut(ev) {
+try {
+if (!inlineDiffHoverTimer) return;
+const rel = ev?.relatedTarget;
+if (!rel || !rel.closest || !resolveDiffBadgeFromTarget(rel)) {
+clearHoverPrefetchTimer();
+}
+} catch {}
+}
+function onWinScrollCapture(ev) {
+try {
+if (!diffCtxMenuEl) return;
+const t = ev?.target;
+if (t && diffCtxMenuEl.contains?.(t)) return;
+closeDiffContextMenu();
+} catch {}
+}
+function onWinBlurOrResize() {
+try {
+if (diffCtxMenuEl) closeDiffContextMenu();
+} catch {}
+}
+function onCtxOpenBus(ev) {
+try {
+if (ev?.detail?.source !== 'inline-diff') closeDiffContextMenu();
+} catch {}
+}
+if (win && typeof win.addEventListener === 'function') {
+win.addEventListener('click', onDocClickCapture, true);
+win.addEventListener('pointerdown', onWinPointerDownCapture, true);
+win.addEventListener('contextmenu', onWinContextMenu, true);
+win.addEventListener('keydown', onWinKeyDownCapture, true);
+win.addEventListener('pointerover', onWinPointerOver, { passive: true });
+win.addEventListener('pointerout', onWinPointerOut, { passive: true });
+win.addEventListener('scroll', onWinScrollCapture, { capture: true, passive: true });
+win.addEventListener('blur', onWinBlurOrResize);
+win.addEventListener('resize', onWinBlurOrResize);
+win.addEventListener('ag-prism:ctx-open', onCtxOpenBus);
+}
+ensureStyleMounted();
+function bindHooks(hooks) {
+if (!hooks || typeof hooks !== 'object') return;
+if (typeof hooks.t === 'function') hookTFn = hooks.t;
+if (typeof hooks.getLang === 'function') hookGetLang = hooks.getLang;
+if (typeof hooks.runGuardedMut === 'function') hookMut = hooks.runGuardedMut;
+if (typeof hooks.setAttrIfChanged === 'function') hookSetA = hooks.setAttrIfChanged;
+}
+function unbindHooks() {
+hookTFn = baseTFn;
+hookGetLang = baseGetLang;
+hookMut = baseMut;
+hookSetA = baseSetA;
+}
+function sync(cfg, hooks) {
+if (isDead()) return;
+if (cfg && typeof cfg === 'object') {
+currentConfig = { ...currentConfig, ...cfg };
+}
+if (hooks && typeof hooks === 'object') bindHooks(hooks);
+ensureStyleMounted();
+syncInlineDiffChips();
+}
+function closeMenuIfOpen() {
+return closeDiffContextMenu();
+}
+function getDebugState() {
+return {
+inlineDiffToggleCount: stats.inlineDiffToggleCount,
+cacheSize: inlineDiffCache.size,
+pendingSize: inlineDiffPending.size,
+menuOpen: Boolean(diffCtxMenuEl),
+styleMounted: Boolean(doc?.getElementById?.(INLINE_DIFF_STYLE_ID)),
+destroyed: Boolean(localDestroyed),
+};
+}
+function destroy() {
+if (localDestroyed) return;
+localDestroyed = true;
+for (const tid of inlineDiffAnimTimers) clearTimeout(tid);
+inlineDiffAnimTimers.clear();
+clearHoverPrefetchTimer();
+if (chipSyncDebounceTimer) {
+clearTimeout(chipSyncDebounceTimer);
+chipSyncDebounceTimer = 0;
+}
+closeDiffContextMenu();
+for (const entry of inlineDiffPending.values()) {
+if (entry?.timer) clearTimeout(entry.timer);
+try {
+entry?.resolve?.(null);
+} catch {}
+}
+inlineDiffPending.clear();
+inlineDiffInflight.clear();
+inlineDiffCache.clear();
+if (win && win.__agPrismInlineDiffResolve === onInlineDiffResolve) {
+try {
+delete win.__agPrismInlineDiffResolve;
+} catch {}
+}
+if (win && typeof win.removeEventListener === 'function') {
+try {
+win.removeEventListener('click', onDocClickCapture, true);
+win.removeEventListener('pointerdown', onWinPointerDownCapture, true);
+win.removeEventListener('contextmenu', onWinContextMenu, true);
+win.removeEventListener('keydown', onWinKeyDownCapture, true);
+win.removeEventListener('pointerover', onWinPointerOver);
+win.removeEventListener('pointerout', onWinPointerOut);
+win.removeEventListener('scroll', onWinScrollCapture, { capture: true, passive: true });
+win.removeEventListener('blur', onWinBlurOrResize);
+win.removeEventListener('resize', onWinBlurOrResize);
+win.removeEventListener('ag-prism:ctx-open', onCtxOpenBus);
+} catch {}
+}
+if (doc && typeof doc.querySelectorAll === 'function') {
+mut(() => {
+for (const sel of ['.ag-cs-inline-diff-box', '.ag-cs-diff-ctx-menu']) {
+qa(doc, sel).forEach((n) => n.remove());
+}
+qa(doc, '[data-testid="diff-line-count"], [data-ag-diff-chip-file="1"]').forEach((el) => {
+if (el._agOrigTooltipId) {
+sa(el, 'data-tooltip-id', el._agOrigTooltipId);
+delete el._agOrigTooltipId;
+}
+delete el._agSyncedTxt;
+delete el._agSyncedChip;
+});
+for (const k of 'diff-chip|diff-chip-file|diff-chip-row|diff-stat|inline-diff-open|inline-diff-host|diff-anim|diff-state|cs-inline-diff'.split(
+'|'
+)) {
+const a = 'data-ag-' + k;
             qa(doc, `[${a}]`).forEach((el) => ra(el, a));
-          }
-        });
-      }
-      mut(() => {
-        try {
-          const st = (typeof doc?.getElementById === 'function' ? doc.getElementById(INLINE_DIFF_STYLE_ID) : null) || styleEl;
-          st?.remove?.();
-        } catch {}
-      });
-      styleEl = null;
-      unbindHooks();
-      if (win && win.__agPrismInlineDiff === selfApi) {
-        try {
-          delete win.__agPrismInlineDiff;
-        } catch {}
-      }
-      if (G && G.__agPrismInlineDiff === selfApi) {
-        try {
-          delete G.__agPrismInlineDiff;
-        } catch {}
-      }
-    }
-
-    selfApi = {
-      sync,
-      unbindHooks,
-      toggleInlineDiffPreview,
-      closeMenuIfOpen,
-      getDebugState,
-      destroy,
-    };
-    return selfApi;
-  }
-
-  const W = typeof window !== 'undefined' ? window : G;
-  const D = typeof document !== 'undefined' ? document : W?.document || null;
-
-  if (W) {
-    try {
-      W.__agPrismInlineDiffFactory = createInlineDiffClient;
-    } catch {}
-  }
-  if (G && G !== W) {
-    try {
-      G.__agPrismInlineDiffFactory = createInlineDiffClient;
-    } catch {}
-  }
-
-  // Idempotent singleton self-mount in browser / CDP runtime (supports hot reload)
-  if (W && D && typeof D.createElement === 'function') {
-    try {
-      W.__agPrismInlineDiff?.destroy?.();
-    } catch {}
-    try {
-      const inst = createInlineDiffClient({ win: W, doc: D });
-      W.__agPrismInlineDiff = inst;
-      if (G && G !== W) G.__agPrismInlineDiff = inst;
-      inst.sync();
-    } catch {}
-  }
-
-  if (typeof module === 'object' && module.exports) {
-    module.exports = {
-      STYLE_ID: INLINE_DIFF_STYLE_ID,
+}
+});
+}
+mut(() => {
+try {
+const st = (typeof doc?.getElementById === 'function' ? doc.getElementById(INLINE_DIFF_STYLE_ID) : null) || styleEl;
+st?.remove?.();
+} catch {}
+});
+styleEl = null;
+unbindHooks();
+if (win && win.__agPrismInlineDiff === selfApi) {
+try {
+delete win.__agPrismInlineDiff;
+} catch {}
+}
+if (G && G.__agPrismInlineDiff === selfApi) {
+try {
+delete G.__agPrismInlineDiff;
+} catch {}
+}
+}
+selfApi = {
+sync,
+unbindHooks,
+toggleInlineDiffPreview,
+closeMenuIfOpen,
+getDebugState,
+destroy,
+};
+return selfApi;
+}
+const W = typeof window !== 'undefined' ? window : G;
+const D = typeof document !== 'undefined' ? document : W?.document || null;
+if (W) {
+try {
+W.__agPrismInlineDiffFactory = createInlineDiffClient;
+} catch {}
+}
+if (G && G !== W) {
+try {
+G.__agPrismInlineDiffFactory = createInlineDiffClient;
+} catch {}
+}
+// Idempotent singleton self-mount in browser / CDP runtime (supports hot reload)
+if (W && D && typeof D.createElement === 'function') {
+try {
+W.__agPrismInlineDiff?.destroy?.();
+} catch {}
+try {
+const inst = createInlineDiffClient({ win: W, doc: D });
+W.__agPrismInlineDiff = inst;
+if (G && G !== W) G.__agPrismInlineDiff = inst;
+inst.sync();
+} catch {}
+}
+if (typeof module === 'object' && module.exports) {
+module.exports = {
+STYLE_ID: INLINE_DIFF_STYLE_ID,
       INLINE_DIFF_CSS,
       parseUnifiedDiffLines,
       buildPairDiffLines,

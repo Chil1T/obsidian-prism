@@ -2295,6 +2295,7 @@
 
     function decorateMermaidContainers(scopeEl) {
       if (!D || !scopeEl || typeof scopeEl.querySelectorAll !== 'function') return;
+      if (scopeEl.nodeType === 1 && !scopeEl.firstElementChild && !isMermaidContainer(scopeEl)) return;
       const candidates = scopeEl.querySelectorAll(
         '[data-testid*="mermaid"], .mermaid, svg[id^="mermaid"], svg[aria-roledescription]'
       );
@@ -2741,439 +2742,388 @@
         }
       }
       decorateMermaidContainers(root);
-      decorateAuxUnsupportedViews(root);
-    }
-
-    function isIgnoredMutationTarget(node) {
-      let cur = node && node.nodeType === 1 ? node : node?.parentElement;
-      let sawExplicitScan = false;
-      for (let d = 0; cur && d < 24; d++, cur = cur.parentElement) {
-        const scanAttr = cur.getAttribute?.('data-omni-scan');
-        if (scanAttr !== null && scanAttr !== undefined && scanAttr !== 'false' && scanAttr !== '0') {
-          sawExplicitScan = true;
-        }
-        const id = cur.id;
-        if (
-          id === 'ag-prism-pulse-bar' ||
-          id === 'ag-pulse-status-bar' ||
-          id === 'ag-cs-settings-sec' ||
-          id === 'agy-theme-switcher' ||
-          id === 'agy-theme-menu' ||
-          id === 'antigravity-quota-widget' ||
-          id === 'antigravity-translation-audit'
-        ) {
-          return true;
-        }
-        if (cur.hasAttribute?.('data-agy-hans-ui')) {
-          return true;
-        }
-        if (!sawExplicitScan && cur.getAttribute?.('role') === 'dialog') {
-          return true;
-        }
-        if (cur.hasAttribute?.('data-hover-card-popup') || cur.tagName === 'ASIDE') return true;
-        if (d === 0) {
-          const f = cur.firstElementChild;
-          if (f?.hasAttribute?.('data-hover-card-popup') || f?.firstElementChild?.hasAttribute?.('data-hover-card-popup')) return true;
-          if (cur.hasAttribute?.('data-base-ui-portal') && cur.querySelector?.('[data-hover-card-popup]')) return true;
-        }
-        const tid = cur.getAttribute?.('data-testid');
-        if (tid === 'agent-input-box' || tid === 'conversation-row-sidebar' || tid === 'conversation-list-sidebar' || tid === 'project-header') return true;
-        if (cur.parentElement?.getAttribute?.('data-testid') === 'sidebar-split' && cur === cur.parentElement.firstElementChild) return true;
-        const cls = typeof cur.className === 'string' ? cur.className : '';
-        if (
-          cls &&
-          (cls.indexOf('ag-prism-thought-') !== -1 ||
-            cls.indexOf('ag-omni-') !== -1 ||
-            cls.indexOf('ces-root') !== -1 ||
-            cls.indexOf('ag-cs-stream-chunk') !== -1 ||
-            cls.indexOf('ag-cs-code-scan') !== -1 ||
-            cls.indexOf('ag-cs-crab') !== -1 ||
-            cls.indexOf('ag-cs-conv-aura-host') !== -1 ||
-            cls.indexOf('ag-cs-ripple-host') !== -1 ||
-            cls.indexOf('ag-anim-icon') !== -1 ||
-            cls.indexOf('ag-cs-thinking-spark') !== -1 ||
-            cls.indexOf('ag-cs-prism-rim-cv') !== -1 ||
-            cls.indexOf('ag-cs-smooth-caret') !== -1 ||
-            cls.indexOf('ag-v2-mascot-') !== -1 ||
-            cls.indexOf('ag-v2-chroma-fx') !== -1)
-        ) {
-          return true;
-        }
-      }
-      return false;
-    }
-
-    function scheduleTextNodeHighlight(textNode) {
-      if (!enabled || !textNode || textNode.nodeType !== 3) return;
-      const raw = textNode.nodeValue || '';
-      const tracked = textNodeTokenMap.has(textNode);
-      if (!mayContainBareToken(raw) && !tracked) return;
-      if (!tracked && (!textNode.parentElement || !findClosest(textNode.parentElement, SCAN_CONTAINER_SELECTOR))) {
-        return;
-      }
-      pendingTextNodes.add(textNode);
-      if (textScanTimer) return;
-      const delay = D?.documentElement?.hasAttribute?.('data-ag-cs-stream-active') ? 480 : 120;
-      textScanTimer = setTimeout(() => {
-        textScanTimer = null;
-        if (!enabled) {
-          pendingTextNodes.clear();
-          return;
-        }
-        const batch = Array.from(pendingTextNodes);
-        pendingTextNodes.clear();
-        for (let i = 0; i < batch.length; i++) {
-          const tn = batch[i];
-          if (!tn.isConnected) clearHighlightEntryForNode(tn);
-          else registerHighlightOnTextNode(tn);
-        }
-      }, delay);
-    }
-
-    function hasPendingAncestor(el, set) {
-      let cur = el?.parentElement;
-      while (cur) {
-        if (set.has(cur)) return true;
-        cur = cur.parentElement;
-      }
-      return false;
-    }
-
-    function scheduleIncrementalScan(node) {
-      if (!enabled || !D) return;
-      const el = node && node.nodeType === 1 ? node : node?.parentElement;
-      if (el) pendingScanRoots.add(el);
-      if (scanTimer) return;
-      const delay = D.documentElement?.hasAttribute?.('data-ag-cs-stream-active') ? 280 : 60;
-      scanTimer = setTimeout(() => {
-        scanTimer = null;
-        if (!enabled) {
-          pendingScanRoots.clear();
-          return;
-        }
-        pruneDisconnectedHighlights();
-        const rootSet = new Set(pendingScanRoots);
-        pendingScanRoots.clear();
-        let scannedAuxSplit = false;
-        for (const r of rootSet) {
-          if (!r || !r.isConnected) continue;
-          if (rootSet.size > 1 && hasPendingAncestor(r, rootSet)) continue;
-          if (findClosest(r, SCAN_CONTAINER_SELECTOR)) {
-            scanContainerForBareTokens(r);
-          } else if (typeof r.querySelectorAll === 'function') {
-            for (const c of r.querySelectorAll(SCAN_CONTAINER_SELECTOR)) {
-              scanContainerForBareTokens(c);
-            }
-          }
-          decorateMermaidContainers(r);
-          if (!findClosest(r, '[data-testid="conversation-view"]')) {
-            const auxRoot = !scannedAuxSplit && (findClosest(r, '[data-testid="aux-pane-split"]') || r.querySelector?.('[data-testid="aux-pane-split"]'));
-            if (auxRoot) {
-              scannedAuxSplit = true;
-              decorateAuxUnsupportedViews(auxRoot);
-            } else if (
-              (typeof r.matches === 'function' && r.matches(AUX_FILE_VIEW_SELECTOR)) ||
-              r.querySelector?.(AUX_FILE_VIEW_SELECTOR)
-            ) {
-              decorateAuxUnsupportedViews(r);
-            }
-          }
-        }
-      }, delay);
-    }
-
-    // ── Lifecycle & Zero-Residue Teardown ────────────────────────────────────
-    function ensureStyleInjected() {
-      if (!D) return;
-      let styleEl = D.getElementById?.(STYLE_EL_ID);
-      if (!styleEl) {
-        styleEl = D.createElement('style');
-        styleEl.id = STYLE_EL_ID;
-        styleEl.textContent = OMNI_CSS;
-        (D.head || D.documentElement)?.appendChild?.(styleEl);
-      }
-    }
-
-    function unwrapAllModifications() {
-      if (textScanTimer) {
-        clearTimeout(textScanTimer);
-        textScanTimer = null;
-      }
-      pendingTextNodes.clear();
-      // 1. Clear CSS Custom Highlights (zero DOM changes needed)
-      for (const tn of Array.from(trackedHighlightNodes)) {
-        clearHighlightEntryForNode(tn);
-      }
-      trackedHighlightNodes.clear();
-      if (urlHighlight) {
-        try { urlHighlight.clear(); } catch (_) {}
-        urlHighlight = null;
-      }
-      if (pathHighlight) {
-        try { pathHighlight.clear(); } catch (_) {}
-        pathHighlight = null;
-      }
-      try {
-        W?.CSS?.highlights?.delete?.(HL_URL_NAME);
-        W?.CSS?.highlights?.delete?.(HL_PATH_NAME);
-      } catch (_) {}
-      setHoverTokenCursor(false);
-
-      // 2. Unwrap fallback autolink spans if any were created
-      const parentsToNormalize = new Set();
-      for (const span of Array.from(createdAutolinks)) {
-        const p = span.parentNode;
-        if (p && D) {
-          const tn = D.createTextNode(span.textContent || '');
-          p.replaceChild(tn, span);
-          parentsToNormalize.add(p);
-        } else {
-          try { span.remove?.(); } catch (_) {}
-        }
-      }
-      createdAutolinks.clear();
-      for (const p of parentsToNormalize) {
-        try { p.normalize?.(); } catch (_) {}
-      }
-
-      // 3. Remove Mermaid zoom buttons
-      for (const box of Array.from(decoratedMermaidBoxes)) {
-        box.querySelectorAll?.('.ag-omni-mermaid-zoom-btn').forEach((b) => b.remove());
-        const origPos = box.getAttribute?.('data-omni-orig-pos') || '';
-        if (box.style) box.style.position = origPos;
-        box.removeAttribute?.('data-omni-orig-pos');
-        box.removeAttribute?.('data-omni-mermaid-box');
-      }
-      decoratedMermaidBoxes.clear();
-
-      // 4. Remove Aux view switchers & restore shell styles
-      for (const rec of Array.from(mountedAuxSwitches)) {
-        unmountSingleAuxSwitch(rec);
-      }
-      mountedAuxSwitches.clear();
-    }
-
-    function ensureRootAttrObserver() {
-      if (!D?.documentElement || !W || typeof W.MutationObserver !== 'function' || rootAttrObserver) return;
-      rootAttrObserver = new W.MutationObserver((mutations) => {
-        let needSync = false;
-        for (const m of mutations) {
-          const attr = m.attributeName;
-          if (attr === 'data-ag-prism-omni') {
-            const v = D.documentElement.getAttribute('data-ag-prism-omni');
-            if (v === 'off' && enabled) { sync({ omniModule: 'off' }); return; }
-            if (v === 'on' && !enabled) { sync({ omniModule: 'on' }); return; }
-          } else if (attr === 'data-ag-prism-link-target') {
-            const lt = D.documentElement.getAttribute('data-ag-prism-link-target');
-            if (lt === 'builtin' || lt === 'external') linkTarget = lt;
-          } else {
-            needSync = true;
-          }
-        }
-        if (needSync && enabled) broadcastThemeAndLocaleSync();
-      });
-      rootAttrObserver.observe(D.documentElement, {
-        attributes: true,
-        attributeFilter: [
-          'data-ag-cs-theme', 'data-ag-cs-palette', 'data-ag-cs-light-preset',
-          'data-ag-cs-accent', 'data-ag-cs-corners', 'data-ag-cs-motion',
-          'data-ag-cs-lang', 'data-ag-prism-omni', 'data-ag-prism-link-target',
-        ],
-      });
-    }
-
-    function attachRuntime() {
-      if (mounted || !D || !W) return;
-      mounted = true;
-      installRpcResolver();
-      ensureStyleInjected();
-      ensureRootAttrObserver();
-
-      D.addEventListener('click', onDocClickCapture, true);
-      D.addEventListener('contextmenu', onDocContextMenu, true);
-      D.addEventListener('keydown', onDocKeyDown, true);
-      D.addEventListener('mousemove', onDocPointerMove, { passive: true });
-      D.addEventListener('visibilitychange', onWindowBlurOrScroll);
-      D.addEventListener('scroll', onWindowBlurOrScroll, true);
-      W.addEventListener?.('blur', onWindowBlurOrScroll);
-      W.addEventListener?.('resize', onWindowBlurOrScroll);
-      W.addEventListener?.('message', onWindowMessage);
-
-      if (typeof W.MutationObserver === 'function') {
-        domObserver = new W.MutationObserver((mutations) => {
-          for (let i = 0; i < mutations.length; i++) {
-            const m = mutations[i];
-            if (isIgnoredMutationTarget(m.target)) continue;
-            if (m.type === 'childList') {
-              const useHl = supportsHighlightApi();
-              let queuedTargetAux = false;
-              for (let j = 0; j < m.addedNodes.length; j++) {
-                const n = m.addedNodes[j];
-                if (n.nodeType !== 1 && n.nodeType !== 3) continue;
-                if (isIgnoredMutationTarget(n)) continue;
-                if (useHl && n.nodeType === 3) {
-                  scheduleTextNodeHighlight(n);
-                  if (!queuedTargetAux && mountedAuxSwitches.size > 0 && findClosest(m.target, '[data-testid="aux-pane-split"]')) {
-                    queuedTargetAux = true;
-                    scheduleIncrementalScan(m.target);
-                  }
-                } else {
-                  scheduleIncrementalScan(n);
-                }
-              }
-              if (
-                !queuedTargetAux &&
-                m.removedNodes.length > 0 &&
-                mountedAuxSwitches.size > 0 &&
-                findClosest(m.target, '[data-testid="aux-pane-split"]')
-              ) {
-                scheduleIncrementalScan(m.target);
-              }
-            } else if (m.type === 'characterData' && m.target) {
-              if (supportsHighlightApi() && m.target.nodeType === 3) {
-                scheduleTextNodeHighlight(m.target);
-                if (mountedAuxSwitches.size > 0 && findClosest(m.target, '[data-testid="aux-pane-split"]')) {
-                  scheduleIncrementalScan(m.target);
-                }
-              } else {
-                scheduleIncrementalScan(m.target);
-              }
-            } else if (m.type === 'attributes') {
-              const attrName = m.attributeName;
-              if (
-                (attrName === 'data-ag-cs-spark-streaming' || attrName === 'data-ag-cs-thought-streaming') &&
-                m.target &&
-                !m.target.hasAttribute?.(attrName)
-              ) {
-                scheduleIncrementalScan(m.target);
-              } else if (
-                (attrName === 'data-active-file-uri' ||
-                  attrName === 'data-file-uri' ||
-                  attrName === 'data-uri' ||
-                  attrName === 'data-file-path') &&
-                m.target &&
-                findClosest(m.target, '[data-testid="aux-pane-split"]')
-              ) {
-                scheduleIncrementalScan(m.target);
-              }
-            }
-          }
-        });
-        const obsRoot = D.body || D.documentElement;
-        if (obsRoot) {
-          domObserver.observe(obsRoot, {
-            childList: true,
-            subtree: true,
-            characterData: true,
-            attributes: true,
-            attributeFilter: [
-              'data-ag-cs-spark-streaming',
-              'data-ag-cs-thought-streaming',
-              'data-active-file-uri',
-              'data-file-uri',
-              'data-uri',
-              'data-file-path',
-            ],
-          });
-        }
-      }
-
-      runScanNow(D.body || D.documentElement);
-    }
-
-    function detachRuntime(removeRootAttrs = false) {
-      if (scanTimer) {
-        clearTimeout(scanTimer);
-        scanTimer = null;
-      }
-      if (textScanTimer) {
-        clearTimeout(textScanTimer);
-        textScanTimer = null;
-      }
-      cancelPendingPointerRaf();
-      pendingScanRoots.clear();
-      pendingTextNodes.clear();
-
-      if (domObserver) {
-        try { domObserver.disconnect(); } catch (_) {}
-        domObserver = null;
-      }
-      if (removeRootAttrs && rootAttrObserver) {
-        try { rootAttrObserver.disconnect(); } catch (_) {}
-        rootAttrObserver = null;
-      }
-      closeContextMenu();
-      purgeLegacyOmniDock();
-      unwrapAllModifications();
-
-      if (D) {
-        D.removeEventListener('click', onDocClickCapture, true);
-        D.removeEventListener('contextmenu', onDocContextMenu, true);
-        D.removeEventListener('keydown', onDocKeyDown, true);
-        D.removeEventListener('mousemove', onDocPointerMove, { passive: true });
-        D.removeEventListener('visibilitychange', onWindowBlurOrScroll);
-        D.removeEventListener('scroll', onWindowBlurOrScroll, true);
-        try { D.getElementById?.(STYLE_EL_ID)?.remove?.(); } catch (_) {}
-        if (D.documentElement) {
-          D.documentElement.removeAttribute?.('data-ag-omni-hover-token');
-          if (removeRootAttrs) {
-            D.documentElement.removeAttribute?.('data-ag-prism-omni');
-            D.documentElement.removeAttribute?.('data-ag-prism-link-target');
-          }
-        }
-      }
-      if (W) {
-        W.removeEventListener?.('blur', onWindowBlurOrScroll);
-        W.removeEventListener?.('resize', onWindowBlurOrScroll);
-        W.removeEventListener?.('message', onWindowMessage);
-      }
-      mounted = false;
-    }
-
-    function sync(cfg = null, incomingServerMeta = null) {
-      purgeLegacyOmniDock();
-      if (incomingServerMeta && typeof incomingServerMeta === 'object' && incomingServerMeta.baseUrl) {
-        serverMeta = {
-          baseUrl: String(incomingServerMeta.baseUrl).replace(/\/+$/, ''),
-          token: String(incomingServerMeta.token || ''),
-          port: incomingServerMeta.port || null,
-        };
-      }
-
-      const rootEl = D?.documentElement;
-      const rawOmni =
-        cfg && cfg.omniModule !== undefined
-          ? cfg.omniModule
-          : rootEl?.getAttribute?.('data-ag-prism-omni') || 'on';
-      const nextEnabled = rawOmni !== 'off' && rawOmni !== false;
-
-      if (destroyed && !nextEnabled) return getState();
-      destroyed = false;
-
-      const rawTarget =
-        cfg && cfg.linkTarget !== undefined
-          ? cfg.linkTarget
-          : rootEl?.getAttribute?.('data-ag-prism-link-target') || linkTarget || 'builtin';
-      linkTarget = rawTarget === 'external' ? 'external' : 'builtin';
-
-      enabled = nextEnabled;
-      if (!enabled) {
-        detachRuntime(true);
-        return getState();
-      }
-
-      ensureRootAttrObserver();
-      if (rootEl?.setAttribute) {
-        if (rootEl.getAttribute('data-ag-prism-omni') !== 'on') {
-          rootEl.setAttribute('data-ag-prism-omni', 'on');
-        }
-        if (rootEl.getAttribute('data-ag-prism-link-target') !== linkTarget) {
-          rootEl.setAttribute('data-ag-prism-link-target', linkTarget);
-        }
-      }
-
-      attachRuntime();
-      broadcastThemeAndLocaleSync();
+decorateAuxUnsupportedViews(root);
+}
+function isIgnoredMutationTarget(node, batchCache) {
+let cur = node && node.nodeType === 1 ? node : node?.parentElement, sawExplicitScan = false, trail = null;
+const finish = (val) => { if (batchCache && !sawExplicitScan && trail) for (let i = 0; i < trail.length; i++) batchCache.set(trail[i], val); return val; };
+for (let d = 0; cur && d < 24; d++, cur = cur.parentElement) {
+if (batchCache && !sawExplicitScan) {
+const cached = batchCache.get(cur);
+if (cached !== undefined) return finish(cached);
+(trail || (trail = [])).push(cur);
+}
+const scanAttr = cur.getAttribute?.('data-omni-scan');
+if (scanAttr !== null && scanAttr !== undefined && scanAttr !== 'false' && scanAttr !== '0') sawExplicitScan = true;
+if (!sawExplicitScan && cur.hasAttribute?.('data-ag-owned')) return finish(true);
+const id = cur.id;
+if (id === 'ag-prism-pulse-bar' || id === 'ag-pulse-status-bar' || id === 'ag-cs-settings-sec' || id === 'agy-theme-switcher' || id === 'agy-theme-menu' || id === 'antigravity-quota-widget' || id === 'antigravity-translation-audit') return finish(true);
+if (cur.hasAttribute?.('data-agy-hans-ui')) return finish(true);
+if (!sawExplicitScan && cur.getAttribute?.('role') === 'dialog') return finish(true);
+if (cur.hasAttribute?.('data-hover-card-popup') || cur.tagName === 'ASIDE') return finish(true);
+if (d === 0) {
+const f = cur.firstElementChild;
+if (f?.hasAttribute?.('data-hover-card-popup') || f?.firstElementChild?.hasAttribute?.('data-hover-card-popup')) return finish(true);
+if (cur.hasAttribute?.('data-base-ui-portal') && cur.querySelector?.('[data-hover-card-popup]')) return finish(true);
+}
+const tid = cur.getAttribute?.('data-testid');
+if (tid === 'agent-input-box' || tid === 'conversation-row-sidebar' || tid === 'conversation-list-sidebar' || tid === 'project-header') return finish(true);
+if (cur.parentElement?.getAttribute?.('data-testid') === 'sidebar-split' && cur === cur.parentElement.firstElementChild) return finish(true);
+const cls = typeof cur.className === 'string' ? cur.className : '';
+if (cls && (cls.indexOf('ag-prism-thought-') !== -1 || cls.indexOf('ag-omni-') !== -1 || cls.indexOf('ces-root') !== -1 || cls.indexOf('ag-cs-stream-chunk') !== -1 || cls.indexOf('ag-cs-code-scan') !== -1 || cls.indexOf('ag-cs-crab') !== -1 || cls.indexOf('ag-cs-conv-aura-host') !== -1 || cls.indexOf('ag-cs-ripple-host') !== -1 || cls.indexOf('ag-anim-icon') !== -1 || cls.indexOf('ag-cs-thinking-spark') !== -1 || cls.indexOf('ag-cs-prism-rim-cv') !== -1 || cls.indexOf('ag-cs-smooth-caret') !== -1 || cls.indexOf('ag-v2-mascot-') !== -1 || cls.indexOf('ag-v2-chroma-fx') !== -1)) return finish(true);
+}
+return finish(false);
+}
+function scheduleTextNodeHighlight(textNode) {
+if (!enabled || !textNode || textNode.nodeType !== 3) return;
+const raw = textNode.nodeValue || '';
+const tracked = textNodeTokenMap.has(textNode);
+if (!mayContainBareToken(raw) && !tracked) return;
+if (!tracked && (!textNode.parentElement || !findClosest(textNode.parentElement, SCAN_CONTAINER_SELECTOR))) {
+return;
+}
+pendingTextNodes.add(textNode);
+if (textScanTimer) return;
+const delay = D?.documentElement?.hasAttribute?.('data-ag-cs-stream-active') ? 480 : 120;
+textScanTimer = setTimeout(() => {
+textScanTimer = null;
+if (!enabled) {
+pendingTextNodes.clear();
+return;
+}
+const batch = Array.from(pendingTextNodes);
+pendingTextNodes.clear();
+for (let i = 0; i < batch.length; i++) {
+const tn = batch[i];
+if (!tn.isConnected) clearHighlightEntryForNode(tn);
+else registerHighlightOnTextNode(tn);
+}
+}, delay);
+}
+function hasPendingAncestor(el, set) {
+let cur = el?.parentElement;
+while (cur) {
+if (set.has(cur)) return true;
+cur = cur.parentElement;
+}
+return false;
+}
+function scheduleIncrementalScan(node) {
+if (!enabled || !D) return;
+const el = node && node.nodeType === 1 ? node : node?.parentElement;
+if (el) pendingScanRoots.add(el);
+if (scanTimer) return;
+const delay = D.documentElement?.hasAttribute?.('data-ag-cs-stream-active') ? 280 : 60;
+scanTimer = setTimeout(() => {
+scanTimer = null;
+if (!enabled) {
+pendingScanRoots.clear();
+return;
+}
+pruneDisconnectedHighlights();
+const rootSet = new Set(pendingScanRoots);
+pendingScanRoots.clear();
+let scannedAuxSplit = false;
+for (const r of rootSet) {
+if (!r || !r.isConnected) continue;
+if (rootSet.size > 1 && hasPendingAncestor(r, rootSet)) continue;
+if (findClosest(r, SCAN_CONTAINER_SELECTOR)) {
+scanContainerForBareTokens(r);
+} else if (typeof r.querySelectorAll === 'function') {
+for (const c of r.querySelectorAll(SCAN_CONTAINER_SELECTOR)) {
+scanContainerForBareTokens(c);
+}
+}
+decorateMermaidContainers(r);
+if (!findClosest(r, '[data-testid="conversation-view"]')) {
+const auxRoot = !scannedAuxSplit && (findClosest(r, '[data-testid="aux-pane-split"]') || r.querySelector?.('[data-testid="aux-pane-split"]'));
+if (auxRoot) {
+scannedAuxSplit = true;
+decorateAuxUnsupportedViews(auxRoot);
+} else if (
+(typeof r.matches === 'function' && r.matches(AUX_FILE_VIEW_SELECTOR)) ||
+r.querySelector?.(AUX_FILE_VIEW_SELECTOR)
+) {
+decorateAuxUnsupportedViews(r);
+}
+}
+}
+}, delay);
+}
+// ── Lifecycle & Zero-Residue Teardown ────────────────────────────────────
+function ensureStyleInjected() {
+if (!D) return;
+let styleEl = D.getElementById?.(STYLE_EL_ID);
+if (!styleEl) {
+styleEl = D.createElement('style');
+styleEl.id = STYLE_EL_ID;
+styleEl.textContent = OMNI_CSS;
+(D.head || D.documentElement)?.appendChild?.(styleEl);
+}
+}
+function unwrapAllModifications() {
+if (textScanTimer) {
+clearTimeout(textScanTimer);
+textScanTimer = null;
+}
+pendingTextNodes.clear();
+// 1. Clear CSS Custom Highlights (zero DOM changes needed)
+for (const tn of Array.from(trackedHighlightNodes)) {
+clearHighlightEntryForNode(tn);
+}
+trackedHighlightNodes.clear();
+if (urlHighlight) {
+try { urlHighlight.clear(); } catch (_) {}
+urlHighlight = null;
+}
+if (pathHighlight) {
+try { pathHighlight.clear(); } catch (_) {}
+pathHighlight = null;
+}
+try {
+W?.CSS?.highlights?.delete?.(HL_URL_NAME);
+W?.CSS?.highlights?.delete?.(HL_PATH_NAME);
+} catch (_) {}
+setHoverTokenCursor(false);
+// 2. Unwrap fallback autolink spans if any were created
+const parentsToNormalize = new Set();
+for (const span of Array.from(createdAutolinks)) {
+const p = span.parentNode;
+if (p && D) {
+const tn = D.createTextNode(span.textContent || '');
+p.replaceChild(tn, span);
+parentsToNormalize.add(p);
+} else {
+try { span.remove?.(); } catch (_) {}
+}
+}
+createdAutolinks.clear();
+for (const p of parentsToNormalize) {
+try { p.normalize?.(); } catch (_) {}
+}
+// 3. Remove Mermaid zoom buttons
+for (const box of Array.from(decoratedMermaidBoxes)) {
+box.querySelectorAll?.('.ag-omni-mermaid-zoom-btn').forEach((b) => b.remove());
+const origPos = box.getAttribute?.('data-omni-orig-pos') || '';
+if (box.style) box.style.position = origPos;
+box.removeAttribute?.('data-omni-orig-pos');
+box.removeAttribute?.('data-omni-mermaid-box');
+}
+decoratedMermaidBoxes.clear();
+// 4. Remove Aux view switchers & restore shell styles
+for (const rec of Array.from(mountedAuxSwitches)) {
+unmountSingleAuxSwitch(rec);
+}
+mountedAuxSwitches.clear();
+}
+function ensureRootAttrObserver() {
+if (!D?.documentElement || !W || typeof W.MutationObserver !== 'function' || rootAttrObserver) return;
+rootAttrObserver = new W.MutationObserver((mutations) => {
+let needSync = false;
+for (const m of mutations) {
+const attr = m.attributeName;
+if (attr === 'data-ag-prism-omni') {
+const v = D.documentElement.getAttribute('data-ag-prism-omni');
+if (v === 'off' && enabled) { sync({ omniModule: 'off' }); return; }
+if (v === 'on' && !enabled) { sync({ omniModule: 'on' }); return; }
+} else if (attr === 'data-ag-prism-link-target') {
+const lt = D.documentElement.getAttribute('data-ag-prism-link-target');
+if (lt === 'builtin' || lt === 'external') linkTarget = lt;
+} else {
+needSync = true;
+}
+}
+if (needSync && enabled) broadcastThemeAndLocaleSync();
+});
+rootAttrObserver.observe(D.documentElement, {
+attributes: true,
+attributeFilter: [
+'data-ag-cs-theme', 'data-ag-cs-palette', 'data-ag-cs-light-preset',
+'data-ag-cs-accent', 'data-ag-cs-corners', 'data-ag-cs-motion',
+'data-ag-cs-lang', 'data-ag-prism-omni', 'data-ag-prism-link-target',
+],
+});
+}
+function attachRuntime() {
+if (mounted || !D || !W) return;
+mounted = true;
+installRpcResolver();
+ensureStyleInjected();
+ensureRootAttrObserver();
+D.addEventListener('click', onDocClickCapture, true);
+D.addEventListener('contextmenu', onDocContextMenu, true);
+D.addEventListener('keydown', onDocKeyDown, true);
+D.addEventListener('mousemove', onDocPointerMove, { passive: true });
+D.addEventListener('visibilitychange', onWindowBlurOrScroll);
+D.addEventListener('scroll', onWindowBlurOrScroll, { capture: true, passive: true });
+W.addEventListener?.('blur', onWindowBlurOrScroll);
+W.addEventListener?.('resize', onWindowBlurOrScroll);
+W.addEventListener?.('message', onWindowMessage);
+if (typeof W.MutationObserver === 'function') {
+domObserver = new W.MutationObserver((mutations) => {
+const batchIgnored = typeof WeakMap === 'function' ? new WeakMap() : null;
+for (let i = 0; i < mutations.length; i++) {
+const m = mutations[i];
+if (isIgnoredMutationTarget(m.target, batchIgnored)) continue;
+if (m.type === 'childList') {
+const useHl = supportsHighlightApi();
+let queuedTargetAux = false;
+for (let j = 0; j < m.addedNodes.length; j++) {
+const n = m.addedNodes[j];
+if (n.nodeType !== 1 && n.nodeType !== 3) continue;
+if (isIgnoredMutationTarget(n, batchIgnored)) continue;
+if (useHl && n.nodeType === 3) {
+scheduleTextNodeHighlight(n);
+if (!queuedTargetAux && mountedAuxSwitches.size > 0 && findClosest(m.target, '[data-testid="aux-pane-split"]')) {
+queuedTargetAux = true;
+scheduleIncrementalScan(m.target);
+}
+} else {
+scheduleIncrementalScan(n);
+}
+}
+if (
+!queuedTargetAux &&
+m.removedNodes.length > 0 &&
+mountedAuxSwitches.size > 0 &&
+findClosest(m.target, '[data-testid="aux-pane-split"]')
+) {
+scheduleIncrementalScan(m.target);
+}
+} else if (m.type === 'characterData' && m.target) {
+if (supportsHighlightApi() && m.target.nodeType === 3) {
+scheduleTextNodeHighlight(m.target);
+if (mountedAuxSwitches.size > 0 && findClosest(m.target, '[data-testid="aux-pane-split"]')) {
+scheduleIncrementalScan(m.target);
+}
+} else {
+scheduleIncrementalScan(m.target);
+}
+} else if (m.type === 'attributes') {
+const attrName = m.attributeName;
+if (
+(attrName === 'data-ag-cs-spark-streaming' || attrName === 'data-ag-cs-thought-streaming') &&
+m.target &&
+!m.target.hasAttribute?.(attrName)
+) {
+scheduleIncrementalScan(m.target);
+} else if (
+(attrName === 'data-active-file-uri' ||
+attrName === 'data-file-uri' ||
+attrName === 'data-uri' ||
+attrName === 'data-file-path') &&
+m.target &&
+findClosest(m.target, '[data-testid="aux-pane-split"]')
+) {
+scheduleIncrementalScan(m.target);
+}
+}
+}
+});
+const obsRoot = D.body || D.documentElement;
+if (obsRoot) {
+domObserver.observe(obsRoot, {
+childList: true,
+subtree: true,
+characterData: true,
+attributes: true,
+attributeFilter: [
+'data-ag-cs-spark-streaming',
+'data-ag-cs-thought-streaming',
+'data-active-file-uri',
+'data-file-uri',
+'data-uri',
+'data-file-path',
+],
+});
+}
+}
+runScanNow(D.body || D.documentElement);
+}
+function detachRuntime(removeRootAttrs = false) {
+if (scanTimer) {
+clearTimeout(scanTimer);
+scanTimer = null;
+}
+if (textScanTimer) {
+clearTimeout(textScanTimer);
+textScanTimer = null;
+}
+cancelPendingPointerRaf();
+pendingScanRoots.clear();
+pendingTextNodes.clear();
+if (domObserver) {
+try { domObserver.disconnect(); } catch (_) {}
+domObserver = null;
+}
+if (removeRootAttrs && rootAttrObserver) {
+try { rootAttrObserver.disconnect(); } catch (_) {}
+rootAttrObserver = null;
+}
+closeContextMenu();
+purgeLegacyOmniDock();
+unwrapAllModifications();
+if (D) {
+D.removeEventListener('click', onDocClickCapture, true);
+D.removeEventListener('contextmenu', onDocContextMenu, true);
+D.removeEventListener('keydown', onDocKeyDown, true);
+D.removeEventListener('mousemove', onDocPointerMove, { passive: true });
+D.removeEventListener('visibilitychange', onWindowBlurOrScroll);
+D.removeEventListener('scroll', onWindowBlurOrScroll, { capture: true, passive: true });
+try { D.getElementById?.(STYLE_EL_ID)?.remove?.(); } catch (_) {}
+if (D.documentElement) {
+D.documentElement.removeAttribute?.('data-ag-omni-hover-token');
+if (removeRootAttrs) {
+D.documentElement.removeAttribute?.('data-ag-prism-omni');
+D.documentElement.removeAttribute?.('data-ag-prism-link-target');
+}
+}
+}
+if (W) {
+W.removeEventListener?.('blur', onWindowBlurOrScroll);
+W.removeEventListener?.('resize', onWindowBlurOrScroll);
+W.removeEventListener?.('message', onWindowMessage);
+}
+mounted = false;
+}
+function sync(cfg = null, incomingServerMeta = null) {
+purgeLegacyOmniDock();
+if (incomingServerMeta && typeof incomingServerMeta === 'object' && incomingServerMeta.baseUrl) {
+serverMeta = {
+baseUrl: String(incomingServerMeta.baseUrl).replace(/\/+$/, ''),
+token: String(incomingServerMeta.token || ''),
+port: incomingServerMeta.port || null,
+};
+}
+const rootEl = D?.documentElement;
+const rawOmni =
+cfg && cfg.omniModule !== undefined
+? cfg.omniModule
+: rootEl?.getAttribute?.('data-ag-prism-omni') || 'on';
+const nextEnabled = rawOmni !== 'off' && rawOmni !== false;
+if (destroyed && !nextEnabled) return getState();
+destroyed = false;
+const rawTarget =
+cfg && cfg.linkTarget !== undefined
+? cfg.linkTarget
+: rootEl?.getAttribute?.('data-ag-prism-link-target') || linkTarget || 'builtin';
+linkTarget = rawTarget === 'external' ? 'external' : 'builtin';
+enabled = nextEnabled;
+if (!enabled) {
+detachRuntime(true);
+return getState();
+}
+ensureRootAttrObserver();
+if (rootEl?.setAttribute) {
+if (rootEl.getAttribute('data-ag-prism-omni') !== 'on') {
+rootEl.setAttribute('data-ag-prism-omni', 'on');
+}
+if (rootEl.getAttribute('data-ag-prism-link-target') !== linkTarget) {
+rootEl.setAttribute('data-ag-prism-link-target', linkTarget);
+}
+}
+attachRuntime();
+broadcastThemeAndLocaleSync();
       return getState();
     }
 

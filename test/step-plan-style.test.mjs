@@ -340,12 +340,12 @@ test('prism-rim-canvas caps step-plan rims to newest 2 visible expanded cards, m
   ctl.teardown();
 });
 
-test('model-selector trigger relaxes container cap to min(300px,100%) and excludes .ag-pp-mini-keycap badge from truncation/collapse', () => {
+test('model-selector trigger uses flexible 100% container cap (Issue #97) and excludes .ag-pp-mini-keycap badge from truncation/collapse', () => {
   const css = fs.readFileSync(path.join(ROOT, 'style.css'), 'utf8');
-  // 1) 外层容器允许在 300px 内完整展示模型名与 [10Ne] 徽章，超窄窗口按 flex:0 1 auto 等比收缩
+  // 1) Issue #97: 外层容器放宽至 100% 弹性可用空间，空间充裕时完整展示长模型名与键帽，窄窗按 flex:0 1 auto 收缩
   assert.ok(
-    css.includes('div.no-focus-agent-input{flex:0 1 auto !important;min-width:0 !important;max-width:min(300px,100%) !important;overflow:hidden !important;}'),
-    'no-focus-agent-input must use flex:0 1 auto and max-width:min(300px,100%)',
+    css.includes('div.no-focus-agent-input{flex:0 1 auto !important;min-width:0 !important;max-width:100% !important;overflow:hidden !important;}'),
+    'no-focus-agent-input must use flex:0 1 auto and flexible max-width:100% (Issue #97)',
   );
   // 2) 常规与窄窗 data-t~="1" 折叠规则均排除 .ag-pp-mini-keycap，防止迷你快捷键徽章被截断或隐藏
   assert.ok(

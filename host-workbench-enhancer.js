@@ -336,10 +336,8 @@
     // Dedicated timer/rAF sets for non-Diff animations (strictly decoupled from Channel 6 Inline Diff)
     const nonDiffAnimTimers = new Set();
     const ovSecAnimRafs = new Set();
-    let scrollGlideRaf = 0;
-    let scrollGlideCleanup = null;
-    let sidebarMoreExpanded = false;
-    let sidebarMoreBtn = null;
+    let scrollGlideRaf = 0, scrollGlideCleanup = null, scrollBlurTimer = 0, scrollBlurCv = null;
+    let sidebarMoreExpanded = false, sidebarMoreBtn = null;
 
     const stats = {
       postMessageCount: 0,
@@ -1539,584 +1537,551 @@
     }
 
     function syncSubagentRunningAmbient() {
-      if (isDead() || !doc?.querySelectorAll) return;
-      const SP = '[data-testid="status-loading-spinner"], [data-testid="status-task-running"]';
-      const rows = qa(doc, '[data-testid="subagent-node"], [data-testid="running-row"], [data-testid="background-task-row"]');
-      const sps = qa(doc, '[data-testid="step-plan"]');
-      const ovPanels = qa(doc, '[data-testid="overview-panel"]');
-      const ovShells = qa(doc, '[data-ag-cs-overview-shell="1"]');
-      const runPanels = qa(doc, '[data-testid="running-items-panel"].grid-rows-\\[1fr\\]');
-      let anyInRun = false;
-      for (const rp of runPanels) {
-        if (qs(rp, SP)) { anyInRun = true; break; }
-      }
-      mut(() => {
-        for (const r of rows) {
-          if (qs(r, SP)) setA(r, 'data-ag-sub-running', '1');
-          else if (ha(r, 'data-ag-sub-running')) ra(r, 'data-ag-sub-running');
-        }
-        for (const sp of sps) {
-          if (qs(sp, '[data-testid="step-plan-item"][data-status="in_progress"] [data-testid="status-loading-spinner"]')) setA(sp, 'data-ag-sp-running', '1');
-          else if (ha(sp, 'data-ag-sp-running')) ra(sp, 'data-ag-sp-running');
-        }
-        if (!ovPanels.length) {
-          for (const sh of ovShells) if (ha(sh, 'data-ag-overview-running')) ra(sh, 'data-ag-overview-running');
-          return;
-        }
-        for (const ovPanel of ovPanels) {
-          const ovCv = cl(ovPanel, S_CV);
-          const localRun = ovCv
-            ? Boolean(qs(qs(ovCv, '[data-testid="running-items-panel"].grid-rows-\\[1fr\\]'), SP))
-            : anyInRun;
-          let ovRun = localRun || Boolean(qs(ovPanel, SP));
-          for (const sec of qa(ovPanel, '.p-1')) {
-            const hb = qs(sec, 'button');
-            if (!hb) continue;
-            const sp = Boolean(qs(sec, SP));
-            if (sp || hasActiveFiberSubagents(sec)) {
-              setA(hb, 'data-ag-sub-sec-running', '1');
-              ovRun = true;
-            } else if (ha(hb, 'data-ag-sub-sec-running')) {
-              ra(hb, 'data-ag-sub-sec-running');
-            }
-          }
-          const ovShell = cl(ovPanel, '[data-ag-cs-overview-shell="1"]') || ovPanel.parentElement || null;
-          if (ovShell) {
-            if (ovRun) setA(ovShell, 'data-ag-overview-running', '1');
-            else if (ha(ovShell, 'data-ag-overview-running')) ra(ovShell, 'data-ag-overview-running');
-          }
-        }
-      });
-    }
-
-    function cancelScrollGlide() {
-      if (scrollGlideRaf && win?.cancelAnimationFrame) {
-        try {
-          win.cancelAnimationFrame(scrollGlideRaf);
-        } catch {}
-      }
-      scrollGlideRaf = 0;
-      if (typeof scrollGlideCleanup === 'function') {
-        try {
-          scrollGlideCleanup();
-        } catch {}
-        scrollGlideCleanup = null;
-      }
-    }
-
-    const isReducedMotionNow = () => {
-      if ((getConfig() || {}).motionLevel === 'off' || ga(doc?.documentElement, 'data-ag-cs-motion') === 'off') return true;
-      if (typeof win?.__agPrismReducedMotion === 'function') return Boolean(win.__agPrismReducedMotion(doc, win));
-      if (ga(doc?.documentElement, 'data-ag-cs-ignore-rm') === '1') return false;
-      return Boolean(win?.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches);
-    };
-
-    function runFastScrollToBottom(btnEl) {
-      if (isDead() || !doc || !win) return false;
-      const cfg = getConfig() || {};
-      if (cfg.scrollBottomMotion === 'instant' || isReducedMotionNow()) {
-        return false;
-      }
-      const vp = qs(cl(btnEl, S_CV) || doc, S_VP) || qs(doc, S_VP);
-      if (!vp) return false;
-      const maxS = Math.max(0, (vp.scrollHeight || 0) - (vp.clientHeight || 0)),
-        start = vp.scrollTop || 0,
-        dist = maxS - start;
-      if (dist <= 24 || !win.requestAnimationFrame) {
-        vp.scrollTop = maxS;
-        return true;
-      }
-      cancelScrollGlide();
-      const dur = Math.max(340, Math.min(540, Math.round(250 + Math.sqrt(dist) * 6.5)));
-      const nowFn = typeof win.performance?.now === 'function' ? () => win.performance.now() : () => Date.now();
-      const t0 = nowFn();
-      sa(btnEl, 'data-ag-scrolling', '1');
-      const stop = () => cancelScrollGlide();
-      for (const ev of ['wheel', 'pointerdown', 'touchstart']) vp.addEventListener?.(ev, stop, { passive: true, once: true });
-      win.addEventListener?.('keydown', stop, { passive: true, once: true });
-      scrollGlideCleanup = () => {
-        ra(btnEl, 'data-ag-scrolling');
-        for (const ev of ['wheel', 'pointerdown', 'touchstart']) vp.removeEventListener?.(ev, stop);
-        win.removeEventListener?.('keydown', stop);
-      };
-      stats.scrollGlideCount++;
-      const step = () => {
-        if (isDead()) return cancelScrollGlide();
-        const t = Math.min(1, (nowFn() - t0) / dur),
-          tgt = Math.max(0, (vp.scrollHeight || 0) - (vp.clientHeight || 0));
-        vp.scrollTop = t < 1 ? start + (tgt - start) * (1 - Math.pow(1 - t, 3.6)) : tgt;
-        if (t < 1) scrollGlideRaf = win.requestAnimationFrame(step);
-        else cancelScrollGlide();
-      };
-      scrollGlideRaf = win.requestAnimationFrame(step);
-      return true;
-    }
-
-    function syncSidebarOverflowTools() {
-      if (isDead() || !doc) return;
-      const nav = qs(doc, '[data-testid="sidebar-navigation-items"]');
-      if (!nav) return;
-      const items = Array.from(nav.children || []).filter((ch) => isElementLike(ch) && !ch.classList?.contains('ag-cs-sb-more-wrap'));
-      const cfg = getConfig() || {};
-      const on = cfg.sidebarRestyle !== false && cfg.sidebarNavFold === 'on',
-        ov = on ? items.slice(1) : [];
-      const AH = 'data-ag-sb-more-hidden',
-        AI = 'data-ag-sb-more-item';
-      if (!on || !ov.length) {
-        const old = qs(nav, '.ag-cs-sb-more-wrap');
-        if (old || items.some((x) => ha(x, AH) || ha(x, AI))) {
-          mut(() => {
-            for (const x of items) {
-              if (ha(x, AH)) ra(x, AH);
-              if (ha(x, AI)) ra(x, AI);
-            }
-            old?.remove();
-          });
-        }
-        sidebarMoreBtn = null;
-        if (!on) sidebarMoreExpanded = false;
-        return;
-      }
-      mut(() => {
-        for (let i = 0; i < items.length; i++) {
-          const x = items[i];
-          if (i === 0) {
-            if (ha(x, AH)) ra(x, AH);
-            if (ha(x, AI)) ra(x, AI);
-          } else if (sidebarMoreExpanded) {
-            if (ha(x, AH)) ra(x, AH);
-            setA(x, AI, '1');
-          } else {
-            setA(x, AH, '1');
-            if (ha(x, AI)) ra(x, AI);
-          }
-        }
-        let wrap = qs(nav, '.ag-cs-sb-more-wrap');
-        if (!wrap) {
-          const btn = mk(
-            'button',
-            'ag-cs-sb-more-btn',
-            null,
-            mk('span', 'ag-cs-sb-more-lead', null, mkSvgIcon('moreDots', 14), mk('span', 'ag-cs-sb-more-lbl')),
-            mk('span', 'ag-cs-sb-more-chev', null, mkSvgIcon('chevDown', 13))
-          );
-          btn.type = 'button';
-          sa(btn, 'data-testid', 'ag-sidebar-more-toggle');
-          btn.addEventListener('click', (e) => {
-            e.preventDefault?.();
-            e.stopPropagation?.();
-            sidebarMoreExpanded = !sidebarMoreExpanded;
-            syncSidebarOverflowTools();
-          });
-          wrap = markNoTr(mk('div', 'ag-cs-sb-more-wrap', null, btn));
-          sa(wrap, 'data-ag-no-i18n', '');
-          sa(wrap, 'data-ag-owned', '1');
-          nav.appendChild(wrap);
-          sidebarMoreBtn = btn;
-        } else {
-          sidebarMoreBtn = qs(wrap, '.ag-cs-sb-more-btn');
-        }
-        if (sidebarMoreBtn) {
-          setA(sidebarMoreBtn, 'aria-expanded', sidebarMoreExpanded ? 'true' : 'false');
-          const lbl = qs(sidebarMoreBtn, '.ag-cs-sb-more-lbl');
-          if (lbl) {
+if (isDead() || !doc?.querySelectorAll) return;
+const SP = '[data-testid="status-loading-spinner"], [data-testid="status-task-running"]';
+const rows = qa(doc, '[data-testid="subagent-node"], [data-testid="running-row"], [data-testid="background-task-row"]');
+const sps = qa(doc, '[data-testid="step-plan"]');
+const ovPanels = qa(doc, '[data-testid="overview-panel"]');
+let anyInRun = null;
+const getAnyInRun = () => {
+if (anyInRun !== null) return anyInRun;
+anyInRun = false;
+for (const rp of qa(doc, '[data-testid="running-items-panel"].grid-rows-\\[1fr\\]')) { if (qs(rp, SP)) { anyInRun = true; break; } }
+return anyInRun;
+};
+mut(() => {
+for (const r of rows) {
+if (qs(r, SP)) setA(r, 'data-ag-sub-running', '1');
+else if (ha(r, 'data-ag-sub-running')) ra(r, 'data-ag-sub-running');
+}
+for (const sp of sps) {
+if (qs(sp, '[data-testid="step-plan-item"][data-status="in_progress"] [data-testid="status-loading-spinner"]')) setA(sp, 'data-ag-sp-running', '1');
+else if (ha(sp, 'data-ag-sp-running')) ra(sp, 'data-ag-sp-running');
+}
+if (!ovPanels.length) {
+for (const sh of qa(doc, '[data-ag-cs-overview-shell="1"]')) if (ha(sh, 'data-ag-overview-running')) ra(sh, 'data-ag-overview-running');
+return;
+}
+for (const ovPanel of ovPanels) {
+const ovCv = cl(ovPanel, S_CV);
+const localRun = ovCv ? Boolean(qs(qs(ovCv, '[data-testid="running-items-panel"].grid-rows-\\[1fr\\]'), SP)) : getAnyInRun();
+let ovRun = localRun || Boolean(qs(ovPanel, SP));
+for (const sec of qa(ovPanel, '.p-1')) {
+const hb = qs(sec, 'button');
+if (!hb) continue;
+const sp = Boolean(qs(sec, SP));
+if (sp || hasActiveFiberSubagents(sec)) {
+setA(hb, 'data-ag-sub-sec-running', '1');
+ovRun = true;
+} else if (ha(hb, 'data-ag-sub-sec-running')) {
+ra(hb, 'data-ag-sub-sec-running');
+}
+}
+const ovShell = cl(ovPanel, '[data-ag-cs-overview-shell="1"]') || ovPanel.parentElement || null;
+if (ovShell) {
+if (ovRun) setA(ovShell, 'data-ag-overview-running', '1');
+else if (ha(ovShell, 'data-ag-overview-running')) ra(ovShell, 'data-ag-overview-running');
+}
+}
+});
+}
+function cancelScrollGlide() {
+if (scrollGlideRaf && win?.cancelAnimationFrame) {
+try {
+win.cancelAnimationFrame(scrollGlideRaf);
+} catch {}
+}
+scrollGlideRaf = 0;
+if (typeof scrollGlideCleanup === 'function') {
+try {
+scrollGlideCleanup();
+} catch {}
+scrollGlideCleanup = null;
+}
+}
+const isReducedMotionNow = () => {
+if ((getConfig() || {}).motionLevel === 'off' || ga(doc?.documentElement, 'data-ag-cs-motion') === 'off') return true;
+if (typeof win?.__agPrismReducedMotion === 'function') return Boolean(win.__agPrismReducedMotion(doc, win));
+if (ga(doc?.documentElement, 'data-ag-cs-ignore-rm') === '1') return false;
+return Boolean(win?.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches);
+};
+function runFastScrollToBottom(btnEl) {
+if (isDead() || !doc || !win) return false;
+const cfg = getConfig() || {};
+if (cfg.scrollBottomMotion === 'instant' || isReducedMotionNow()) {
+return false;
+}
+const vp = qs(cl(btnEl, S_CV) || doc, S_VP) || qs(doc, S_VP);
+if (!vp) return false;
+const maxS = Math.max(0, (vp.scrollHeight || 0) - (vp.clientHeight || 0)),
+start = vp.scrollTop || 0,
+dist = maxS - start;
+if (dist <= 24 || !win.requestAnimationFrame) {
+vp.scrollTop = maxS;
+return true;
+}
+cancelScrollGlide();
+const dur = Math.max(340, Math.min(540, Math.round(250 + Math.sqrt(dist) * 6.5)));
+const nowFn = typeof win.performance?.now === 'function' ? () => win.performance.now() : () => Date.now();
+const t0 = nowFn();
+sa(btnEl, 'data-ag-scrolling', '1');
+const stop = () => cancelScrollGlide();
+for (const ev of ['wheel', 'pointerdown', 'touchstart']) vp.addEventListener?.(ev, stop, { passive: true, once: true });
+win.addEventListener?.('keydown', stop, { passive: true, once: true });
+scrollGlideCleanup = () => {
+ra(btnEl, 'data-ag-scrolling');
+for (const ev of ['wheel', 'pointerdown', 'touchstart']) vp.removeEventListener?.(ev, stop);
+win.removeEventListener?.('keydown', stop);
+};
+stats.scrollGlideCount++;
+const step = () => {
+if (isDead()) return cancelScrollGlide();
+const t = Math.min(1, (nowFn() - t0) / dur),
+tgt = Math.max(0, (vp.scrollHeight || 0) - (vp.clientHeight || 0));
+vp.scrollTop = t < 1 ? start + (tgt - start) * (1 - Math.pow(1 - t, 3.6)) : tgt;
+if (t < 1) scrollGlideRaf = win.requestAnimationFrame(step);
+else cancelScrollGlide();
+};
+scrollGlideRaf = win.requestAnimationFrame(step);
+return true;
+}
+function syncSidebarOverflowTools() {
+if (isDead() || !doc) return;
+const nav = qs(doc, '[data-testid="sidebar-navigation-items"]');
+if (!nav) return;
+const items = Array.from(nav.children || []).filter((ch) => isElementLike(ch) && !ch.classList?.contains('ag-cs-sb-more-wrap'));
+const cfg = getConfig() || {};
+const on = cfg.sidebarRestyle !== false && cfg.sidebarNavFold === 'on',
+ov = on ? items.slice(1) : [];
+const AH = 'data-ag-sb-more-hidden',
+AI = 'data-ag-sb-more-item';
+if (!on || !ov.length) {
+const old = qs(nav, '.ag-cs-sb-more-wrap');
+if (old || items.some((x) => ha(x, AH) || ha(x, AI))) {
+mut(() => {
+for (const x of items) {
+if (ha(x, AH)) ra(x, AH);
+if (ha(x, AI)) ra(x, AI);
+}
+old?.remove();
+});
+}
+sidebarMoreBtn = null;
+if (!on) sidebarMoreExpanded = false;
+return;
+}
+mut(() => {
+for (let i = 0; i < items.length; i++) {
+const x = items[i];
+if (i === 0) {
+if (ha(x, AH)) ra(x, AH);
+if (ha(x, AI)) ra(x, AI);
+} else if (sidebarMoreExpanded) {
+if (ha(x, AH)) ra(x, AH);
+setA(x, AI, '1');
+} else {
+setA(x, AH, '1');
+if (ha(x, AI)) ra(x, AI);
+}
+}
+let wrap = qs(nav, '.ag-cs-sb-more-wrap');
+if (!wrap) {
+const btn = mk(
+'button',
+'ag-cs-sb-more-btn',
+null,
+mk('span', 'ag-cs-sb-more-lead', null, mkSvgIcon('moreDots', 14), mk('span', 'ag-cs-sb-more-lbl')),
+mk('span', 'ag-cs-sb-more-chev', null, mkSvgIcon('chevDown', 13))
+);
+btn.type = 'button';
+sa(btn, 'data-testid', 'ag-sidebar-more-toggle');
+btn.addEventListener('click', (e) => {
+e.preventDefault?.();
+e.stopPropagation?.();
+sidebarMoreExpanded = !sidebarMoreExpanded;
+syncSidebarOverflowTools();
+});
+wrap = markNoTr(mk('div', 'ag-cs-sb-more-wrap', null, btn));
+sa(wrap, 'data-ag-no-i18n', '');
+sa(wrap, 'data-ag-owned', '1');
+nav.appendChild(wrap);
+sidebarMoreBtn = btn;
+} else {
+sidebarMoreBtn = qs(wrap, '.ag-cs-sb-more-btn');
+}
+if (sidebarMoreBtn) {
+setA(sidebarMoreBtn, 'aria-expanded', sidebarMoreExpanded ? 'true' : 'false');
+const lbl = qs(sidebarMoreBtn, '.ag-cs-sb-more-lbl');
+if (lbl) {
             const txt = sidebarMoreExpanded ? getUiText('sidebarLessLabel', 'Less') : `${getUiText('sidebarMoreLabel', 'More')} (${ov.length})`;
-            if (lbl.textContent !== txt) lbl.textContent = txt;
-          }
-        }
-      });
-    }
-
-    function shouldAnimateNonDiff() {
-      if (!win?.requestAnimationFrame || !doc?.getElementById) return false;
-      if (!doc.getElementById('ag-prism-css') && !doc.getElementById('prism-style')) return false;
-      return !isReducedMotionNow();
-    }
-
-    function findQueuedMessageRow(btn, card) {
-      let cur = btn?.parentElement;
-      for (let d = 0; d < 6 && cur && cur !== card; d++, cur = cur.parentElement) {
-        if (qs(cur, '[data-testid="queued-messages-expand-button"]')) return null;
-        const tid = ga(cur, 'data-testid') || '';
-        if (tagU(cur) === 'LI' || (tid.includes('queued-message') && tid !== 'queued-messages-card')) return cur;
-        if (Array.from(cur.children || []).some((k) => isElementLike(k) && k !== btn && !k.contains?.(btn) && tagU(k) !== 'BUTTON')) {
-          return cur;
-        }
-      }
-      const fb = btn?.parentElement;
-      return fb && fb !== card && !qs(fb, '[data-testid="queued-messages-expand-button"]') ? fb : null;
-    }
-
-    function triggerQueuedRowActionFeedback(btn, card) {
-      if (isDead() || !btn || !card || ga(btn, 'data-testid') === 'queued-messages-expand-button') return false;
+if (lbl.textContent !== txt) lbl.textContent = txt;
+}
+}
+});
+}
+function shouldAnimateNonDiff() {
+if (!win?.requestAnimationFrame || !doc?.getElementById) return false;
+if (!doc.getElementById('ag-prism-css') && !doc.getElementById('prism-style')) return false;
+return !isReducedMotionNow();
+}
+function findQueuedMessageRow(btn, card) {
+let cur = btn?.parentElement;
+for (let d = 0; d < 6 && cur && cur !== card; d++, cur = cur.parentElement) {
+if (qs(cur, '[data-testid="queued-messages-expand-button"]')) return null;
+const tid = ga(cur, 'data-testid') || '';
+if (tagU(cur) === 'LI' || (tid.includes('queued-message') && tid !== 'queued-messages-card')) return cur;
+if (Array.from(cur.children || []).some((k) => isElementLike(k) && k !== btn && !k.contains?.(btn) && tagU(k) !== 'BUTTON')) {
+return cur;
+}
+}
+const fb = btn?.parentElement;
+return fb && fb !== card && !qs(fb, '[data-testid="queued-messages-expand-button"]') ? fb : null;
+}
+function triggerQueuedRowActionFeedback(btn, card) {
+if (isDead() || !btn || !card || ga(btn, 'data-testid') === 'queued-messages-expand-button') return false;
       const meta = `${ga(btn, 'data-testid') || ''} ${ga(btn, 'aria-label') || ''} ${ga(btn, 'title') || ''}`;
-      if (!/send|delete|remove|trash|发送|發送|删除|刪除|送信|削除|전송|삭제/i.test(meta) && /\bedit\b|编辑|編輯|編集|수정/i.test(meta)) {
-        return false;
-      }
-      if (isReducedMotionNow()) {
-        return false;
-      }
-      const row = findQueuedMessageRow(btn, card);
-      if (!row) return false;
-      if (row._agQueuedActTimer) {
-        clearTimeout(row._agQueuedActTimer);
-        nonDiffAnimTimers.delete(row._agQueuedActTimer);
-      }
-      mut(() => setA(row, 'data-ag-queued-act', '1'));
-      const tid = setTimeout(() => {
-        nonDiffAnimTimers.delete(tid);
-        row._agQueuedActTimer = 0;
-        if (!isDead() && row.isConnected !== false && ha(row, 'data-ag-queued-act')) mut(() => ra(row, 'data-ag-queued-act'));
-      }, 220);
-      row._agQueuedActTimer = tid;
-      nonDiffAnimTimers.add(tid);
-      return true;
-    }
-
-    function clearOvSecTimers(secEl) {
-      if (!secEl) return;
-      for (const k of ['_agOvCloseTimer', '_agOvOpenTimer']) {
-        if (secEl[k]) {
-          clearTimeout(secEl[k]);
-          nonDiffAnimTimers.delete(secEl[k]);
-          secEl[k] = 0;
-        }
-      }
-      if (secEl._agOvOpenRaf) {
-        try {
-          win?.cancelAnimationFrame?.(secEl._agOvOpenRaf);
-        } catch {}
-        ovSecAnimRafs.delete(secEl._agOvOpenRaf);
-        secEl._agOvOpenRaf = 0;
-      }
-    }
-
-    function setOvSecSiblingsAnim(secEl, btn, mode) {
-      let applied = false;
-      mut(() => {
-        for (const ch of secEl?.children || []) {
-          if (!ch || ch === btn) continue;
-          if (mode) {
-            sa(ch, 'data-ag-ov-sec-anim', mode);
-            applied = true;
-          } else if (ha(ch, 'data-ag-ov-sec-anim')) {
-            ra(ch, 'data-ag-ov-sec-anim');
-          }
-        }
-      });
-      return applied;
-    }
-
-    function scheduleOvSecOpenCleanup(secEl, btn) {
-      if (secEl._agOvOpenTimer) {
-        clearTimeout(secEl._agOvOpenTimer);
-        nonDiffAnimTimers.delete(secEl._agOvOpenTimer);
-      }
-      const tid = setTimeout(() => {
-        nonDiffAnimTimers.delete(tid);
-        secEl._agOvOpenTimer = 0;
-        if (isDead() || secEl.isConnected === false || ga(secEl, A_OVC) === '1') return;
-        mut(() => {
-          for (const ch of secEl.children || []) {
-            if (ch && ch !== btn && ga(ch, 'data-ag-ov-sec-anim') === 'open') ra(ch, 'data-ag-ov-sec-anim');
-          }
-        });
-      }, 165);
-      secEl._agOvOpenTimer = tid;
-      nonDiffAnimTimers.add(tid);
-    }
-
-    function handleOverviewSectionClick(ev) {
-      const btn = cl(ev.target, 'button');
-      if (!btn || ga(btn, 'data-testid') === 'overview-panel-customize-trigger' || ga(btn, 'aria-haspopup') === 'menu') return false;
-      const secEl = btn.parentElement;
-      if (!secEl?.classList?.contains?.('p-1') || secEl.firstElementChild !== btn || !cl(secEl, '[data-testid="overview-panel"]')) return false;
-
-      if (secEl._agOvBypassClick) {
-        secEl._agOvBypassClick = false;
-        return true;
-      }
-      if (!shouldAnimateNonDiff()) {
-        if (ga(secEl, A_OVC) === '1') {
-          clearOvSecTimers(secEl);
-          mut(() => ra(secEl, A_OVC));
-          setOvSecSiblingsAnim(secEl, btn, null);
-        }
-        return false;
-      }
-
-      if ((secEl.children?.length || 0) > 1) {
-        ev.preventDefault?.();
-        ev.stopImmediatePropagation?.();
-        clearOvSecTimers(secEl);
-        if (ga(secEl, A_OVC) === '1') {
-          mut(() => ra(secEl, A_OVC));
-          if (setOvSecSiblingsAnim(secEl, btn, 'open')) scheduleOvSecOpenCleanup(secEl, btn);
-          return true;
-        }
-        mut(() => sa(secEl, A_OVC, '1'));
-        setOvSecSiblingsAnim(secEl, btn, 'closing');
-        const closeTid = setTimeout(() => {
-          nonDiffAnimTimers.delete(closeTid);
-          secEl._agOvCloseTimer = 0;
-          if (isDead() || secEl.isConnected === false) return;
-          mut(() => {
-            if (ha(secEl, A_OVC)) ra(secEl, A_OVC);
-          });
-          setOvSecSiblingsAnim(secEl, btn, null);
-          secEl._agOvBypassClick = true;
-          try {
-            if (btn.isConnected !== false) btn.click?.();
-          } finally {
-            secEl._agOvBypassClick = false;
-          }
-        }, 130);
-        secEl._agOvCloseTimer = closeTid;
-        nonDiffAnimTimers.add(closeTid);
-        return true;
-      }
-
-      clearOvSecTimers(secEl);
-      const tryOpen = (allowRaf) => {
-        if (isDead() || secEl.isConnected === false || ga(secEl, A_OVC) === '1') return;
-        if ((secEl.children?.length || 0) > 1) {
-          if (setOvSecSiblingsAnim(secEl, btn, 'open')) scheduleOvSecOpenCleanup(secEl, btn);
-          return;
-        }
-        if (allowRaf && typeof win?.requestAnimationFrame === 'function') {
-          const rid = win.requestAnimationFrame(() => {
-            ovSecAnimRafs.delete(rid);
-            if (secEl._agOvOpenRaf === rid) secEl._agOvOpenRaf = 0;
-            tryOpen(false);
-          });
-          secEl._agOvOpenRaf = rid;
-          ovSecAnimRafs.add(rid);
-        }
-      };
-      Promise.resolve().then(() => tryOpen(true));
-      return true;
-    }
-
-    function schedNonDiffTimer(fn, ms) {
-      const tid = setTimeout(() => {
-        nonDiffAnimTimers.delete(tid);
-        if (!isDead()) fn();
-      }, ms);
-      nonDiffAnimTimers.add(tid);
-      return tid;
-    }
-
-    function onDocClickCapture(ev) {
-      try {
-        const t = ev?.target;
-        if (isDead() || !t?.closest) return;
-        const clickedCv = cl(t, S_CV);
-        if (isFormalConv(clickedCv)) cachedConvView = clickedCv;
-        const pt = cl(t, '[data-testid="permissions-selector-trigger"]');
-        if (pt) {
-          const dd = ga(pt, 'data-disabled');
-          if (pt.disabled || ha(pt, 'disabled') || ga(pt, 'aria-disabled') === 'true' || (dd != null && dd !== 'false')) return;
-          win?.requestAnimationFrame?.(() => {
-            if (!isDead()) syncPermissionsMenuState();
-          });
-          schedNonDiffTimer(syncPermissionsMenuState, 20);
-          schedNonDiffTimer(syncPermissionsMenuState, 90);
-          return;
-        }
-        const sb = cl(t, '.agy-scroll-bottom');
-        if (sb) {
-          if (runFastScrollToBottom(sb)) {
-            ev.preventDefault?.();
-            ev.stopPropagation?.();
-          }
-          return;
-        }
-        if (handleOverviewSectionClick(ev)) return;
-        const qb = cl(t, 'button'),
-          qc = cl(qb, '[data-testid="queued-messages-card"]');
-        if (qb && qc) return triggerQueuedRowActionFeedback(qb, qc);
-        const dh = cl(t, '[data-ag-cs-settings-dlg="1"] button, [role="dialog"] button, [role="dialog"] [role="tab"]');
-        if (dh && !cl(dh, '#ag-cs-settings-sec')) {
-          win?.requestAnimationFrame?.(() => {
-            if (!isDead()) syncSettingsDialogChrome(doc, mut, setA);
-          });
-          schedNonDiffTimer(() => syncSettingsDialogChrome(doc, mut, setA), 36);
-        }
-      } catch {}
-    }
-
-    function onWinKeyDown(ev) {
-      try {
-        if (isDead() || !ev) return;
-        if (ev.key === 'Escape') {
-          if (win?.__agPrismInlineDiff?.closeMenuIfOpen?.()) return;
-          if (outlineOpen) return closeNavOutline();
-        }
-        if (
-          ev.altKey &&
-          !ev.ctrlKey &&
-          !ev.metaKey &&
-          !ev.shiftKey &&
-          (ev.key === 'ArrowUp' || ev.key === 'ArrowDown') &&
-          !isEditableElement(ev.target)
-        ) {
-          if (jumpUserTurn(ev.key === 'ArrowUp' ? -1 : 1, ev.target)) ev.preventDefault?.();
-        }
-      } catch {}
-    }
-
-    if (win && typeof win.addEventListener === 'function') {
-      win.addEventListener('click', onDocClickCapture, true);
-      win.addEventListener('keydown', onWinKeyDown);
-    }
-
-    // ── Public Lifecycle API ───────────────────────────────────────────────
-    function sync(flags = null) {
-      if (isDead()) return;
-      const hasFlags = Boolean(flags && typeof flags === 'object');
-      const isFull =
-        !hasFlags ||
-        Boolean(flags.f) ||
-        (!flags.g && !flags.o && !flags.s && !flags.c && !flags.t && !flags.l && !flags.b && !flags.r);
-      const curLang = String(getLang() || '');
-      const langChanged = Boolean(lastSyncedLang && curLang !== lastSyncedLang);
-      lastSyncedLang = curLang;
-      if (isFull || flags.c || flags.l || flags.r || flags.s) syncCascadeChange(true);
-      if (isFull || flags.t || flags.r || flags.l) syncSidecarThemeBridge(false);
-      if (isFull || flags.c || flags.l || flags.b || flags.r || flags.t || langChanged) {
-        syncCodeBlocks();
-        syncNavRails();
-      }
-      if (isFull || flags.o || flags.c || flags.l || flags.b || flags.r || flags.t || langChanged) {
-        syncSubagentRunningAmbient();
-      }
-      if (isFull || flags.s || flags.r || flags.t || langChanged) {
-        syncSidebarOverflowTools();
-      }
-      if (isFull || flags.o || flags.c || flags.b || flags.r) {
-        syncPermissionsMenuState();
-      }
-      if (isFull || flags.g || flags.o || flags.r) {
-        syncSettingsDialogChrome(doc, mut, setA);
-      }
-      if (isFull || flags.c || flags.l || flags.b || flags.r || flags.t || langChanged) {
-        try {
-          win?.__agPrismInlineDiff?.sync?.(getConfig(), {
-            t: tFn,
-            getLang,
-            runGuardedMut: mut,
-            setAttrIfChanged: setA,
-          });
-        } catch {}
-      }
-      if (langChanged) {
-        refreshCodeFoldLabels();
-        refreshOutlineLocaleTexts();
-      }
-    }
-
-    function destroy() {
-      if (localDestroyed) return;
-      localDestroyed = true;
-      cancelFoldRaf();
-      cancelHideOutlineTimer();
-      cancelScrollGlide();
-      if (foldFeedbackTimer) {
-        clearTimeout(foldFeedbackTimer);
-        foldFeedbackTimer = 0;
-      }
-      for (const tid of sonarTimers) clearTimeout(tid);
-      sonarTimers.clear();
-      for (const tid of nonDiffAnimTimers) clearTimeout(tid);
-      nonDiffAnimTimers.clear();
-      if (typeof win?.cancelAnimationFrame === 'function') {
-        for (const rid of ovSecAnimRafs) {
-          try {
-            win.cancelAnimationFrame(rid);
-          } catch {}
-        }
-      }
-      ovSecAnimRafs.clear();
-
-      try {
-        win?.__agPrismInlineDiff?.unbindHooks?.();
-      } catch {}
-
-      if (win && typeof win.removeEventListener === 'function') {
-        try {
-          win.removeEventListener('click', onDocClickCapture, true);
-          win.removeEventListener('keydown', onWinKeyDown);
-        } catch {}
-      }
-      pruneUnsubs(iframeUnsubscribers, true, boundIframes);
-      iframeSizeCache = new WeakMap();
-      try {
-        iframeRo?.disconnect?.();
-      } catch {}
-      iframeRo = null;
-      pruneUnsubs(navRailUnsubscribers, true, boundNavRails);
-      lastOutlineStructSig = '';
-      lastOutlineActiveIdx = -1;
-      activeOutlineBtn = null;
-      outlineItemBtnByIdx.clear();
-
-      if (doc && typeof doc.querySelectorAll === 'function') {
-        mut(() => {
-          for (const sel of ['.ag-cs-code-fold-btn', '.ag-cs-nav-outline-popover', '.ag-cs-nav-outline-trigger', '.ag-cs-sb-more-wrap']) {
-            qa(doc, sel).forEach((n) => n.remove());
-          }
-          for (const k of 'cs-code-folded|cs-code-sticky|perm-selected|perm-sandbox-sep|sub-running|sub-sec-running|overview-running|sp-running|sb-more-hidden|sb-more-item|scrolling|ov-sec-anim|cs-settings-dlg|cs-settings-nav|cs-nav-active'.split(
-            '|'
-          )) {
-            const a = 'data-ag-' + k;
+if (!/send|delete|remove|trash|发送|發送|删除|刪除|送信|削除|전송|삭제/i.test(meta) && /\bedit\b|编辑|編輯|編集|수정/i.test(meta)) {
+return false;
+}
+if (isReducedMotionNow()) {
+return false;
+}
+const row = findQueuedMessageRow(btn, card);
+if (!row) return false;
+if (row._agQueuedActTimer) {
+clearTimeout(row._agQueuedActTimer);
+nonDiffAnimTimers.delete(row._agQueuedActTimer);
+}
+mut(() => setA(row, 'data-ag-queued-act', '1'));
+const tid = setTimeout(() => {
+nonDiffAnimTimers.delete(tid);
+row._agQueuedActTimer = 0;
+if (!isDead() && row.isConnected !== false && ha(row, 'data-ag-queued-act')) mut(() => ra(row, 'data-ag-queued-act'));
+}, 220);
+row._agQueuedActTimer = tid;
+nonDiffAnimTimers.add(tid);
+return true;
+}
+function clearOvSecTimers(secEl) {
+if (!secEl) return;
+for (const k of ['_agOvCloseTimer', '_agOvOpenTimer']) {
+if (secEl[k]) {
+clearTimeout(secEl[k]);
+nonDiffAnimTimers.delete(secEl[k]);
+secEl[k] = 0;
+}
+}
+if (secEl._agOvOpenRaf) {
+try {
+win?.cancelAnimationFrame?.(secEl._agOvOpenRaf);
+} catch {}
+ovSecAnimRafs.delete(secEl._agOvOpenRaf);
+secEl._agOvOpenRaf = 0;
+}
+}
+function setOvSecSiblingsAnim(secEl, btn, mode) {
+let applied = false;
+mut(() => {
+for (const ch of secEl?.children || []) {
+if (!ch || ch === btn) continue;
+if (mode) {
+sa(ch, 'data-ag-ov-sec-anim', mode);
+applied = true;
+} else if (ha(ch, 'data-ag-ov-sec-anim')) {
+ra(ch, 'data-ag-ov-sec-anim');
+}
+}
+});
+return applied;
+}
+function scheduleOvSecOpenCleanup(secEl, btn) {
+if (secEl._agOvOpenTimer) {
+clearTimeout(secEl._agOvOpenTimer);
+nonDiffAnimTimers.delete(secEl._agOvOpenTimer);
+}
+const tid = setTimeout(() => {
+nonDiffAnimTimers.delete(tid);
+secEl._agOvOpenTimer = 0;
+if (isDead() || secEl.isConnected === false || ga(secEl, A_OVC) === '1') return;
+mut(() => {
+for (const ch of secEl.children || []) {
+if (ch && ch !== btn && ga(ch, 'data-ag-ov-sec-anim') === 'open') ra(ch, 'data-ag-ov-sec-anim');
+}
+});
+}, 165);
+secEl._agOvOpenTimer = tid;
+nonDiffAnimTimers.add(tid);
+}
+function handleOverviewSectionClick(ev) {
+const btn = cl(ev.target, 'button');
+if (!btn || ga(btn, 'data-testid') === 'overview-panel-customize-trigger' || ga(btn, 'aria-haspopup') === 'menu') return false;
+const secEl = btn.parentElement;
+if (!secEl?.classList?.contains?.('p-1') || secEl.firstElementChild !== btn || !cl(secEl, '[data-testid="overview-panel"]')) return false;
+if (secEl._agOvBypassClick) {
+secEl._agOvBypassClick = false;
+return true;
+}
+if (!shouldAnimateNonDiff()) {
+if (ga(secEl, A_OVC) === '1') {
+clearOvSecTimers(secEl);
+mut(() => ra(secEl, A_OVC));
+setOvSecSiblingsAnim(secEl, btn, null);
+}
+return false;
+}
+if ((secEl.children?.length || 0) > 1) {
+ev.preventDefault?.();
+ev.stopImmediatePropagation?.();
+clearOvSecTimers(secEl);
+if (ga(secEl, A_OVC) === '1') {
+mut(() => ra(secEl, A_OVC));
+if (setOvSecSiblingsAnim(secEl, btn, 'open')) scheduleOvSecOpenCleanup(secEl, btn);
+return true;
+}
+mut(() => sa(secEl, A_OVC, '1'));
+setOvSecSiblingsAnim(secEl, btn, 'closing');
+const closeTid = setTimeout(() => {
+nonDiffAnimTimers.delete(closeTid);
+secEl._agOvCloseTimer = 0;
+if (isDead() || secEl.isConnected === false) return;
+mut(() => {
+if (ha(secEl, A_OVC)) ra(secEl, A_OVC);
+});
+setOvSecSiblingsAnim(secEl, btn, null);
+secEl._agOvBypassClick = true;
+try {
+if (btn.isConnected !== false) btn.click?.();
+} finally {
+secEl._agOvBypassClick = false;
+}
+}, 130);
+secEl._agOvCloseTimer = closeTid;
+nonDiffAnimTimers.add(closeTid);
+return true;
+}
+clearOvSecTimers(secEl);
+const tryOpen = (allowRaf) => {
+if (isDead() || secEl.isConnected === false || ga(secEl, A_OVC) === '1') return;
+if ((secEl.children?.length || 0) > 1) {
+if (setOvSecSiblingsAnim(secEl, btn, 'open')) scheduleOvSecOpenCleanup(secEl, btn);
+return;
+}
+if (allowRaf && typeof win?.requestAnimationFrame === 'function') {
+const rid = win.requestAnimationFrame(() => {
+ovSecAnimRafs.delete(rid);
+if (secEl._agOvOpenRaf === rid) secEl._agOvOpenRaf = 0;
+tryOpen(false);
+});
+secEl._agOvOpenRaf = rid;
+ovSecAnimRafs.add(rid);
+}
+};
+Promise.resolve().then(() => tryOpen(true));
+return true;
+}
+function schedNonDiffTimer(fn, ms) {
+const tid = setTimeout(() => {
+nonDiffAnimTimers.delete(tid);
+if (!isDead()) fn();
+}, ms);
+nonDiffAnimTimers.add(tid);
+return tid;
+}
+function onDocClickCapture(ev) {
+try {
+const t = ev?.target;
+if (isDead() || !t?.closest) return;
+const clickedCv = cl(t, S_CV);
+if (isFormalConv(clickedCv)) cachedConvView = clickedCv;
+const pt = cl(t, '[data-testid="permissions-selector-trigger"]');
+if (pt) {
+const dd = ga(pt, 'data-disabled');
+if (pt.disabled || ha(pt, 'disabled') || ga(pt, 'aria-disabled') === 'true' || (dd != null && dd !== 'false')) return;
+win?.requestAnimationFrame?.(() => {
+if (!isDead()) syncPermissionsMenuState();
+});
+schedNonDiffTimer(syncPermissionsMenuState, 20);
+schedNonDiffTimer(syncPermissionsMenuState, 90);
+return;
+}
+const sb = cl(t, '.agy-scroll-bottom');
+if (sb) {
+if (runFastScrollToBottom(sb)) {
+ev.preventDefault?.();
+ev.stopPropagation?.();
+}
+return;
+}
+if (handleOverviewSectionClick(ev)) return;
+const qb = cl(t, 'button'),
+qc = cl(qb, '[data-testid="queued-messages-card"]');
+if (qb && qc) return triggerQueuedRowActionFeedback(qb, qc);
+const dh = cl(t, '[data-ag-cs-settings-dlg="1"] button, [role="dialog"] button, [role="dialog"] [role="tab"]');
+if (dh && !cl(dh, '#ag-cs-settings-sec')) {
+win?.requestAnimationFrame?.(() => {
+if (!isDead()) syncSettingsDialogChrome(doc, mut, setA);
+});
+schedNonDiffTimer(() => syncSettingsDialogChrome(doc, mut, setA), 36);
+}
+} catch {}
+}
+function onWinKeyDown(ev) {
+try {
+if (isDead() || !ev) return;
+if (ev.key === 'Escape') {
+if (win?.__agPrismInlineDiff?.closeMenuIfOpen?.()) return;
+if (outlineOpen) return closeNavOutline();
+}
+if (
+ev.altKey &&
+!ev.ctrlKey &&
+!ev.metaKey &&
+!ev.shiftKey &&
+(ev.key === 'ArrowUp' || ev.key === 'ArrowDown') &&
+!isEditableElement(ev.target)
+) {
+if (jumpUserTurn(ev.key === 'ArrowUp' ? -1 : 1, ev.target)) ev.preventDefault?.();
+}
+} catch {}
+}
+function onWinScrollPassive(ev) {
+if (isDead()) return;
+const t = ev?.target;
+if (!t || (!t.matches?.(S_VP) && ga(t, 'data-testid') !== 'autoscroll-viewport')) return;
+const cv = cl(t, S_CV);
+if (!cv || !qs(cv, '.agy-scroll-bottom, [data-ag-cs-overview-shell="1"]')) return;
+if (scrollBlurCv && scrollBlurCv !== cv && ha(scrollBlurCv, 'data-ag-scrolling')) { const oldCv = scrollBlurCv; mut(() => ra(oldCv, 'data-ag-scrolling')); }
+if (scrollBlurCv !== cv || ga(cv, 'data-ag-scrolling') !== '1') mut(() => setA(cv, 'data-ag-scrolling', '1'));
+scrollBlurCv = cv;
+if (scrollBlurTimer) { clearTimeout(scrollBlurTimer); nonDiffAnimTimers.delete(scrollBlurTimer); }
+scrollBlurTimer = setTimeout(() => { nonDiffAnimTimers.delete(scrollBlurTimer); scrollBlurTimer = 0; const targetCv = scrollBlurCv; scrollBlurCv = null; if (targetCv && !isDead() && ha(targetCv, 'data-ag-scrolling')) mut(() => ra(targetCv, 'data-ag-scrolling')); }, 150);
+nonDiffAnimTimers.add(scrollBlurTimer);
+}
+if (win && typeof win.addEventListener === 'function') {
+win.addEventListener('click', onDocClickCapture, true);
+win.addEventListener('keydown', onWinKeyDown);
+win.addEventListener('scroll', onWinScrollPassive, { capture: true, passive: true });
+}
+// ── Public Lifecycle API ───────────────────────────────────────────────
+function sync(flags = null) {
+if (isDead()) return;
+const hasFlags = Boolean(flags && typeof flags === 'object');
+const isFull =
+!hasFlags ||
+Boolean(flags.f) ||
+(!flags.g && !flags.o && !flags.s && !flags.c && !flags.t && !flags.l && !flags.b && !flags.r);
+const curLang = String(getLang() || '');
+const langChanged = Boolean(lastSyncedLang && curLang !== lastSyncedLang);
+lastSyncedLang = curLang;
+if (isFull || flags.c || flags.l || flags.r || flags.s) syncCascadeChange(true);
+if (isFull || flags.t || flags.r || flags.l) syncSidecarThemeBridge(false);
+if (isFull || flags.c || flags.l || flags.b || flags.r || flags.t || langChanged) {
+syncCodeBlocks();
+syncNavRails();
+}
+if (isFull || flags.o || flags.c || flags.l || flags.b || flags.r || flags.t || langChanged) syncSubagentRunningAmbient();
+if (isFull || flags.s || flags.r || flags.t || langChanged) syncSidebarOverflowTools();
+if (isFull || flags.o || flags.c || flags.b || flags.r) syncPermissionsMenuState();
+if (isFull || flags.g || flags.o || flags.r) syncSettingsDialogChrome(doc, mut, setA);
+if (isFull || flags.c || flags.l || flags.b || flags.r || flags.t || langChanged) {
+try {
+win?.__agPrismInlineDiff?.sync?.(getConfig(), {
+t: tFn,
+getLang,
+runGuardedMut: mut,
+setAttrIfChanged: setA,
+});
+} catch {}
+}
+if (langChanged) {
+refreshCodeFoldLabels();
+refreshOutlineLocaleTexts();
+}
+}
+function destroy() {
+if (localDestroyed) return;
+localDestroyed = true;
+cancelFoldRaf();
+cancelHideOutlineTimer();
+cancelScrollGlide();
+if (foldFeedbackTimer) { clearTimeout(foldFeedbackTimer); foldFeedbackTimer = 0; }
+for (const tid of sonarTimers) clearTimeout(tid);
+sonarTimers.clear();
+for (const tid of nonDiffAnimTimers) clearTimeout(tid);
+nonDiffAnimTimers.clear();
+if (typeof win?.cancelAnimationFrame === 'function') { for (const rid of ovSecAnimRafs) { try { win.cancelAnimationFrame(rid); } catch {} } }
+ovSecAnimRafs.clear();
+try { win?.__agPrismInlineDiff?.unbindHooks?.(); } catch {}
+if (scrollBlurTimer) { try { clearTimeout(scrollBlurTimer); } catch {} nonDiffAnimTimers.delete(scrollBlurTimer); scrollBlurTimer = 0; }
+if (scrollBlurCv) { const scv = scrollBlurCv; scrollBlurCv = null; if (ha(scv, 'data-ag-scrolling')) mut(() => ra(scv, 'data-ag-scrolling')); }
+if (win && typeof win.removeEventListener === 'function') {
+try { win.removeEventListener('click', onDocClickCapture, true); win.removeEventListener('keydown', onWinKeyDown); win.removeEventListener('scroll', onWinScrollPassive, { capture: true, passive: true }); } catch {}
+}
+pruneUnsubs(iframeUnsubscribers, true, boundIframes);
+iframeSizeCache = new WeakMap();
+try { iframeRo?.disconnect?.(); } catch {}
+iframeRo = null;
+pruneUnsubs(navRailUnsubscribers, true, boundNavRails);
+lastOutlineStructSig = '';
+lastOutlineActiveIdx = -1;
+activeOutlineBtn = null;
+outlineItemBtnByIdx.clear();
+if (doc && typeof doc.querySelectorAll === 'function') {
+mut(() => {
+for (const sel of ['.ag-cs-code-fold-btn', '.ag-cs-nav-outline-popover', '.ag-cs-nav-outline-trigger', '.ag-cs-sb-more-wrap']) {
+qa(doc, sel).forEach((n) => n.remove());
+}
+for (const k of 'cs-code-folded|cs-code-sticky|perm-selected|perm-sandbox-sep|sub-running|sub-sec-running|overview-running|sp-running|sb-more-hidden|sb-more-item|scrolling|ov-sec-anim|cs-settings-dlg|cs-settings-nav|cs-nav-active'.split(
+'|'
+)) {
+const a = 'data-ag-' + k;
             qa(doc, `[${a}]`).forEach((el) => ra(el, a));
-          }
-          qa(doc, '[data-ag-queued-act]').forEach((el) => {
-            ra(el, 'data-ag-queued-act');
-            delete el._agQueuedActTimer;
-          });
-          qa(doc, '[data-ag-ov-sec-closing]').forEach((el) => {
-            ra(el, 'data-ag-ov-sec-closing');
-            delete el._agOvBypassClick;
-            delete el._agOvCloseTimer;
-            delete el._agOvOpenTimer;
-            delete el._agOvOpenRaf;
-          });
-        });
-      }
-      outlinePopover = null;
-      outlineSearchInput = null;
-      outlineListEl = null;
-      outlineTitleEl = null;
-      outlineFoldBtn = null;
-      sidebarMoreBtn = null;
-      sidebarMoreExpanded = false;
-      activeNavRail = null;
-      cachedConvView = null;
-      outlineOpen = false;
-      lastCascadeId = '';
-      cachedThemeSample = null;
-      cachedAttrKey = '';
-    }
-
-    return {
-      sync,
-      onThemeChange,
-      jumpUserTurn,
-      foldHistoricalSteps,
-      openNavOutline,
-      closeNavOutline,
-      toggleInlineDiffPreview: (...a) => win?.__agPrismInlineDiff?.toggleInlineDiffPreview?.(...a) ?? false,
-      runFastScrollToBottom,
-      syncSidebarOverflowTools,
-      getDebugState: () => ({
-        ...stats,
-        inlineDiffToggleCount: win?.__agPrismInlineDiff?.getDebugState?.()?.inlineDiffToggleCount ?? 0,
-        outlineOpen,
-        lastCascadeId,
-        sidebarMoreExpanded,
-        cachedThemeSig: cachedThemeSample?.sig || null,
-      }),
+}
+qa(doc, '[data-ag-queued-act]').forEach((el) => {
+ra(el, 'data-ag-queued-act');
+delete el._agQueuedActTimer;
+});
+qa(doc, '[data-ag-ov-sec-closing]').forEach((el) => {
+ra(el, 'data-ag-ov-sec-closing');
+delete el._agOvBypassClick;
+delete el._agOvCloseTimer;
+delete el._agOvOpenTimer;
+delete el._agOvOpenRaf;
+});
+});
+}
+outlinePopover = null;
+outlineSearchInput = null;
+outlineListEl = null;
+outlineTitleEl = null;
+outlineFoldBtn = null;
+sidebarMoreBtn = null;
+sidebarMoreExpanded = false;
+activeNavRail = null;
+cachedConvView = null;
+outlineOpen = false;
+lastCascadeId = '';
+cachedThemeSample = null;
+cachedAttrKey = '';
+}
+return {
+sync,
+onThemeChange,
+jumpUserTurn,
+foldHistoricalSteps,
+openNavOutline,
+closeNavOutline,
+toggleInlineDiffPreview: (...a) => win?.__agPrismInlineDiff?.toggleInlineDiffPreview?.(...a) ?? false,
+runFastScrollToBottom,
+syncSidebarOverflowTools,
+getDebugState: () => ({
+...stats,
+inlineDiffToggleCount: win?.__agPrismInlineDiff?.getDebugState?.()?.inlineDiffToggleCount ?? 0,
+outlineOpen,
+lastCascadeId,
+sidebarMoreExpanded,
+cachedThemeSig: cachedThemeSample?.sig || null,
+}),
       destroy,
     };
   }

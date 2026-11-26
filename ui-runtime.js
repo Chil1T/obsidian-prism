@@ -74,6 +74,7 @@
   };
   if (initialConfig && initialConfig.__uiSlice) ensureLiteLocalesShim(initialConfig.__uiSlice);
   const getHomeStudioMod = () => GT.__agPrismHomeStudioPanel || W.__agPrismHomeStudioPanel || GT.__agHomeStudioPanel || W.__agHomeStudioPanel || null;
+  const getDomBus = () => GT.__agPrismDomBus || W.__agPrismDomBus || null;
   const homeRippleMod = GT.__agPrismHomeRippleHost, modelGlyphMod = GT.__agPrismModelGlyphCrystal, streamChoreoMod = GT.__agPrismStreamChoreography, prismRimMod = GT.__agPrismRimCanvas;
   const getHostEnhancerMod = () => GT.__agPrismHostEnhancer || W.__agPrismHostEnhancer || null;
   let ownedCtxMenu = W.__agPrismContextMenu || GT.__agPrismContextMenu || null;
@@ -93,10 +94,13 @@
   const pickOf = (v, s, d) => (s.split('|').includes(v) ? v : d);
   const normConvRipple = (v) => (v === true || v === 'true' || v === 'on' ? 'medium' : pickOf(v, 'subtle|medium|full', 'off'));
 
+  const normPerfMode = (v) => (v === 'eco' || v === 'performance' ? 'performance' : v === 'quality' ? 'quality' : 'balanced');
+
   const normalizeConfigShape = (rawCfg) => {
     const out = { ...(rawCfg || {}) };
     out.palette = pickOf(out.palette === 'claude' ? 'warm' : out.palette, 'host|obsidian|warm', 'obsidian');
     out.motionLevel = pickOf(out.motionLevel, 'off|subtle|standard|ultra', 'ultra');
+    out.performanceMode = normPerfMode(out.performanceMode);
     out.targetFps = pickOf(out.targetFps, '60|120|180|native', '180');
     for (const k of ['telemetryModule', 'effortSliderModule', 'hostLocalization']) out[k] = pickOf(out[k], 'on|off', 'auto');
     out.thoughtTranslate = pickOf(out.thoughtTranslate, 'machine|ai', 'off');
@@ -141,6 +145,7 @@
     const patch = { ...(rawPatch || {}) };
     if (patch.palette === 'claude') patch.palette = 'warm';
     if (patch.mascot === 'dual') patch.mascot = 'crab';
+    if ('performanceMode' in patch) patch.performanceMode = normPerfMode(patch.performanceMode);
     for (const [a, b] of [['language', 'lang'], ['homeLayout', 'homeMode'], ['placeholderStyle', 'promptStyle']]) {
       if (a in patch) patch[b] = patch[a];
       else if (b in patch) patch[a] = patch[b];
@@ -322,7 +327,11 @@
   const getLightPreset = () => (cfg.lightPreset === 'alabaster' ? 'alabaster' : 'crystal');
   const getMotionLevel = () => pickOf(cfg.motionLevel, 'off|subtle|standard|ultra', 'ultra');
   const getTargetFps = () => pickOf(String(cfg.targetFps || ''), '60|120|180|native', '180');
-  const getMinFrameGapMs = () => ({ native: 0, 60: 15.2, 120: 7.5 })[getTargetFps()] ?? 4.8;
+  const getMinFrameGapMs = () => {
+    const userGap = ({ native: 0, 60: 15.2, 120: 7.5 })[getTargetFps()] ?? 4.8;
+    const capGap = Number((W.__agPrismPerfCaps || GT.__agPrismPerfCaps)?.()?.minFrameGapMs || 0);
+    return capGap > userGap ? capGap : userGap;
+  };
   const getTelemetryMode = () => pickOf(cfg.telemetryModule, 'on|off', 'auto');
   const getEffortSliderMode = () => pickOf(cfg.effortSliderModule, 'on|off', 'auto');
   const onOffMode = (k) => (cfg[k] === 'off' || cfg[k] === false ? 'off' : 'on');
@@ -793,7 +802,7 @@
       const s = D.createElement('style');
       s.id = MOTION_OFF_STYLE_ID;
       sa(s, 'data-ag-owned', '1');
-      s.textContent = 'html[data-ag-cs-style][data-ag-cs-motion="off"]{&,& *,& *::before,& *::after{animation:none!important;transition:none!important}}';
+      s.textContent = getDomBus()?.MOTION_OFF_SCOPED_CSS || 'html[data-ag-cs-style][data-ag-cs-motion="off"] :is(button,[role="button"],.agy-overlay,.surface-composer-card,.ag-cs-stream-chunk,.ag-cs-thought-chunk,.ag-cs-code-scan,[data-testid="status-loading-spinner"]){animation:none!important;transition:none!important}';
       (D.head || de())?.appendChild?.(s);
     }
   };
@@ -864,7 +873,7 @@
     runGuardedMut(() => {
       const csA = {
         style: '1', theme: dark ? 'dark' : 'light', palette, 'light-preset': lightPreset, motion: motionLv,
-        'target-fps': targetFps, telemetry: telemetryMod, 'effort-slider': effortSliderMod,
+        'perf-mode': normPerfMode(cfg.performanceMode), 'target-fps': targetFps, telemetry: telemetryMod, 'effort-slider': effortSliderMod,
         'thought-translate': getThoughtTranslateMode(), accent: getAccentTone(), corners: getCornerStyle(),
         'scroll-bottom': cfg.scrollBottomMotion, 'code-font': getCodeFont(),
         ligatures: isCodeLigaturesEnabled() ? '1' : '0', ambient: getAmbientCssValue(),
@@ -887,6 +896,7 @@
       else if (ha(html, 'data-ag-cs-cjk')) ra(html, 'data-ag-cs-cjk');
 
       syncMotionOffStyle(motionLv === 'off');
+      getDomBus()?.applyPerformanceMode?.(cfg.performanceMode, D, W);
       const igRm = !!cfg.ignoreReducedMotion, IR_A = 'data-ag-cs-ignore-rm';
       if (isFn(W.__agPrismApplyIgnoreReducedMotion)) W.__agPrismApplyIgnoreReducedMotion(igRm, D, W);
       else if (igRm) setAttrIfChanged(html, IR_A, '1');
@@ -1487,9 +1497,11 @@
     ', #ag-prism-css, #ag-prism-omni-css, #ag-prism-sidebar-studio-css, #ag-prism-periodic-picker-root, #ag-prism-periodic-picker-css, .ag-pp-hold-ring, .ag-pp-mini-keycap, #ag-claude-style-css, #ag-prism-motion-off-css, #ag-prism-host-alert-css, ' +
     EXT_ZH_UI_SEL;
 
-  const isOwnPluginNode = (t) => {
+  const isOwnPluginNode = (t, selfOnly) => {
     const el = t ? (t.closest ? t : t[K_PE]) : null;
-    return !!(el?.closest && (el.closest('[data-ag-owned],[data-prism-ignore]') || el.closest(OWN_PLUGIN_SELECTOR)));
+    if (!el?.closest) return false;
+    if (el.closest('[data-ag-owned],[data-prism-ignore]')) return true;
+    return selfOnly && el === t && el.matches ? el.matches(OWN_PLUGIN_SELECTOR) : !!el.closest(OWN_PLUGIN_SELECTOR);
   };
   const isOwnPluginMutation = (m) => isMutAll(m, isOwnPluginNode);
 
@@ -1517,7 +1529,7 @@
 
   const A_BL = 'data-ag-cs-bleed', BLEED_TRIGS = new Set(['thinking-collapsible-trigger', 'tool-group-collapsible', 'worked-for-collapsible']), bleedEls = new Set();
   const syncBleedTables = () => {
-    const hosts = qa(D, '.md-table-host');
+    const hosts = D.getElementsByClassName ? D.getElementsByClassName('md-table-host') : qa(D, '.md-table-host');
     if (!hosts.length && !bleedEls.size) return;
     const next = new Set();
     for (const h of hosts) {
@@ -2435,380 +2447,363 @@
       if (type === 'input' && cl(ev?.target, S_IB)) {
         try { msRig?.onUserType?.((cl(ev.target, '[contenteditable="true"]') || ev.target)?.[K_TC] || ''); } catch {}
       }
-    } catch {}
-  };
-
-  const onDocTransitionEnd = (ev) => {
-    try {
-      if (ev?.target?.id === 'ag-prism-periodic-picker-root' && ev.propertyName === 'height') prismRimCtl.markDirty();
-      if (cfg.smoothCaret !== false && cl(ev?.target, S_IB)) smoothCaretCtl.queue(false, true, false);
-    } catch {}
-  };
-
-  const ATTR_OBSERVED_TIDS = new Set([
-    'conversation-view', 'conversation-row-sidebar', 'worked-for-collapsible', 'thinking-collapsible-trigger',
-    'changed-files-card-header', T_RP, T_TK, T_SQ, T_QM, 'step-plan', 'toggle-aux-sidebar', 'toggle-maximize-pane',
-  ]);
-
-  const observer = new MutationObserver((mutations) => {
-    try {
-      if (destroyed || internalDomMutating || streamChoreoCtl.isStreamMutating() || !mutations || mutations.length === 0) return;
-
-      // 隐藏窗口挂起深扫
-      if (D.hidden) {
-        for (let i = 0; i < mutations.length; i++) {
-          const m = mutations[i];
-          if (!isThoughtMutationRecord(m) && !isOwnPluginMutation(m)) {
-            pendingHiddenFullSync = true;
-            break;
-          }
-        }
-        return;
-      }
-
-      let anyRelevant = false;
-      let ctxCache = null;
-      for (let i = 0; i < mutations.length; i++) {
-        const m = mutations[i];
-
-        if (m.type === 'attributes') {
-          if (m.attributeName === 'data-ag-prism-host-i18n') {
-            dirtyFlags.g = anyRelevant = true;
-            continue;
-          }
-          const tgt = m.target;
-          if (tgt === D.body || tgt === de()) {
-            if (m.attributeName === 'data-ag-pp-open') {
-              prismRimCtl.markDirty();
-              dirtyFlags.c = anyRelevant = true;
-              continue;
-            }
-            if (/^data-(?:ag-prism-wallpaper|has-(?:drawer-)?browser-hole)$/.test(m.attributeName)) { dirtyFlags.r = anyRelevant = true; continue; }
-            if (m.attributeName === 'data-ag-prism-mode') dirtyFlags.c = true;
-            dirtyFlags.t = anyRelevant = true;
-            continue;
-          }
-          if (/^data-has-(?:drawer-)?browser-hole$/.test(m.attributeName)) { dirtyFlags.r = anyRelevant = true; continue; }
-          if (tidOf(tgt?.[K_PE]) === 'aux-pane-split') {
-            let dualChanged = false;
-            runGuardedMut(() => { dualChanged = axU(tgt[K_PE]); });
-            if (dualChanged) dirtyFlags.a = anyRelevant = true;
-            else if (m.attributeName === 'style') bumpResizingPulse();
-            continue;
-          }
-          if (m.attributeName === A_QA) {
-            if (!isThoughtIsolatedNode(tgt) && !isHoverCardNode(tgt)) dirtyFlags.c = anyRelevant = true;
-            continue;
-          }
-          const tid = tidOf(tgt);
-          const isClrWrap = (m.attributeName === 'class' || m.attributeName === 'hidden') && (ha(tgt, A_TK) || ha(tgt, A_Q) || seenClrWraps.has(tgt));
-          if (!ATTR_OBSERVED_TIDS.has(tid) && !isClrWrap) continue;
-          if (isThoughtIsolatedNode(tgt) || isOwnPluginNode(tgt) || isHoverCardNode(tgt)) continue;
-          if (isClrWrap && !ATTR_OBSERVED_TIDS.has(tid)) {
-            dirtyFlags.c = anyRelevant = true;
-            continue;
-          }
-          if (tid === 'conversation-view') {
-            if (m.attributeName === 'data-cascade-id') dirtyFlags.r = dirtyFlags.c = anyRelevant = true;
-          } else if (tid === 'conversation-row-sidebar') {
-            if (m.attributeName === 'data-selected') {
-              if (ga(tgt, 'data-selected') === 'true') streamChoreoCtl.stampSidebarRowRunningImmediate?.(tgt);
-              dirtyFlags.s = anyRelevant = true;
-            }
-          } else if (tid === 'worked-for-collapsible' || tid === 'thinking-collapsible-trigger' || tid === 'changed-files-card-header') {
-            dirtyFlags.l = anyRelevant = true;
-            if (tid === 'thinking-collapsible-trigger') dirtyFlags.tk = true;
-            else if (tid === 'changed-files-card-header') dirtyFlags.cf = true;
-            dirtyCollapsibleTargets.add(tgt);
-          } else if (tid === T_RP || tid === T_TK || tid === T_SQ || tid === T_QM) {
-            dirtyFlags.c = anyRelevant = true;
-          } else if (tid === 'step-plan') {
-            dirtyFlags.o = anyRelevant = true;
-          } else if (tid === 'toggle-aux-sidebar' || tid === 'toggle-maximize-pane') {
-            dirtyFlags.a = anyRelevant = true;
-          }
-          continue;
-        }
-
-        if (m.type === 'childList') {
-          const tgt = m.target;
-          if (tagU(tgt) === 'STYLE' && !tgt.id && ga(tgt, TS_A) !== '1') {
-            dirtyTurboRoots.add(tgt);
-            anyRelevant = true;
-            continue;
-          }
-          let pCtx = null;
-          if (isElementLike(tgt)) {
-            if (!ctxCache) ctxCache = new Map();
-            pCtx = ctxCache.get(tgt);
-            if (!pCtx) {
-              pCtx =
-                isThoughtIsolatedNode(tgt) || isOwnPluginNode(tgt) || isHoverCardNode(tgt)
-                  ? { skip: true }
-                  : {
-                      skip: false,
-                      inConv: !!(cl(tgt, '[data-testid="conversation-view"]')),
-                      inComp: !!(cl(tgt, S_IB)),
-                      inSide: inSbP(tgt),
-                      inSR: inSbRow(tgt),
-                      inDlg: !!(cl(tgt, '[role="dialog"]')),
-                      inMdl: !!(cl(tgt, MODEL_PANEL_SEL)),
-                    };
-              ctxCache.set(tgt, pCtx);
-            }
-            if (pCtx.skip) continue;
-            if (tidOf(tgt) === 'aux-pane-split') dirtyFlags.a = anyRelevant = true;
-          }
-          const inComposerBox = !!(pCtx && pCtx.inComp);
-          const scanList = (list, isAdd) => {
-            if (!list || !list.length) return;
-            for (let j = 0; j < list.length; j++) {
-              const node = list[j];
-              if (!isElementLike(node) || isThoughtIsolatedNode(node) || isOwnPluginNode(node) || isHoverCardNode(node)) continue;
-              if (isAdd && tidOf(node) === 'conversation-row-sidebar' && ga(node, 'data-selected') === 'true') {
-                streamChoreoCtl.stampSidebarRowRunningImmediate?.(node);
-              }
-              classifyDirtySubtree(node, isAdd, pCtx);
-              if (inComposerBox) dirtyFlags.c = dirtyFlags.r = true;
-              anyRelevant = true;
-            }
-          };
-          scanList(m.addedNodes, true);
-          if (m.removedNodes && m.removedNodes.length > 0) {
-            if (isElementLike(tgt) && ha(tgt, 'data-ag-cs-bg-cmd-wrap')) {
-              dirtyFlags.m = anyRelevant = true;
-              dirtyBgCmds.add(tgt);
-            }
-            scanList(m.removedNodes, false);
-          }
-        }
-      }
-
-      if (anyRelevant && (O.values(dirtyFlags).some(Boolean) || dirtyTurboRoots.size > 0)) {
-        scheduleSync();
-      }
-    } catch {}
-  });
-  mainObserver = observer;
-
-  // Never bind click/mousedown on D
-  const CAP_PASSIVE = { capture: true, passive: true };
-  const CARET_LISTENERS = 'keyup:1|mouseup:0|input:1|selectionchange:1|focusin:0|focusout:0|scroll:0|compositionupdate:1|compositionend:1'.split('|');
-  const DOC_LISTENERS = [
-    ['pointerdown', onDocPointerDown, CAP_PASSIVE],
-    ['transitionend', onDocTransitionEnd, CAP_PASSIVE],
-    ['visibilitychange', onDocVisibilityChange, true],
-  ];
-  let caretListenersBound = false;
-  const syncCaretListeners = (enabled) => {
-    const want = !!(enabled && !destroyed && lifecycleStarted);
-    if (want === caretListenersBound) return;
-    caretListenersBound = want;
-    const fn = want ? 'addEventListener' : 'removeEventListener';
-    for (const s of CARET_LISTENERS) { const [ev, cap] = s.split(':'); try { D[fn](ev, onDocCaretEvent, cap === '1' ? true : CAP_PASSIVE); } catch {} }
-    if (!want && !destroyed) smoothCaretCtl.teardown();
-  };
-
-  const WIN_LISTENERS = [
-    ['pointermove', onWinPointerMove, CAP_PASSIVE],
-    ['pointerup', onWinPointerUp, { passive: true }],
-    ['pointercancel', onWinPointerUp, { passive: true }],
-    ['focusin', onWinFocusIn, CAP_PASSIVE],
-    ['resize', onWinResize, { passive: true }],
-    ['keydown', onWinKeyDown, true],
-    ['click', onWinClick, true],
-    ['storage', onWinStorage, false],
-    ['blur', onWinBlur, false],
-    ['focus', clearWinBlur, false],
-  ];
-
-  let pollTimer = null;
-  let coreTornDown = false;
-  const teardownCore = () => {
-    if (coreTornDown) return;
-    coreTornDown = destroyed = true;
-    activePaneCard = activeConvView = lastNotifiedPaneCard = lastNotifiedConvView = null;
-    latestPaneModelMap.clear();
-    const safe = (fn) => { try { fn?.(); } catch {} };
-    cancelScheduledSync();
-    streamChoreoCtl.clearTransientTimers();
-    for (const s of [dirtyAddedRoots, dirtyCollapsibleTargets, dirtyBgCmds, dirtyTurboRoots, bleedEls]) s.clear();
-    clearWinBlur();
-    finishResizing(false);
-    unmountCrab();
-    msLastHostSleep = false;
-    if (crabRemoveAttrTimer) { CT(crabRemoveAttrTimer); crabRemoveAttrTimer = 0; }
-    for (const t of pulseHealTimers) CT(t);
-    pulseHealTimers.clear();
-    syncMotionOffStyle(false);
-    streamChoreoCtl.disconnectStreamObserver();
-    if (pollTimer !== null) { clearInterval(pollTimer); pollTimer = null; }
-    cancelHostEnhancerSync();
-    resetEnhancerDirty();
-    if (storeDebounce) { CT(storeDebounce); storeDebounce = null; }
-    smoothCaretCtl.teardown();
-    prismRimCtl.cancelPendingRaf();
-    safe(storeUnsub); storeUnsub = null;
-    safe(() => observer.disconnect());
-    safe(() => { axO?.disconnect?.(); axE?.removeAttribute?.(AX_A); });
-    axO = axE = null;
-    syncCaretListeners(false);
-    for (const [ev, fn, opt] of DOC_LISTENERS) safe(() => D.removeEventListener(ev, fn, opt));
-    if (isFn(W.removeEventListener)) for (const [ev, fn, opt] of WIN_LISTENERS) safe(() => W.removeEventListener(ev, fn, opt));
-    safe(() => motionBinding?.unbind?.()); motionBinding = null;
-    safe(() => pulseBridgeInst?.destroy?.()); pulseBridgeInst = null;
-    safe(() => hostEnhancerCtl.destroy?.());
-    modelGlyphCtl.teardownCrystalMount();
-    if (Array.isArray(GT.__agCsCleanups)) {
-      const idx = GT.__agCsCleanups.indexOf(teardownCore);
-      if (idx >= 0) GT.__agCsCleanups.splice(idx, 1);
-    }
-  };
-
-  GT.__agCsCleanups = Array.isArray(GT.__agCsCleanups) ? GT.__agCsCleanups : [];
-  GT.__agCsCleanups.push(teardownCore);
-
-  let activePollMs = 0;
-  const restartPollTimer = () => {
-    const nextMs = Math.max(5000, Number(cfg.pollIntervalMs || currentBaseConfig.pollIntervalMs) || 5000);
-    if (pollTimer !== null && activePollMs === nextMs) return;
-    if (pollTimer !== null) { clearInterval(pollTimer); pollTimer = null; }
-    activePollMs = nextMs;
-    pollTimer = setInterval(() => {
-      if (destroyed || D.hidden) return;
+} catch {}
+};
+const onDocTransitionEnd = (ev) => {
+try {
+if (ev?.target?.id === 'ag-prism-periodic-picker-root' && ev.propertyName === 'height') prismRimCtl.markDirty();
+if (cfg.smoothCaret !== false && cl(ev?.target, S_IB)) smoothCaretCtl.queue(false, true, false);
+} catch {}
+};
+const ATTR_OBSERVED_TIDS = new Set([
+'conversation-view', 'conversation-row-sidebar', 'worked-for-collapsible', 'thinking-collapsible-trigger',
+'changed-files-card-header', T_RP, T_TK, T_SQ, T_QM, 'step-plan', 'toggle-aux-sidebar', 'toggle-maximize-pane',
+]);
+const observer = new MutationObserver((mutations) => {
+try {
+if (destroyed || internalDomMutating || streamChoreoCtl.isStreamMutating() || !mutations || mutations.length === 0) return;
+// 隐藏窗口挂起深扫
+if (D.hidden) {
+for (let i = 0; i < mutations.length; i++) {
+const m = mutations[i];
+if (!isThoughtMutationRecord(m) && !isOwnPluginMutation(m)) {
+pendingHiddenFullSync = true;
+break;
+}
+}
+return;
+}
+let anyRelevant = false;
+let ctxCache = null;
+for (let i = 0; i < mutations.length; i++) {
+const m = mutations[i];
+if (m.type === 'attributes') {
+if (m.attributeName === 'data-ag-prism-host-i18n') {
+dirtyFlags.g = anyRelevant = true;
+continue;
+}
+const tgt = m.target;
+if (tgt === D.body || tgt === de()) {
+if (m.attributeName === 'data-ag-pp-open') {
+prismRimCtl.markDirty();
+dirtyFlags.c = anyRelevant = true;
+continue;
+}
+if (m.attributeName?.charCodeAt(0) === 100 && /^data-(?:ag-prism-wallpaper|has-(?:drawer-)?browser-hole)$/.test(m.attributeName)) { dirtyFlags.r = anyRelevant = true; continue; }
+if (m.attributeName === 'data-ag-prism-mode') dirtyFlags.c = true;
+dirtyFlags.t = anyRelevant = true;
+continue;
+}
+if (m.attributeName?.charCodeAt(0) === 100 && /^data-has-(?:drawer-)?browser-hole$/.test(m.attributeName)) { dirtyFlags.r = anyRelevant = true; continue; }
+if (tidOf(tgt?.[K_PE]) === 'aux-pane-split') {
+let dualChanged = false;
+runGuardedMut(() => { dualChanged = axU(tgt[K_PE]); });
+if (dualChanged) dirtyFlags.a = anyRelevant = true;
+else if (m.attributeName === 'style') bumpResizingPulse();
+continue;
+}
+if (m.attributeName === A_QA) {
+if (!isThoughtIsolatedNode(tgt) && !isHoverCardNode(tgt)) dirtyFlags.c = anyRelevant = true;
+continue;
+}
+const tid = tidOf(tgt);
+const isClrWrap = (m.attributeName === 'class' || m.attributeName === 'hidden') && (ha(tgt, A_TK) || ha(tgt, A_Q) || seenClrWraps.has(tgt));
+if (!ATTR_OBSERVED_TIDS.has(tid) && !isClrWrap) continue;
+if (isThoughtIsolatedNode(tgt) || isOwnPluginNode(tgt) || isHoverCardNode(tgt)) continue;
+if (isClrWrap && !ATTR_OBSERVED_TIDS.has(tid)) {
+dirtyFlags.c = anyRelevant = true;
+continue;
+}
+if (tid === 'conversation-view') {
+if (m.attributeName === 'data-cascade-id') dirtyFlags.r = dirtyFlags.c = anyRelevant = true;
+} else if (tid === 'conversation-row-sidebar') {
+if (m.attributeName === 'data-selected') {
+if (ga(tgt, 'data-selected') === 'true') streamChoreoCtl.stampSidebarRowRunningImmediate?.(tgt);
+dirtyFlags.s = anyRelevant = true;
+}
+} else if (tid === 'worked-for-collapsible' || tid === 'thinking-collapsible-trigger' || tid === 'changed-files-card-header') {
+dirtyFlags.l = anyRelevant = true;
+if (tid === 'thinking-collapsible-trigger') dirtyFlags.tk = true;
+else if (tid === 'changed-files-card-header') dirtyFlags.cf = true;
+dirtyCollapsibleTargets.add(tgt);
+} else if (tid === T_RP || tid === T_TK || tid === T_SQ || tid === T_QM) {
+dirtyFlags.c = anyRelevant = true;
+} else if (tid === 'step-plan') {
+dirtyFlags.o = anyRelevant = true;
+} else if (tid === 'toggle-aux-sidebar' || tid === 'toggle-maximize-pane') {
+dirtyFlags.a = anyRelevant = true;
+}
+continue;
+}
+if (m.type === 'childList') {
+const tgt = m.target;
+if (tagU(tgt) === 'STYLE' && !tgt.id && ga(tgt, TS_A) !== '1') {
+dirtyTurboRoots.add(tgt);
+anyRelevant = true;
+continue;
+}
+let pCtx = null;
+if (isElementLike(tgt)) {
+if (!ctxCache) ctxCache = new Map();
+pCtx = ctxCache.get(tgt);
+if (!pCtx) {
+pCtx =
+isThoughtIsolatedNode(tgt) || isOwnPluginNode(tgt) || isHoverCardNode(tgt)
+? { skip: true }
+: {
+skip: false,
+inConv: !!(cl(tgt, '[data-testid="conversation-view"]')),
+inComp: !!(cl(tgt, S_IB)),
+inSide: inSbP(tgt),
+inSR: inSbRow(tgt),
+inDlg: !!(cl(tgt, '[role="dialog"]')),
+inMdl: !!(cl(tgt, MODEL_PANEL_SEL)),
+};
+ctxCache.set(tgt, pCtx);
+}
+if (pCtx.skip) continue;
+if (tidOf(tgt) === 'aux-pane-split') dirtyFlags.a = anyRelevant = true;
+}
+const inComposerBox = !!(pCtx && pCtx.inComp);
+const scanList = (list, isAdd) => {
+if (!list || !list.length) return;
+for (let j = 0; j < list.length; j++) {
+const node = list[j];
+if (!isElementLike(node) || isThoughtIsolatedNode(node) || isOwnPluginNode(node, !!pCtx) || isHoverCardNode(node)) continue;
+if (isAdd && tidOf(node) === 'conversation-row-sidebar' && ga(node, 'data-selected') === 'true') {
+streamChoreoCtl.stampSidebarRowRunningImmediate?.(node);
+}
+classifyDirtySubtree(node, isAdd, pCtx);
+if (inComposerBox) dirtyFlags.c = dirtyFlags.r = true;
+anyRelevant = true;
+}
+};
+scanList(m.addedNodes, true);
+if (m.removedNodes && m.removedNodes.length > 0) {
+if (isElementLike(tgt) && ha(tgt, 'data-ag-cs-bg-cmd-wrap')) {
+dirtyFlags.m = anyRelevant = true;
+dirtyBgCmds.add(tgt);
+}
+scanList(m.removedNodes, false);
+}
+}
+}
+if (anyRelevant && (O.values(dirtyFlags).some(Boolean) || dirtyTurboRoots.size > 0)) {
+scheduleSync();
+}
+} catch {}
+});
+mainObserver = observer;
+// Never bind click/mousedown on D
+const CAP_PASSIVE = { capture: true, passive: true };
+const CARET_LISTENERS = 'keyup:1|mouseup:0|input:1|selectionchange:1|focusin:0|focusout:0|scroll:0|compositionupdate:1|compositionend:1'.split('|');
+const DOC_LISTENERS = [
+['pointerdown', onDocPointerDown, CAP_PASSIVE],
+['transitionend', onDocTransitionEnd, CAP_PASSIVE],
+['visibilitychange', onDocVisibilityChange, true],
+];
+let caretListenersBound = false;
+const syncCaretListeners = (enabled) => {
+const want = !!(enabled && !destroyed && lifecycleStarted);
+if (want === caretListenersBound) return;
+caretListenersBound = want;
+const fn = want ? 'addEventListener' : 'removeEventListener';
+for (const s of CARET_LISTENERS) { const [ev, cap] = s.split(':'); try { D[fn](ev, onDocCaretEvent, cap === '1' ? true : CAP_PASSIVE); } catch {} }
+if (!want && !destroyed) smoothCaretCtl.teardown();
+};
+const WIN_LISTENERS = [
+['pointermove', onWinPointerMove, CAP_PASSIVE],
+['pointerup', onWinPointerUp, { passive: true }],
+['pointercancel', onWinPointerUp, { passive: true }],
+['focusin', onWinFocusIn, CAP_PASSIVE],
+['resize', onWinResize, { passive: true }],
+['keydown', onWinKeyDown, true],
+['click', onWinClick, true],
+['storage', onWinStorage, false],
+['blur', onWinBlur, false],
+['focus', clearWinBlur, false],
+];
+let pollTimer = null;
+let coreTornDown = false;
+const teardownCore = () => {
+if (coreTornDown) return;
+coreTornDown = destroyed = true;
+activePaneCard = activeConvView = lastNotifiedPaneCard = lastNotifiedConvView = null;
+latestPaneModelMap.clear();
+const safe = (fn) => { try { fn?.(); } catch {} };
+cancelScheduledSync();
+streamChoreoCtl.clearTransientTimers();
+for (const s of [dirtyAddedRoots, dirtyCollapsibleTargets, dirtyBgCmds, dirtyTurboRoots, bleedEls]) s.clear();
+clearWinBlur();
+finishResizing(false);
+unmountCrab();
+msLastHostSleep = false;
+if (crabRemoveAttrTimer) { CT(crabRemoveAttrTimer); crabRemoveAttrTimer = 0; }
+for (const t of pulseHealTimers) CT(t);
+pulseHealTimers.clear();
+syncMotionOffStyle(false);
+streamChoreoCtl.disconnectStreamObserver();
+if (pollTimer !== null) { clearInterval(pollTimer); pollTimer = null; }
+cancelHostEnhancerSync();
+resetEnhancerDirty();
+if (storeDebounce) { CT(storeDebounce); storeDebounce = null; }
+smoothCaretCtl.teardown();
+prismRimCtl.cancelPendingRaf();
+safe(storeUnsub); storeUnsub = null;
+safe(() => observer.disconnect());
+safe(() => { axO?.disconnect?.(); axE?.removeAttribute?.(AX_A); });
+axO = axE = null;
+syncCaretListeners(false);
+for (const [ev, fn, opt] of DOC_LISTENERS) safe(() => D.removeEventListener(ev, fn, opt));
+if (isFn(W.removeEventListener)) for (const [ev, fn, opt] of WIN_LISTENERS) safe(() => W.removeEventListener(ev, fn, opt));
+safe(() => motionBinding?.unbind?.()); motionBinding = null;
+safe(() => pulseBridgeInst?.destroy?.()); pulseBridgeInst = null;
+safe(() => hostEnhancerCtl.destroy?.());
+modelGlyphCtl.teardownCrystalMount();
+if (Array.isArray(GT.__agCsCleanups)) {
+const idx = GT.__agCsCleanups.indexOf(teardownCore);
+if (idx >= 0) GT.__agCsCleanups.splice(idx, 1);
+}
+};
+GT.__agCsCleanups = Array.isArray(GT.__agCsCleanups) ? GT.__agCsCleanups : [];
+GT.__agCsCleanups.push(teardownCore);
+let activePollMs = 0;
+const restartPollTimer = () => {
+const nextMs = Math.max(5000, Number(cfg.pollIntervalMs || currentBaseConfig.pollIntervalMs) || 5000);
+if (pollTimer !== null && activePollMs === nextMs) return;
+if (pollTimer !== null) { clearInterval(pollTimer); pollTimer = null; }
+activePollMs = nextMs;
+pollTimer = setInterval(() => {
+if (destroyed || D.hidden) return;
       const expectedThemeKey = `${getEffectivePalette()}|${getLightPreset()}|${isDarkTheme() ? 'd' : 'l'}|${getAccentTone()}|${getAmbientIntensitySetting()}|${cfg.darkAura}|${cfg.darkAuraStyle}|${getCornerStyle()}`;
-      if (expectedThemeKey !== lastThemeKey || !ha(de(), 'data-ag-prism')) applyRootAttrs();
-      if (cfg.homeLayout === 'studio') {
-        if (homeStudioCtl.wasHero()) homeStudioCtl.scheduleUsageRollupRefresh(1800);
-        else if (!getHomeStudioMod() && qs(D, '.agy-home')) requestHomeStudioChannelIfNeeded();
-      }
-    }, nextMs);
-  };
-
-  let lifecycleStarted = false;
-  const startLifecycle = () => {
-    const root = de();
-    if (destroyed || lifecycleStarted || !root) return;
-    lifecycleStarted = true;
-    flattenMainStyleSheet();
-    observer.observe(root, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      attributeFilter: ['class', 'hidden', 'aria-expanded', 'data-state', 'data-ag-queued-act', 'data-selected', 'data-cascade-id', 'data-ag-prism-host-i18n', 'data-ag-prism-mode', 'data-ag-pp-open', 'data-ag-prism-wallpaper', 'data-has-browser-hole', 'data-has-drawer-browser-hole'],
-    });
-    for (const [evName, handler, opts] of DOC_LISTENERS) D.addEventListener(evName, handler, opts);
-    syncCaretListeners(cfg.smoothCaret !== false);
-    if (isFn(W.addEventListener)) {
-      for (const [evName, handler, opts] of WIN_LISTENERS) W.addEventListener(evName, handler, opts);
-      if (isFn(motionEngine?.bindMicroInteractions)) try { motionBinding = motionEngine.bindMicroInteractions(W); } catch {}
-    }
-
-    syncMotionSpringTokens();
-    restartPollTimer();
-    if (isFn(D.hasFocus) && !D.hasFocus()) onWinBlur();
-
-    ensureHooks(true);
-    markAllDirty();
-    runSync(true);
-    if (homeStudioCtl.wasHero() && cfg.homeLayout === 'studio') homeStudioCtl.scheduleUsageRollupRefresh(1800);
-  };
-
-  const prismRuntimeApi = {
-    brand: 'Obsidian Prism', version: VERSION, legacyApiVersion: LEGACY_API_VERSION, codeHash: CODE_HASH,
-    flattenCss: flattenMainStyleSheet, saveSettingsBatch,
-    refreshConfig(next) {
-      if (next && typeof next === 'object') {
-        if (next.__uiSlice) ensureLiteLocalesShim(next.__uiSlice);
-        const fromFile = !!(next.__fromFile), ackEpoch = Number(next.__ackEpoch) || 0;
-        if (fromFile && ackEpoch > 0 && ackEpoch < localWriteEpoch) return false;
-        const cleanNext = expandSettingAliases(stripRuntimeMetaKeys(next));
-        currentBaseConfig = { ...currentBaseConfig, ...cleanNext };
-        if (next.pollIntervalMs !== undefined) currentBaseConfig.pollIntervalMs = next.pollIntervalMs;
-        if (next.binding !== undefined) currentBaseConfig.binding = next.binding;
-        cfg = loadSettings(currentBaseConfig, fromFile ? null : cleanNext);
-      } else cfg = loadSettings(currentBaseConfig);
-      if (lifecycleStarted && !destroyed) restartPollTimer();
-      markAllDirty(); lastAbsorbedSyncKey = ''; applyRootAttrs(true); runSync(true);
-      return true;
-    },
-    sync() { if (!destroyed) { lastAbsorbedSyncKey = ''; runSync(true); } },
-    syncHomeStudio() { if (destroyed) return; resolveHomeStudioCtl(); if (!lifecycleStarted) return; markAllDirty(); runSync(true); },
-    detachHomeStudio: disposeActiveHomeStudio,
-    syncTelemetry() { if (destroyed) return; ensurePulseBridge(true); syncAbsorbedModules(true); },
-    detachTelemetry: detachPulseBridge,
-    syncHostEnhancer() { if (destroyed) return; const c = resolveHostEnhancerCtl(); try { c.onThemeChange?.(false); c.sync?.(); } catch {} },
-    detachHostEnhancer: disposeActiveHostEnhancer,
-    syncAbsorbed: () => syncAbsorbedModules(true),
-    getState() {
-      const convAura = convAuraCtl.getInstance();
-      const auraConnected = !!(convAura && convAura.host && convAura.host.isConnected);
-      const convAuraPhase = auraConnected ? convAuraCtl.advancePhase(performance.now()) : 'off';
-      const rippleMount = rippleCtl.getMount();
-      return {
-        brand: 'Obsidian Prism',
-        version: VERSION,
-        cfg: normalizeConfigShape(cfg),
-        motionLevel: getMotionLevel(), lightPreset: getLightPreset(),
-        hasThoughtModule: !!W.__agPrismThought, hasOmniModule: !!W.__agPrismOmni, hasSidebarStudio: !!W.__agPrismSidebar,
-        hasContextMenu: !!(W.__agPrismContextMenu || GT.__agPrismContextMenu), hasHostEnhancer: isFn(hostEnhancerCtl?.getDebugState),
-        usageRecordsCount: homeStudioCtl.getUsageRecordsCount(), hasPanel: homeStudioCtl.hasConnectedPanel(),
-        hasRipple: !!rippleMount?.canvas?.isConnected, rippleMode: rippleMount?.canvas?.isConnected ? (rippleMount.mode || 'home') : 'off', rippleSleeping: !rippleMount || !!rippleMount.sleeping,
-        rippleAura: rippleMount ? { ...rippleMount.aura } : null, hasConvAura: auraConnected, convAuraPhase,
-        convAuraSleeping: !convAura || !!convAura.sleeping, convAuraDrawCount: convAura ? convAura.drawCount : 0,
-        convAuraCanvasSize: convAura ? { width: convAura.width, height: convAura.height } : null,
-        convAuraOptics: convAura?.lastOptics ? { ...convAura.lastOptics } : null,
-        hasCrab: !!(msRoot && msRoot[K_IC]), hasDualRig: !!msRig, hasSmoothCaret: !!qs(D, '.ag-cs-smooth-caret'),
-        hasPulseBridge: !!pulseBridgeInst?.getDebugState?.()?.attached, hasStreamObserver: streamChoreoCtl.hasStreamObserver(),
-        modelInfo: latestPrimaryModelInfo ? { ...latestPrimaryModelInfo } : null, perf: { ...perfStats },
-      };
-    },
-    suppressEntryMotion(ms) {
-      streamChoreoCtl.suppressEntryMotion?.(ms);
-    },
-    destroy() {
-      teardownCore();
-      for (const k of ['__agPrismTelemetry', '__agPrismEffortSlider', '__agPrismThought', '__agPrismOmni', '__agPrismSidebar', '__agPrismPeriodicPicker', '__agPrismHostI18n', '__agPrismWallpaper', '__agPrismSuggester']) try { (W[k] || GT[k])?.destroy?.(); } catch {}
-      try { W.__agPrismInlineDiff?.unbindHooks?.(); } catch {}
-      try { (ownedCtxMenu || W.__agPrismContextMenu || GT.__agPrismContextMenu)?.destroy?.(); } catch {}
-      const sc = streamChoreoCtl;
-      for (const [o, k] of [[sc, 'cancelDeferredHydration'], [0, disposeActiveHomeStudio], [sc, 'flushAllStreamArtifacts'], [0, restoreAllHostAnimatedIcons], [smoothCaretCtl, 'teardown'], [prismRimCtl, 'teardown'], [rippleCtl, 'unmount'], [convAuraCtl, 'unmount'], [sc, 'clearWorkedForAutoUnfoldAttrs'], [0, unmountCrab], [0, restoreHostTurbo]]) try { o ? o[k]() : k(); } catch {}
+if (expectedThemeKey !== lastThemeKey || !ha(de(), 'data-ag-prism')) applyRootAttrs();
+if (cfg.homeLayout === 'studio') {
+if (homeStudioCtl.wasHero()) homeStudioCtl.scheduleUsageRollupRefresh(1800);
+else if (!getHomeStudioMod() && qs(D, '.agy-home')) requestHomeStudioChannelIfNeeded();
+}
+}, nextMs);
+};
+let lifecycleStarted = false;
+const startLifecycle = () => {
+const root = de();
+if (destroyed || lifecycleStarted || !root) return;
+lifecycleStarted = true;
+flattenMainStyleSheet();
+getDomBus()?.attach?.(D, W);
+observer.observe(root, {
+childList: true,
+subtree: true,
+attributes: true,
+attributeFilter: ['class', 'hidden', 'aria-expanded', 'data-state', 'data-ag-queued-act', 'data-selected', 'data-cascade-id', 'data-ag-prism-host-i18n', 'data-ag-prism-mode', 'data-ag-pp-open', 'data-ag-prism-wallpaper', 'data-has-browser-hole', 'data-has-drawer-browser-hole'],
+});
+for (const [evName, handler, opts] of DOC_LISTENERS) D.addEventListener(evName, handler, opts);
+syncCaretListeners(cfg.smoothCaret !== false);
+if (isFn(W.addEventListener)) {
+for (const [evName, handler, opts] of WIN_LISTENERS) W.addEventListener(evName, handler, opts);
+if (isFn(motionEngine?.bindMicroInteractions)) try { motionBinding = motionEngine.bindMicroInteractions(W); } catch {}
+}
+syncMotionSpringTokens();
+restartPollTimer();
+if (isFn(D.hasFocus) && !D.hasFocus()) onWinBlur();
+ensureHooks(true);
+markAllDirty();
+runSync(true);
+if (homeStudioCtl.wasHero() && cfg.homeLayout === 'studio') homeStudioCtl.scheduleUsageRollupRefresh(1800);
+};
+const prismRuntimeApi = {
+brand: 'Obsidian Prism', version: VERSION, legacyApiVersion: LEGACY_API_VERSION, codeHash: CODE_HASH,
+flattenCss: flattenMainStyleSheet, saveSettingsBatch,
+refreshConfig(next) {
+if (next && typeof next === 'object') {
+if (next.__uiSlice) ensureLiteLocalesShim(next.__uiSlice);
+const fromFile = !!(next.__fromFile), ackEpoch = Number(next.__ackEpoch) || 0;
+if (fromFile && ackEpoch > 0 && ackEpoch < localWriteEpoch) return false;
+const cleanNext = expandSettingAliases(stripRuntimeMetaKeys(next));
+currentBaseConfig = { ...currentBaseConfig, ...cleanNext };
+if (next.pollIntervalMs !== undefined) currentBaseConfig.pollIntervalMs = next.pollIntervalMs;
+if (next.binding !== undefined) currentBaseConfig.binding = next.binding;
+cfg = loadSettings(currentBaseConfig, fromFile ? null : cleanNext);
+} else cfg = loadSettings(currentBaseConfig);
+if (lifecycleStarted && !destroyed) restartPollTimer();
+markAllDirty(); lastAbsorbedSyncKey = ''; applyRootAttrs(true); runSync(true);
+return true;
+},
+sync() { if (!destroyed) { lastAbsorbedSyncKey = ''; runSync(true); } },
+syncHomeStudio() { if (destroyed) return; resolveHomeStudioCtl(); if (!lifecycleStarted) return; markAllDirty(); runSync(true); },
+detachHomeStudio: disposeActiveHomeStudio,
+syncTelemetry() { if (destroyed) return; ensurePulseBridge(true); syncAbsorbedModules(true); },
+detachTelemetry: detachPulseBridge,
+syncHostEnhancer() { if (destroyed) return; const c = resolveHostEnhancerCtl(); try { c.onThemeChange?.(false); c.sync?.(); } catch {} },
+detachHostEnhancer: disposeActiveHostEnhancer,
+syncAbsorbed: () => syncAbsorbedModules(true),
+getState() {
+const convAura = convAuraCtl.getInstance();
+const auraConnected = !!(convAura && convAura.host && convAura.host.isConnected);
+const convAuraPhase = auraConnected ? convAuraCtl.advancePhase(performance.now()) : 'off';
+const rippleMount = rippleCtl.getMount();
+return {
+brand: 'Obsidian Prism',
+version: VERSION,
+cfg: normalizeConfigShape(cfg),
+motionLevel: getMotionLevel(), lightPreset: getLightPreset(),
+hasThoughtModule: !!W.__agPrismThought, hasOmniModule: !!W.__agPrismOmni, hasSidebarStudio: !!W.__agPrismSidebar,
+hasContextMenu: !!(W.__agPrismContextMenu || GT.__agPrismContextMenu), hasHostEnhancer: isFn(hostEnhancerCtl?.getDebugState),
+usageRecordsCount: homeStudioCtl.getUsageRecordsCount(), hasPanel: homeStudioCtl.hasConnectedPanel(),
+hasRipple: !!rippleMount?.canvas?.isConnected, rippleMode: rippleMount?.canvas?.isConnected ? (rippleMount.mode || 'home') : 'off', rippleSleeping: !rippleMount || !!rippleMount.sleeping,
+rippleAura: rippleMount ? { ...rippleMount.aura } : null, hasConvAura: auraConnected, convAuraPhase,
+convAuraSleeping: !convAura || !!convAura.sleeping, convAuraDrawCount: convAura ? convAura.drawCount : 0,
+convAuraCanvasSize: convAura ? { width: convAura.width, height: convAura.height } : null,
+convAuraOptics: convAura?.lastOptics ? { ...convAura.lastOptics } : null,
+hasCrab: !!(msRoot && msRoot[K_IC]), hasDualRig: !!msRig, hasSmoothCaret: !!qs(D, '.ag-cs-smooth-caret'),
+hasPulseBridge: !!pulseBridgeInst?.getDebugState?.()?.attached, hasStreamObserver: streamChoreoCtl.hasStreamObserver(),
+modelInfo: latestPrimaryModelInfo ? { ...latestPrimaryModelInfo } : null, perf: { ...perfStats },
+};
+},
+suppressEntryMotion(ms) {
+streamChoreoCtl.suppressEntryMotion?.(ms);
+},
+destroy() {
+teardownCore();
+for (const k of ['__agPrismTelemetry', '__agPrismEffortSlider', '__agPrismThought', '__agPrismOmni', '__agPrismSidebar', '__agPrismPeriodicPicker', '__agPrismHostI18n', '__agPrismWallpaper', '__agPrismSuggester']) try { (W[k] || GT[k])?.destroy?.(); } catch {}
+try { W.__agPrismInlineDiff?.unbindHooks?.(); } catch {}
+try { (ownedCtxMenu || W.__agPrismContextMenu || GT.__agPrismContextMenu)?.destroy?.(); } catch {}
+const sc = streamChoreoCtl;
+for (const [o, k] of [[sc, 'cancelDeferredHydration'], [0, disposeActiveHomeStudio], [sc, 'flushAllStreamArtifacts'], [0, restoreAllHostAnimatedIcons], [smoothCaretCtl, 'teardown'], [prismRimCtl, 'teardown'], [rippleCtl, 'unmount'], [convAuraCtl, 'unmount'], [sc, 'clearWorkedForAutoUnfoldAttrs'], [0, unmountCrab], [0, restoreHostTurbo]]) try { o ? o[k]() : k(); } catch {}
       qa(D, `[${A_PB}]`).forEach((e) => { ra(e, A_PB); rp(e, '--ag-px'); rp(e, '--ag-py'); });
-      qa(D, '[data-ag-cs-effort]').forEach((e) => { ra(e, 'data-ag-cs-effort'); e[K_CL].remove('ag-cs-effort-badge'); });
+qa(D, '[data-ag-cs-effort]').forEach((e) => { ra(e, 'data-ag-cs-effort'); e[K_CL].remove('ag-cs-effort-badge'); });
       qa(D, `[${A_Q}],[${A_TK}]`).forEach((e) => { ra(e, A_Q); ra(e, A_TK); rp(e, 'margin-bottom'); });
-      qa(D, '[data-ag-row-stagger]').forEach((e) => { ra(e, 'data-ag-row-stagger'); rp(e, '--ag-row-i'); });
-      qa(D, '.agy-overlay,.agy-fastpick,[data-testid="context-menu-popup"],[data-testid="context-menu-submenu-popup"],[data-ag-cs-overview-shell]').forEach((e) => { rp(e, '--ag-origin-x'); rp(e, '--ag-origin-y'); });
-      for (const s of 'placeholder|orch-active|model-overlay|aux-dual|overview-shell|prism-mirror|prism-reflect|settings-dlg|settings-nav|nav-active|conv-seat|conv-ripple-host|vp-wrap|home-sheet|row-running|menu-open|auto-unfolded|outer-open|caustic|fiber-camp|pane-camp|sonar|stage-glide|liftoff-bubble|thought-streaming|spark-streaming|prism-cv|code-folded|bg-cmd-wrap|input-layer|hdr-open|rich-pre|glide-item|crab-anchor|bleed'.split('|')) {
-        const a = 'data-ag-cs-' + s;
+qa(D, '[data-ag-row-stagger]').forEach((e) => { ra(e, 'data-ag-row-stagger'); rp(e, '--ag-row-i'); });
+qa(D, '.agy-overlay,.agy-fastpick,[data-testid="context-menu-popup"],[data-testid="context-menu-submenu-popup"],[data-ag-cs-overview-shell]').forEach((e) => { rp(e, '--ag-origin-x'); rp(e, '--ag-origin-y'); });
+for (const s of 'placeholder|orch-active|model-overlay|aux-dual|overview-shell|prism-mirror|prism-reflect|settings-dlg|settings-nav|nav-active|conv-seat|conv-ripple-host|vp-wrap|home-sheet|row-running|menu-open|auto-unfolded|outer-open|caustic|fiber-camp|pane-camp|sonar|stage-glide|liftoff-bubble|thought-streaming|spark-streaming|prism-cv|code-folded|bg-cmd-wrap|input-layer|hdr-open|rich-pre|glide-item|crab-anchor|bleed'.split('|')) {
+const a = 'data-ag-cs-' + s;
         qa(D, `[${a}]`).forEach((e) => ra(e, a));
-      }
+}
       for (const a of ['data-has-sep', 'data-pv-warn', 'data-ag-sp-running']) qa(D, `[${a}]`).forEach((e) => ra(e, a));
-      try{getMascotHop()?.dispose?.(D);(W.__agPrismFontCustomizer||GT.__agPrismFontCustomizer)?.dispose?.(D);(W.__agPrismReducedMotionGuard||GT.__agPrismReducedMotionGuard)?.dispose?.(D);}catch{}
-      qa(D, '#ag-prism-mascot-hop-style,.ag-prism-mascot-hop-layer,#ag-prism-custom-fonts-style,#ag-prism-settings-ext-beta4-css,#ag-prism-settings-v101-css,#ag-prism-studio-v101-css,#ag-prism-omni-css,#ag-prism-motion-off-css,#ag-prism-periodic-picker-css,#ag-prism-periodic-picker-root,.ag-pp-hold-ring,.ag-pp-mini-keycap,#ag-prism-wallpaper-root,#ag-prism-wallpaper-css,#ag-prism-suggester-css,.ag-omni-dock,.ag-omni-menu,.ag-prism-omni-menu,.ag-prism-omni-pane,.ag-cs-ctx-menu,.ag-cs-ctx-toast,.ag-cs-sb-more-wrap,[data-ag-prism-omni-owned="1"],.ag-cs-home-panel,.ag-cs-home-panel-seat,.ag-cs-liftoff-veil,.ag-cs-sidebar-glide-pill,.ag-cs-pill-glide,.ag-cs-conv-aura-host,.ag-cs-conv-glow,.ag-cs-prism-rim-cv,.ag-cs-code-fold-btn,.ag-cs-nav-outline-popover,.ag-cs-model-glyph,.ag-cs-panel-row-glyph,[data-testid="orchestrator-effort-bar"],.ag-cs-thinking-spark,.ag-cs-orbital-backdrop,.ag-cs-perf-backdrop,.ag-v2-habitat-prop,#' + SETTINGS_SEC_ID).forEach((e) => e.remove());
-      const html = de();
-      if (html) {
-        for (const s of 'style|theme|palette|light-preset|motion|ignore-rm|target-fps|telemetry|effort-slider|thought-translate|home|composer|logo-ink|sidebar|sidebar-compact|sidebar-collapsed|sb-fold|has-crab|model-menu|takeover-open|lang|cjk|accent|corners|chat-font|code-font|ligatures|ambient|win-blur|scroll-bottom|resizing|mascot-drag|conv-ripple'.split('|')) ra(html, 'data-ag-cs-' + s);
-        for (const s of '|thought-view|omni|link-target|sidebar-studio|sidebar-host-sync'.split('|')) ra(html, s ? 'data-ag-prism-' + s : 'data-ag-prism');
-        rp(html, '--ag-spring-sidebar-ease'); rp(html, '--ag-spring-sidebar-dur');
-      }
-    },
-  };
-
-  W.__agPrism = prismRuntimeApi;
-  W.__agClaudeStyle = prismRuntimeApi;
-
-  if (de()) {
-    startLifecycle();
-  } else if (isFn(D.addEventListener)) {
-    const onReady = () => {
-      try {
-        if (de()) {
-          D.removeEventListener('readystatechange', onReady);
-          D.removeEventListener('DOMContentLoaded', onReady);
-          startLifecycle();
-        }
-      } catch {}
-    };
+try{getDomBus()?.dispose?.(D,W);getMascotHop()?.dispose?.(D);(W.__agPrismFontCustomizer||GT.__agPrismFontCustomizer)?.dispose?.(D);(W.__agPrismReducedMotionGuard||GT.__agPrismReducedMotionGuard)?.dispose?.(D);}catch{}
+qa(D, '#ag-prism-mascot-hop-style,.ag-prism-mascot-hop-layer,#ag-prism-custom-fonts-style,#ag-prism-settings-ext-beta4-css,#ag-prism-settings-v101-css,#ag-prism-studio-v101-css,#ag-prism-omni-css,#ag-prism-motion-off-css,#ag-prism-periodic-picker-css,#ag-prism-periodic-picker-root,.ag-pp-hold-ring,.ag-pp-mini-keycap,#ag-prism-wallpaper-root,#ag-prism-wallpaper-css,#ag-prism-suggester-css,.ag-omni-dock,.ag-omni-menu,.ag-prism-omni-menu,.ag-prism-omni-pane,.ag-cs-ctx-menu,.ag-cs-ctx-toast,.ag-cs-sb-more-wrap,[data-ag-prism-omni-owned="1"],.ag-cs-home-panel,.ag-cs-home-panel-seat,.ag-cs-liftoff-veil,.ag-cs-sidebar-glide-pill,.ag-cs-pill-glide,.ag-cs-conv-aura-host,.ag-cs-conv-glow,.ag-cs-prism-rim-cv,.ag-cs-code-fold-btn,.ag-cs-nav-outline-popover,.ag-cs-model-glyph,.ag-cs-panel-row-glyph,[data-testid="orchestrator-effort-bar"],.ag-cs-thinking-spark,.ag-cs-orbital-backdrop,.ag-cs-perf-backdrop,.ag-v2-habitat-prop,#' + SETTINGS_SEC_ID).forEach((e) => e.remove());
+const html = de();
+if (html) {
+ra(html, 'data-ag-perf-busy');
+for (const s of 'style|theme|palette|light-preset|motion|ignore-rm|perf-mode|stream-active|target-fps|telemetry|effort-slider|thought-translate|home|composer|logo-ink|sidebar|sidebar-compact|sidebar-collapsed|sb-fold|has-crab|model-menu|takeover-open|lang|cjk|accent|corners|chat-font|code-font|ligatures|ambient|win-blur|scroll-bottom|resizing|mascot-drag|conv-ripple'.split('|')) ra(html, 'data-ag-cs-' + s);
+for (const s of '|thought-view|omni|link-target|sidebar-studio|sidebar-host-sync'.split('|')) ra(html, s ? 'data-ag-prism-' + s : 'data-ag-prism');
+rp(html, '--ag-spring-sidebar-ease'); rp(html, '--ag-spring-sidebar-dur');
+}
+},
+};
+W.__agPrism = prismRuntimeApi;
+W.__agClaudeStyle = prismRuntimeApi;
+if (de()) {
+startLifecycle();
+} else if (isFn(D.addEventListener)) {
+const onReady = () => {
+try {
+if (de()) {
+D.removeEventListener('readystatechange', onReady);
+D.removeEventListener('DOMContentLoaded', onReady);
+startLifecycle();
+}
+} catch {}
+};
     D.addEventListener('readystatechange', onReady);
     D.addEventListener('DOMContentLoaded', onReady);
   }
