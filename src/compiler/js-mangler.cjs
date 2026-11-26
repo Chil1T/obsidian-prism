@@ -132,7 +132,12 @@ function mangleSafeLocals(tokens) {
       continue;
     }
     if (JS_KEYWORDS.has(name)) {
-      if (name !== 'in' && name !== 'of' && name !== 'typeof' && name !== 'void' && name !== 'new' && name !== 'await' && name !== 'extends') {
+      const exprSafe =
+        name === 'in' || name === 'of' || name === 'typeof' || name === 'void' || name === 'new' ||
+        name === 'await' || name === 'extends' || name === 'null' || name === 'true' || name === 'false' ||
+        name === 'this' || name === 'super' || name === 'delete' || name === 'instanceof' || name === 'async' ||
+        (name === 'function' && prev && (prev.val === '=' || prev.val === ',' || prev.val === ':' || prev.val === '(' || prev.val === '[' || prev.val === '?' || prev.val === '&&' || prev.val === '||' || prev.val === '??' || prev.val === 'async'));
+      if (!exprSafe) {
         declDepths.delete(bStack.length);
         pendingBraceKind = '';
       }
@@ -514,9 +519,12 @@ function mangleSafeLocals(tokens) {
   candidates.sort((a, b) => (b.c - b.sh) - (a.c - a.sh) || b.estSave - a.estSave);
 
   const renameMap = new Map();
+  let singleAvail = 53;
+  for (const id of existingIds) if (id.length === 1) singleAvail--;
+  for (const id of unsafe) if (id.length === 1 && !existingIds.has(id)) singleAvail--;
   for (const cand of candidates) {
-    const useSingle = cand.c - cand.sh >= 14;
-    const short = useSingle ? nextShortName() : nextTwoCharName();
+    const useSingle = singleAvail > 0 && cand.c - cand.sh >= 2;
+    const short = useSingle ? (singleAvail--, nextShortName()) : nextTwoCharName();
     const realSave = (cand.c - cand.sh) * (cand.name.length - short.length) - cand.sh * (1 + short.length);
     if (realSave >= 2) {
       renameMap.set(cand.name, short);

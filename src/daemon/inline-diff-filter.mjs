@@ -59,6 +59,15 @@ export function hasDotDotPathSegment(rawPath) {
   return parts.some((seg) => seg === '..');
 }
 
+function isAllowedGeminiSubpath(segs, geminiIdx) {
+  if (geminiIdx + 3 >= segs.length) return false;
+  const s1 = segs[geminiIdx + 1];
+  const s2 = segs[geminiIdx + 2];
+  if (s1 === 'config' && (s2 === 'skills' || s2 === 'rules' || s2 === 'plugins')) return true;
+  if (s1 === 'antigravity' && (s2 === 'worktrees' || s2 === 'brain')) return true;
+  return false;
+}
+
 export function isSensitiveInlineDiffPath(filePath) {
   if (typeof filePath !== 'string' || !filePath) return true;
   let normalized = filePath.replace(/\\/g, '/');
@@ -73,7 +82,7 @@ export function isSensitiveInlineDiffPath(filePath) {
   for (const b of basesToCheck) {
     if (b.startsWith('.env')) return true;
     if (b.endsWith('_history')) return true;
-    if (b.startsWith('obsidian-prism-thought') && (b.endsWith('.json') || b.endsWith('.json.tmp'))) {
+    if (/^obsidian-prism-(?:thought|suggester|wallpaper)/.test(b) && (b.endsWith('.json') || b.endsWith('.json.tmp'))) {
       return true;
     }
     if (INLINE_DIFF_SENSITIVE_BASENAMES.has(b)) return true;
@@ -93,6 +102,10 @@ export function isSensitiveInlineDiffPath(filePath) {
   const segs = lower.split('/').filter(Boolean);
   for (let i = 0; i < segs.length; i += 1) {
     const seg = segs[i];
+    if (seg === '.gemini') {
+      if (!isAllowedGeminiSubpath(segs, i)) return true;
+      continue;
+    }
     if (INLINE_DIFF_SENSITIVE_DIRS.has(seg)) return true;
     if (i < segs.length - 1 && seg === '.git') return true;
     if (seg === 'thought-translator' && basesToCheck.some((b) => b.endsWith('.json'))) return true;

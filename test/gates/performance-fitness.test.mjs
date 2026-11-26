@@ -8,7 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const ROOT = path.resolve(import.meta.dirname, '..');
+const ROOT = path.resolve(import.meta.dirname, '..', '..');
 
 function makeClock(startNow = 1000) {
   let now = startNow;
@@ -888,7 +888,7 @@ test('Performance Fitness 6: profile-live-perf CLI --help smoke, expression safe
   assert.ok(helpOut.includes('profile-live-perf') && helpOut.includes('--duration') && helpOut.includes('Runtime.evaluate'));
 
   // 6b) 只读表达式在沙盒内可干净执行且无副作用
-  const profMod = await import('../scripts/profile-live-perf.mjs');
+  const profMod = await import('../../scripts/profile-live-perf.mjs');
   const expr = profMod.buildPerfSampleExpression(500);
   const sample = await vm.runInNewContext(expr, {
     performance: { now: () => 1000, memory: { usedJSHeapSize: 104857600, totalJSHeapSize: 157286400, jsHeapSizeLimit: 2147483648 } },
@@ -905,7 +905,7 @@ test('Performance Fitness 6: profile-live-perf CLI --help smoke, expression safe
   assert.ok(cdp.RUNTIME_PARTS.includes('src/runtime/ripple-worker.js'), 'RUNTIME_PARTS must include src/runtime/ripple-worker.js');
   assert.ok(cdp.REMOVE_EXPRESSION.includes('__agPrismRippleWorker') && cdp.REMOVE_EXPRESSION.includes('disposeAll'), 'REMOVE_EXPRESSION must dispose and delete __agPrismRippleWorker');
 
-  const { collectNativePluginEntries } = await import('../scripts/build-common.mjs');
+  const { collectNativePluginEntries } = await import('../../scripts/build-common.mjs');
   const entries = new Set(collectNativePluginEntries(path.join(ROOT, 'config.example.json')).map((e) => e.name));
   assert.ok(entries.has('native-plugin/src/runtime/ripple-worker.js'), 'Win/macOS/Linux collectNativePluginEntries must auto-include src/runtime/ripple-worker.js');
 
@@ -1012,4 +1012,109 @@ test('Performance Fitness 7: ui-runtime resolveHomeStudioCtl disposes and recrea
   api.sync();
   assert.equal(created.length, 2);
   api.destroy();
+});
+
+// ── 8: R2 永久性能红线门禁（V8 .prop IC / 0 preserveDrawingBuffer:true / 暗色 CSS <180KB + wallpaper 不写 html.style / Canvas 瘦身 + stub <2KB）──
+test('Performance Fitness 8 (R2 Permanent Redlines): V8 .prop IC lock, 0 preserveDrawingBuffer:true, dark CSS <180KB + wallpaper no html.style, lazy miniCrabs + single-canvas vial + stub <2KB', () => {
+  const cdp = require(path.join(ROOT, 'cdp.js'));
+  const cssPack = require(path.join(ROOT, 'src', 'compiler', 'css-pack.cjs'));
+  const cssFlatten = require(path.join(ROOT, 'src', 'compiler', 'css-flatten.cjs'));
+  const ch1BundleSrc = fs.readFileSync(path.join(ROOT, 'src', 'compiler', 'ch1-bundle.cjs'), 'utf8');
+
+  // 8a) Ch1 热路径 3 模块与核心延迟通道永久禁用 .prop 池化
+  for (const hotPart of ['src/runtime/dom-bus.js', 'stream-choreography.js', 'ui-runtime.js']) {
+    assert.ok(ch1BundleSrc.includes(`'${hotPart}'`), `CH1_NO_MEMBER_PROP_POOL_PARTS must permanently lock ${hotPart}`);
+  }
+  const ch1Expr = cdp.buildInjectExpression({ ...cdp.DEFAULT_CONFIG, language: 'auto' }, { noDiskCache: true });
+  assert.ok(ch1Expr.includes('.addEventListener(') && ch1Expr.includes('.querySelector('), 'Ch1 hot DOM modules must preserve native .prop V8 IC');
+  const omniExpr = cdp.buildOmniClientExpression(null, null, { noDiskCache: true });
+  assert.ok(omniExpr.includes('.addEventListener('), 'Core delayed channel omni must preserve native .prop V8 IC');
+  const diffExpr = cdp.buildInlineDiffInjectExpression(cdp.DEFAULT_CONFIG, { noDiskCache: true });
+  assert.ok(diffExpr.includes('.addEventListener('), 'Core delayed channel inlineDiff must preserve native .prop V8 IC');
+
+  // 8b) 全仓 0 处 preserveDrawingBuffer: true，且所有运行期 WebGL2 上下文显式声明 preserveDrawingBuffer: false
+  const webglRuntimeFiles = [
+    'ripple-core.js',
+    'src/runtime/ripple-worker.js',
+    'crystal-prism-core.js',
+    'vial-core.js',
+    'vendor/periodic-picker/keyboard-3d-gl.js',
+  ];
+  for (const rel of webglRuntimeFiles) {
+    const src = fs.readFileSync(path.join(ROOT, rel), 'utf8');
+    assert.equal(/preserveDrawingBuffer\s*:\s*true/.test(src), false, `${rel} must NEVER use preserveDrawingBuffer: true`);
+    assert.ok(/preserveDrawingBuffer\s*:\s*false/.test(src), `${rel} must explicitly specify preserveDrawingBuffer: false`);
+  }
+  const walkCode = (dir) => {
+    for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (ent.name === 'node_modules' || ent.name === '.git' || ent.name === 'test' || ent.name === 'dist') continue;
+      const full = path.join(dir, ent.name);
+      if (ent.isDirectory()) walkCode(full);
+      else if (/\.(?:js|mjs|cjs)$/.test(ent.name)) {
+        const s = fs.readFileSync(full, 'utf8');
+        assert.equal(/preserveDrawingBuffer\s*:\s*true/.test(s), false, `${path.relative(ROOT, full)} must contain 0 preserveDrawingBuffer: true`);
+      }
+    }
+  };
+  walkCode(ROOT);
+
+  // 8c) 暗色对话态激活 CSS < 180 KB 且 wallpaper-client.js 变量不写 html.style
+  const rawCss = fs.readFileSync(path.join(ROOT, 'style.css'), 'utf8');
+  const flatMin = cssPack.minifyCss(cssFlatten.flattenNestedCss(cssPack.minifyCss(rawCss)));
+  const buckets = cssPack.splitCssIntoBuckets(flatMin);
+  const darkChatActiveBytes = ['core', 'viewSidebar', 'motionFull'].reduce((sum, k) => sum + Buffer.byteLength(buckets[k] || '', 'utf8'), 0);
+  assert.ok(darkChatActiveBytes < 180 * 1024, `Dark-chat active CSS (${darkChatActiveBytes} B) must stay strictly < 180 KB`);
+
+  const wpMod = require(path.join(ROOT, 'vendor', 'wallpaper', 'wallpaper-client.js'));
+  const wpDoc = { hidden: false };
+  const wpHtml = makeFakeElement('html', wpDoc);
+  const wpHead = makeFakeElement('head', wpDoc);
+  const wpBody = makeFakeElement('body', wpDoc);
+  wpHtml.appendChild(wpHead);
+  wpHtml.appendChild(wpBody);
+  wpDoc.documentElement = wpHtml;
+  wpDoc.head = wpHead;
+  wpDoc.body = wpBody;
+  wpDoc.createElement = (t) => makeFakeElement(t, wpDoc);
+  wpDoc.getElementById = (id) => {
+    const walk = (n) => {
+      if (n.id === id) return n;
+      for (const c of n.children || []) { const r = walk(c); if (r) return r; }
+      return null;
+    };
+    return walk(wpHtml);
+  };
+  wpDoc.querySelector = () => null;
+  wpDoc.querySelectorAll = () => [];
+  const wp = wpMod.createWallpaperClient({ window: { document: wpDoc, addEventListener() {}, removeEventListener() {} }, document: wpDoc });
+  wp.applyConfig({ enabled: true, mediaPath: 'C:/wp.png', mediaType: 'image', mediaUrl: 'http://127.0.0.1:45555/wp/1', opacity: 0.4, blurPx: 4, dimOverlay: 0.25, fit: 'cover', rev: 1 });
+  for (const prop of ['--ag-prism-wp-opacity', '--ag-prism-wp-blur', '--ag-prism-wp-filter', '--ag-prism-wp-dim', '--ag-prism-wp-fit']) {
+    assert.equal(wpHtml.style[prop], undefined, `wallpaper-client.js must NEVER write ${prop} onto html.style`);
+  }
+  const wpRoot = wpDoc.getElementById('ag-prism-wallpaper-root');
+  assert.ok(wpRoot && wpRoot.style['--ag-prism-wp-opacity'] === '0.4', 'wallpaper-client.js must sink --ag-prism-wp-* onto #ag-prism-wallpaper-root');
+  wp.destroy();
+
+  // 8d) dual-mascot-rig miniCrabs 惰性 0 Canvas + vial-core 单 Canvas 纹理叠加 0 drawImage + periodic-picker-stub.js < 2048 B
+  const rig = require(path.join(ROOT, 'dual-mascot-rig.js'));
+  const mDoc = { hidden: false };
+  const mHtml = makeFakeElement('html', mDoc);
+  mDoc.documentElement = mHtml;
+  mDoc.defaultView = { devicePixelRatio: 1, addEventListener() {}, removeEventListener() {} };
+  mDoc.createElement = (t) => makeFakeElement(t, mDoc);
+  mDoc.addEventListener = () => {};
+  mDoc.removeEventListener = () => {};
+  const mHost = makeFakeElement('div', mDoc);
+  const stage = rig.mountDualMascotStage(mHost, { miniPileEnabled: false, reducedMotion: true });
+  const miniGroup = mHost.children.find((n) => n.className === 'ag-v2-mini-pile');
+  assert.ok(miniGroup && miniGroup.children.length === 0, 'dual-mascot-rig miniCrabs must create strictly 0 <canvas> when disabled');
+  stage.dispose();
+
+  const vialSrc = fs.readFileSync(path.join(ROOT, 'vial-core.js'), 'utf8');
+  assert.ok(vialSrc.includes('u_scaleTex'), 'vial-core.js must composite scale marks via single-canvas u_scaleTex texture overlay');
+  assert.equal(/\.drawImage\s*\(\s*glCanvas/.test(vialSrc), false, 'vial-core.js must perform 0 ctx2d.drawImage(glCanvas) copies');
+
+  const stubPath = path.join(ROOT, 'vendor', 'periodic-picker', 'periodic-picker-stub.js');
+  const stubBytes = fs.statSync(stubPath).size;
+  assert.ok(stubBytes < 2048, `periodic-picker-stub.js (${stubBytes} B) must stay strictly < 2048 B`);
 });
