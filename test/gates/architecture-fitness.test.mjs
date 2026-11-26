@@ -92,7 +92,7 @@ const LEGACY_SIZE_RATCHET = Object.freeze({
   'settings-panel.js': { maxLines: 3709, maxBytes: 187138 },
   'sidecars/daemon/addon-registry.mjs': { maxLines: 1247, maxBytes: 44160 },
   'sidecars/daemon/conversation-archive.mjs': { maxLines: 3618, maxBytes: 139431 },
-  'sidecars/daemon/main.mjs': { maxLines: 12094, maxBytes: 518718 },
+  'sidecars/daemon/main.mjs': { maxLines: 180, maxBytes: 10240 },
   'sidecars/daemon/update-service.mjs': { maxLines: 821, maxBytes: 27675 },
   'stream-choreography.js': { maxLines: 1775, maxBytes: 67500 },
   'style.css': { maxLines: 860, maxBytes: 209554 },

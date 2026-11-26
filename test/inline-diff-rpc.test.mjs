@@ -550,12 +550,11 @@ test('inline-diff-rpc 4: PrismDaemon registers INLINE_DIFF_BINDING regardless of
     await inFlightDestroy;
     assert.equal(evalCalls.length, 0, 'Context destruction during await must suppress Runtime.evaluate writeback');
 
-    // 6) Static CodeQL hygiene verification on inline diff implementation in main.mjs
-    const mainSrc = fs.readFileSync(path.join(ROOT_DIR, 'sidecars', 'daemon', 'main.mjs'), 'utf8');
-    const diffFnStart = mainSrc.indexOf('function execGitInlineDiff(');
-    const diffFnEnd = mainSrc.indexOf('export function resolvePortFileCandidates()');
-    assert.ok(diffFnStart > 0 && diffFnEnd > diffFnStart);
-    const diffSection = mainSrc.slice(diffFnStart, diffFnEnd);
+    // 6) Static CodeQL hygiene verification on inline diff implementation in src/daemon/inline-diff-service.mjs
+    const diffSrc = fs.readFileSync(path.join(ROOT_DIR, 'src', 'daemon', 'inline-diff-service.mjs'), 'utf8');
+    const diffFnStart = diffSrc.indexOf('function execGitInlineDiff(');
+    assert.ok(diffFnStart > 0);
+    const diffSection = diffSrc.slice(diffFnStart);
     assert.ok(diffSection.includes("execFile(\n      'git',"), 'Inline diff must execute git via execFile');
     assert.equal(diffSection.includes('shell: true'), false, 'Inline diff git execution must never enable shell: true');
     assert.equal(/(?<!\.)\b(?:exec|execSync)\s*\(/.test(diffSection), false, 'Inline diff must use execFile, never shell exec()');

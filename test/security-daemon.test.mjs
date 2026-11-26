@@ -529,10 +529,10 @@ test('security-daemon 6: writeFileAtomicSync rejects symlink parent directory an
     }
 
     // 静态核验 Windows copyFileSync 回退分支前存在父目录与目标文件 lstatSync 符号链接守卫
-    const mainSrc = fs.readFileSync(path.join(ROOT_DIR, 'sidecars', 'daemon', 'main.mjs'), 'utf8');
-    const copyIdx = mainSrc.indexOf('fs.copyFileSync(tmpPath, resolvedTarget)');
+    const fsAtomicSrc = fs.readFileSync(path.join(ROOT_DIR, 'src', 'daemon', 'fs-atomic.mjs'), 'utf8');
+    const copyIdx = fsAtomicSrc.indexOf('fs.copyFileSync(tmpPath, resolvedTarget)');
     assert.ok(copyIdx > 0, '应保留 Windows copyFileSync 回退逻辑');
-    const beforeCopyWindow = mainSrc.slice(Math.max(0, copyIdx - 220), copyIdx);
+    const beforeCopyWindow = fsAtomicSrc.slice(Math.max(0, copyIdx - 220), copyIdx);
     assert.ok(
       beforeCopyWindow.includes("assertNotSymlinkSync(dir, 'target directory')") &&
         beforeCopyWindow.includes("assertNotSymlinkSync(resolvedTarget, 'target file')"),
@@ -1833,10 +1833,10 @@ test('security-daemon 26: daemon.log and watch.log enforce 0o600 permissions and
     assert.match(written, /<USER_HOME>/);
     assert.equal(written.includes('sk-abc123456789'), false);
 
-    // 静态验证 daemon.log (main.mjs) 与 watch.log (inject.js) 落盘均显式设置 mode: 0o600
-    const mainSrc = fs.readFileSync(path.join(ROOT_DIR, 'sidecars', 'daemon', 'main.mjs'), 'utf8');
+    // 静态验证 daemon.log (src/daemon/logger.mjs) 与 watch.log (inject.js) 落盘均显式设置 mode: 0o600
+    const loggerSrc = fs.readFileSync(path.join(ROOT_DIR, 'src', 'daemon', 'logger.mjs'), 'utf8');
     const injectSrc = fs.readFileSync(path.join(ROOT_DIR, 'inject.js'), 'utf8');
-    assert.match(mainSrc, /appendFileSync\(this\.logFile,[\s\S]{0,120}mode:\s*0o600/);
+    assert.match(loggerSrc, /appendFileSync\(this\.logFile,[\s\S]{0,120}mode:\s*0o600/);
     assert.match(injectSrc, /appendFileSync\(LOG_FILE,[\s\S]{0,120}mode:\s*0o600/);
   } finally {
     fs.rmSync(workDir, { recursive: true, force: true });
@@ -1844,15 +1844,17 @@ test('security-daemon 26: daemon.log and watch.log enforce 0o600 permissions and
 });
 
 test('security-daemon 27: build-common, install-plugin.cjs and copyUpdatedRuntimeFromRepo all package/sync src/ runtime modules', () => {
-  // 1) build-common.mjs collectNativePluginEntries 包含 src/daemon/uninstall-runner.mjs 等核心模块
+  // 1) build-common.mjs collectNativePluginEntries 包含 src/daemon/* 全部核心模块
   const entries = collectNativePluginEntries();
   const relSet = new Set(
     entries.map((e) => String(e?.name || '').replace(/\\/g, '/').replace(/^native-plugin\//, ''))
   );
+  const allSrcDaemonModules = fs
+    .readdirSync(path.join(ROOT_DIR, 'src', 'daemon'))
+    .filter((f) => f.endsWith('.mjs') || f.endsWith('.cjs'))
+    .map((f) => `src/daemon/${f}`);
   for (const requiredRel of [
-    'src/daemon/uninstall-runner.mjs',
-    'src/daemon/quota-guard.mjs',
-    'src/daemon/run-in-bg-recovery.cjs',
+    ...allSrcDaemonModules,
     'src/security/net-guard.mjs',
     'src/security/win-picker.mjs',
   ]) {
