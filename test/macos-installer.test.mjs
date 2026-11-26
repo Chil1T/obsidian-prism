@@ -576,6 +576,13 @@ test(
 
       execFileSync('codesign', ['--verify', '--deep', '--strict', appPath], { stdio: 'inherit' });
 
+      // Verify compiled universal watcher launch-guard policy state machine (--self-test-launch-guard)
+      const guardSelfTestOut = execFileSync(watcherBundleBin, ['--self-test-launch-guard'], {
+        encoding: 'utf8',
+        timeout: 10000,
+      }).trim();
+      assert.equal(guardSelfTestOut, 'LAUNCH_GUARD_SELF_TEST_OK');
+
       const port = await mockCdp.start();
 
       // 1. Check --status CLI
@@ -1024,14 +1031,16 @@ test('macOS lossless wrapper launcher: sandbox creation, Info.plist/marker/scrip
   }
 });
 
-test('macOS Swift Setup lossless launcher & Issue #37 100% bilingual i18n contracts across Setup, Watcher, and CdpClient', () => {
+test('macOS Swift Setup lossless launcher & Issue #37 100% bilingual i18n contracts across Setup, Watcher, CdpClient, and LaunchGuard', () => {
   const cdpSwift = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'macos', 'Common', 'CdpClient.swift'), 'utf8');
+  const launchGuardSwift = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'macos', 'Common', 'LaunchGuard.swift'), 'utf8');
   const setupSwift = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'macos', 'Setup', 'main.swift'), 'utf8');
   const watcherSwift = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'macos', 'Watcher', 'main.swift'), 'utf8');
 
-  // 1) Pure LF & no UTF-8 BOM on all three Swift sources
+  // 1) Pure LF & no UTF-8 BOM on all four Swift sources
   for (const [name, src] of [
     ['CdpClient.swift', cdpSwift],
+    ['LaunchGuard.swift', launchGuardSwift],
     ['Setup/main.swift', setupSwift],
     ['Watcher/main.swift', watcherSwift],
   ]) {
@@ -1081,9 +1090,10 @@ test('macOS Swift Setup lossless launcher & Issue #37 100% bilingual i18n contra
     'Setup verify-cdp must recognize both Chinese and English watcher injection log entries'
   );
 
-  // 4) Zero unwrapped Chinese user-visible strings across all 3 Swift files
+  // 4) Zero unwrapped Chinese user-visible strings across all 4 Swift files
   for (const [name, src] of [
     ['CdpClient.swift', cdpSwift],
+    ['LaunchGuard.swift', launchGuardSwift],
     ['Setup/main.swift', setupSwift],
     ['Watcher/main.swift', watcherSwift],
   ]) {
@@ -1191,4 +1201,71 @@ test('Phase 4A P0: macOS Swift CdpClient fixes bundleUnchanged and integrates st
   for (const id of ['telemetry', 'effortSlider', 'workbenchEnhancer', 'contextMenu']) {
     assert.equal(manifestPaths.has(`runtime-channels/${id}.js`), true, `macOS install-manifest.json must include runtime-channels/${id}.js`);
   }
+});
+
+test('macOS Cold-start event-driven Launch Guard (default-on with opt-out): LaunchGuard.swift, NSWorkspace observer, double-layer circuit breaker, native quit, healthy-CDP guard, and schema SSOT contracts', () => {
+  const cdpSwift = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'macos', 'Common', 'CdpClient.swift'), 'utf8');
+  const launchGuardSwift = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'macos', 'Common', 'LaunchGuard.swift'), 'utf8');
+  const setupSwift = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'macos', 'Setup', 'main.swift'), 'utf8');
+  const watcherSwift = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'macos', 'Watcher', 'main.swift'), 'utf8');
+  const buildMacosSrc = fs.readFileSync(path.join(ROOT_DIR, 'scripts', 'build-macos.mjs'), 'utf8');
+  const schemaSrc = fs.readFileSync(path.join(ROOT_DIR, 'src', 'config', 'schema.cjs'), 'utf8');
+
+  // 1) src/config/schema.cjs SSOT & cdp.js facade config validation (strict optional boolean toggle)
+  assert.ok(schemaSrc.includes('autoRelaunchOnBareLaunch:'), 'autoRelaunchOnBareLaunch must be registered in src/config/schema.cjs');
+  assert.deepEqual(cdp.CONFIG_SCHEMA.autoRelaunchOnBareLaunch, {
+    type: 'boolean',
+    optional: true,
+    strictBoolean: true,
+    inValidators: false,
+  });
+  assert.equal(Object.prototype.hasOwnProperty.call(cdp.DEFAULT_CONFIG, 'autoRelaunchOnBareLaunch'), false);
+  assert.equal(cdp.validateConfigEntry('autoRelaunchOnBareLaunch', true), true);
+  assert.equal(cdp.validateConfigEntry('autoRelaunchOnBareLaunch', false), true);
+  assert.equal(cdp.validateConfigEntry('autoRelaunchOnBareLaunch', 'always'), false);
+  assert.equal(cdp.validateConfigEntry('autoRelaunchOnBareLaunch', 'on'), false);
+  assert.equal(cdp.validateConfigEntry('autoRelaunchOnBareLaunch', 1), false);
+
+  // 2) LaunchGuard.swift policy, NSWorkspace observer, healthy-CDP guard, native quit & safety redlines
+  assert.ok(launchGuardSwift.includes('struct BareLaunchRelaunchPolicy'), 'LaunchGuard.swift defines BareLaunchRelaunchPolicy');
+  assert.ok(launchGuardSwift.includes('mutating func recordCdpConfirmed() -> Bool'), 'Policy clears unconfirmed cooldown on confirmed CDP launch');
+  assert.ok(launchGuardSwift.includes('case skipUnconfirmedCooldown'), 'Policy exposes unconfirmed cooldown decision');
+  assert.ok(launchGuardSwift.includes('case skipBurstLimit'), 'Policy exposes sliding burst-window circuit breaker');
+  assert.ok(launchGuardSwift.includes('defaultMaxColdStartUptimeMs: Int64 = 5000'), 'Policy enforces <=5s cold-start window gate');
+  assert.ok(launchGuardSwift.includes('static func hasRemoteDebuggingPortFlag('), 'LaunchGuard.swift defines word-boundary CDP flag matcher');
+  assert.ok(launchGuardSwift.includes('static func isHostPluginExplicitlyDisabled('), 'LaunchGuard.swift checks host config.json plugin enabled flag');
+  assert.ok(launchGuardSwift.includes('static func requestNativeGracefulQuit(pid: Int32) -> Bool'), 'LaunchGuard.swift supports native NSRunningApplication.terminate()');
+  assert.ok(launchGuardSwift.includes('NSWorkspace.didLaunchApplicationNotification'), 'LaunchGuard listens to NSWorkspace launch notifications');
+  assert.ok(launchGuardSwift.includes('nsApp.setActivationPolicy(.prohibited)'), 'LaunchGuard keeps zero Dock icon / zero focus steal');
+  assert.ok(launchGuardSwift.includes('isAutoRelaunchOnBareLaunchEnabled('), 'LaunchGuard checks config/CLI/env before silent auto-relaunch');
+  assert.ok(launchGuardSwift.includes('findRunningAntigravityWithCdp(appPath: bundlePath)'), 'LaunchGuard skips silent relaunch if a healthy CDP Antigravity instance is already running');
+  assert.ok(launchGuardSwift.includes('promptExplicitlyDisabled'), 'LaunchGuard respects legacy autoPromptCdpRelaunch: false when autoRelaunchOnBareLaunch is unset');
+  assert.ok(launchGuardSwift.includes('SSH_CONNECTION') && launchGuardSwift.includes('SSH_TTY'), 'LaunchGuard skips NSApplication/NSWorkspace observer in headless SSH sessions');
+  assert.ok(launchGuardSwift.includes('LAUNCH_GUARD_SELF_TEST_OK'), 'LaunchGuard provides self-test sentinel');
+  assert.equal(launchGuardSwift.includes('forceTerminate'), false, 'LaunchGuard must never call forceTerminate()');
+  assert.equal(launchGuardSwift.includes('SIGKILL'), false, 'LaunchGuard must never use SIGKILL');
+  assert.equal(launchGuardSwift.includes('app.asar'), false, 'LaunchGuard must never touch app.asar');
+
+  // 3) CdpClient.swift fail-closed abortIfStillAlive & native-quit first before AppleScript fallback
+  assert.ok(cdpSwift.includes('abortIfStillAlive: Bool = false'), 'relaunchAntigravityWithCdp supports fail-closed abortIfStillAlive for silent relaunch');
+  assert.ok(cdpSwift.includes('requestNativeGracefulQuit(pid: host.pid)'), 'relaunchAntigravityWithCdp tries native NSRunningApplication.terminate() first');
+  assert.ok(cdpSwift.includes('if abortIfStillAlive {'), 'relaunchAntigravityWithCdp aborts safely on timeout when abortIfStillAlive is true');
+
+  // 4) Watcher/main.swift observer orchestration, in-flight coordination & CLI flags
+  assert.ok(watcherSwift.includes('autoRelaunchInFlight'), 'Watcher coordinates event guard and polling prompt loop');
+  assert.ok(watcherSwift.includes('LaunchGuard.runWatchWithOptionalObserver('), 'Watcher runs main watch loop via LaunchGuard observer orchestrator');
+  assert.ok(watcherSwift.includes('LaunchGuard.runSelfTest()'), 'Watcher routes --self-test-launch-guard to LaunchGuard.runSelfTest()');
+  assert.ok(watcherSwift.includes('"--auto-relaunch"') && watcherSwift.includes('"--no-auto-relaunch"'), 'Watcher accepts --auto-relaunch / --no-auto-relaunch');
+  assert.ok(watcherSwift.includes('"--self-test-launch-guard"'), 'Watcher exposes --self-test-launch-guard');
+
+  // 5) Setup/main.swift default-on cold-start guard with --no-auto-relaunch opt-out & Aqua/Background LaunchAgent keys
+  assert.ok(setupSwift.includes('var noAutoRelaunch = false'), 'Setup enables cold-start auto-relaunch by default with opt-out');
+  assert.ok(setupSwift.includes('"--auto-relaunch"') && setupSwift.includes('"--no-auto-relaunch"'), 'Setup supports --auto-relaunch / --no-auto-relaunch');
+  assert.ok(setupSwift.includes('CdpHelper.buildWatcherWatchArgs('), 'Setup uses shared buildWatcherWatchArgs helper');
+  assert.match(setupSwift, /<key>LimitLoadToSessionType<\/key>\s*<string>Aqua<\/string>/, 'LaunchAgent limits load to Aqua GUI session');
+  assert.match(setupSwift, /<key>ProcessType<\/key>\s*<string>Background<\/string>/, 'LaunchAgent sets ProcessType to Background');
+
+  // 6) build-macos.mjs compiles LaunchGuard.swift into watcher & setup and links AppKit for Universal Watcher binary
+  assert.ok(buildMacosSrc.includes('LaunchGuard.swift'), 'build-macos.mjs compiles LaunchGuard.swift into watcher & setup');
+  assert.ok(buildMacosSrc.includes("frameworks: ['AppKit']"), 'build-macos.mjs links AppKit for watcher binary');
 });

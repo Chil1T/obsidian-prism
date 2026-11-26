@@ -1223,7 +1223,7 @@ enum CdpHelper {
         return Int64(Date().timeIntervalSince1970 * 1000.0)
     }
 
-    private static func parseBsdElapsedSeconds(_ raw: String) -> Int64 {
+    static func parseBsdElapsedSeconds(_ raw: String) -> Int64 {
         let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if s.isEmpty { return 0 }
         var days: Int64 = 0
@@ -1302,34 +1302,6 @@ enum CdpHelper {
         }
     }
 
-    private static func stateFileMatchesHost(filePath: String, hostPid: Int32, startTimeMs: Int64) -> Bool {
-        guard !filePath.isEmpty, hostPid > 0,
-              let raw = try? String(contentsOfFile: filePath, encoding: .utf8) else { return false }
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return false }
-        guard let obj = try? MiniJson.parseObject(trimmed) else { return false }
-        let expectedKey = "\(hostPid):\(startTimeMs)"
-        let pidPrefix = "\(hostPid):"
-        if let hk = obj["hostKey"]?.stringValue {
-            if hk == expectedKey { return true }
-            if startTimeMs <= 0 && hk.hasPrefix(pidPrefix) { return true }
-        }
-        if let k = obj["key"]?.stringValue {
-            if k == expectedKey { return true }
-            if startTimeMs <= 0 && k.hasPrefix(pidPrefix) { return true }
-        }
-        if let savedPid = obj["hostPid"]?.intValue, Int32(savedPid) == hostPid {
-            let savedStart: Int64
-            if case .int(let s1)? = obj["hostStartMs"] { savedStart = s1 }
-            else if case .int(let s2)? = obj["startTimeMs"] { savedStart = s2 }
-            else { savedStart = 0 }
-            if savedStart <= 0 || startTimeMs <= 0 || abs(savedStart - startTimeMs) <= 15000 {
-                return true
-            }
-        }
-        return false
-    }
-
     static func hasPromptedForHost(pid: Int32, startTimeMs: Int64, installDir: String, pluginDir: String) -> Bool {
         guard pid > 0 else { return true }
         if !pluginDir.isEmpty {
@@ -1362,7 +1334,7 @@ enum CdpHelper {
         }
     }
 
-    private static func escapeAppleScriptString(_ s: String) -> String {
+    static func escapeAppleScriptString(_ s: String) -> String {
         return s
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
@@ -1564,31 +1536,34 @@ enum CdpHelper {
     }
 
     @discardableResult
-    static func relaunchAntigravityWithCdp(host: BareHostAppInfo, waitExitMs: Int = 15000, log: ((String) -> Void)? = nil) -> Bool {
+    static func relaunchAntigravityWithCdp(host: BareHostAppInfo, waitExitMs: Int = 15000, abortIfStillAlive: Bool = false, log: ((String) -> Void)? = nil) -> Bool {
         guard host.pid > 0 else { return false }
         let normalizedAppPath = normalizeAntigravityAppPath(host.appPath)
         let appBaseName = (normalizedAppPath as NSString).lastPathComponent
 
-        let quitScript: String
-        if normalizedAppPath == "/Applications/Antigravity.app" ||
-           appBaseName.caseInsensitiveCompare("Antigravity.app") == .orderedSame {
-            quitScript = "tell application \"Antigravity\" to quit"
-        } else {
-            let escapedPath = escapeAppleScriptString(normalizedAppPath)
-            quitScript = "tell application (POSIX file \"\(escapedPath)\" as text) to quit"
+        // Prefer native NSRunningApplication.terminate() to avoid macOS AppleEvents TCC prompts;
+        // fall back to AppleScript quit and SIGTERM if unavailable.
+        var quitSent = requestNativeGracefulQuit(pid: host.pid)
+        if !quitSent {
+            let quitScript: String
+            if normalizedAppPath == "/Applications/Antigravity.app" ||
+               appBaseName.caseInsensitiveCompare("Antigravity.app") == .orderedSame {
+                quitScript = "tell application \"Antigravity\" to quit"
+            } else {
+                let escapedPath = escapeAppleScriptString(normalizedAppPath)
+                quitScript = "tell application (POSIX file \"\(escapedPath)\" as text) to quit"
+            }
+            let quitProc = Process()
+            quitProc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            quitProc.arguments = ["-e", quitScript]
+            quitProc.standardOutput = FileHandle.nullDevice
+            quitProc.standardError = FileHandle.nullDevice
+            do {
+                try quitProc.run()
+                quitProc.waitUntilExit()
+                quitSent = (quitProc.terminationStatus == 0)
+            } catch {}
         }
-
-        let quitProc = Process()
-        quitProc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        quitProc.arguments = ["-e", quitScript]
-        quitProc.standardOutput = FileHandle.nullDevice
-        quitProc.standardError = FileHandle.nullDevice
-        var quitSent = false
-        do {
-            try quitProc.run()
-            quitProc.waitUntilExit()
-            quitSent = (quitProc.terminationStatus == 0)
-        } catch {}
         if !quitSent && kill(host.pid, 0) == 0 {
             _ = kill(host.pid, SIGTERM)
         }
@@ -1627,6 +1602,13 @@ enum CdpHelper {
         }
 
         if !aliveFamilyPids.isEmpty || lockHeld {
+            if abortIfStillAlive {
+                log?(InstallerI18n.tr(
+                    "等待 Antigravity 退净超时（残留进程数=\(aliveFamilyPids.count)，SingletonLock占用=\(lockHeld)），已安全中止自动重开",
+                    "Timed out waiting for Antigravity to exit (remaining=\(aliveFamilyPids.count), SingletonLockHeld=\(lockHeld)); aborting auto-relaunch safely"
+                ))
+                return false
+            }
             log?(InstallerI18n.tr(
                 "等待 Antigravity 退净超时（残留进程数=\(aliveFamilyPids.count)，SingletonLock占用=\(lockHeld)），仍将尝试以新实例拉起",
                 "Timed out waiting for Antigravity to fully exit (remaining=\(aliveFamilyPids.count), SingletonLockHeld=\(lockHeld)); proceeding with new instance launch"
