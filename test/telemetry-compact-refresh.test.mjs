@@ -687,3 +687,95 @@ test('U9 Frontend: reqGen prevents stale slow poll rollback, mRes syncs UI immed
   assert.equal([...env.winListeners.values()].reduce((a, s) => a + s.size, 0), 0);
   assert.equal([...env.docListeners.values()].reduce((a, s) => a + s.size, 0), 0);
 });
+
+test('U9 Frontend: burstGen prevents same-session re-arm race (no early-clear or parallel timer chains) & isStaleResult never pollutes snapByCid', async () => {
+  const env = createCompactMockEnv({ cid: CID_1 });
+  const pending = [];
+  let freshCalls = 0;
+  env.window.__agPrismMetricsCall = (raw) => {
+    const { id, input } = JSON.parse(raw);
+    if (input.freshContext) freshCalls++;
+    pending.push({ id, input, resolve: (snap) => env.window.__agPrismMetricsResolve(id, snap) });
+  };
+
+  const ctl = inlineMod.createTelemetryController({ window: env.window, document: env.document });
+  try {
+    ctl.sync({ telemetryModule: 'on', language: 'zh-CN' });
+    pending.shift().resolve(makeSnap(450560, { compacted: false, sampledAt: '2026-11-26T10:00:00.000Z' }));
+    await sleep(10);
+    const bar = ctl.getPrimaryBar();
+    const conv = env.document.querySelector('[data-testid="conversation-view"]');
+    assert.equal(bar.shadowRoot.getElementById('context-percent').textContent, '88%');
+
+    // 1) 同会话二次 armCompactBurst：旧代际在途请求返回“已压缩”结果绝不能误清第 2 代际定时链
+    ctl.notifyCompact(CID_1, [20, 40, 40]);
+    await sleep(35);
+    assert.equal(freshCalls, 1, 'gen-1 first tick should be in-flight');
+    const gen1Req = pending.shift();
+
+    // 在 gen-1 请求挂起期间，同会话触发第 2 次 burst（burstGen 递增）
+    ctl.notifyCompact(CID_1, [45, 50]);
+    // gen-1 返回已压缩快照（若无 burstGen 校验，将命中 isCompactedDrop 并误调 clrBurst() 清掉 gen-2！）
+    gen1Req.resolve(makeSnap(25600, { compacted: true, sampledAt: '2026-11-26T10:00:02.000Z' }));
+    await sleep(70);
+    assert.equal(freshCalls, 2, 'gen-1 compacted reply must NOT clear gen-2 burst timer');
+
+    // 2) 同会话再次重装：旧代际在途请求返回未压缩结果绝不能启动并行第二条定时链
+    const gen2Req = pending.shift();
+    ctl.notifyCompact(CID_1, [80, 200]);
+    // gen-2 返回未压缩快照（若无 burstGen 校验，将继续 stTm(tick, ...) 形成并行定时链！）
+    gen2Req.resolve(makeSnap(450560, { compacted: false, sampledAt: '2026-11-26T10:00:01.000Z' }));
+    await sleep(110);
+    assert.equal(freshCalls, 3, 'gen-2 stale reply must NOT spawn a parallel timer chain');
+    // 清理 gen-3 在途请求并让其早停
+    pending.shift().resolve(makeSnap(25600, { compacted: true, sampledAt: '2026-11-26T10:00:05.000Z' }));
+    await sleep(30);
+    assert.equal(bar.shadowRoot.getElementById('context-percent').textContent, '5%');
+
+    // 3) isStaleResult 拦截过期回包时直接返回，绝不写回 snapByCid（含 groups=[] 与 groups=[...] 两种形态）
+    const slowP1 = ctl.refresh({ immediate: true });
+    const fastP1 = ctl.refresh({ immediate: true, freshContext: true });
+    const slowReq1 = pending.shift();
+    const fastReq1 = pending.shift();
+    fastReq1.resolve(makeSnap(20480, { compacted: true, sampledAt: '2026-11-26T10:00:10.000Z' }));
+    await fastP1;
+    assert.equal(bar.shadowRoot.getElementById('context-percent').textContent, '4%');
+
+    // 过期慢回包携带 groups: []（绕过 mRes L253）直达 L712 isStaleResult，不得污染 snapByCid
+    slowReq1.resolve({
+      connection: 'renderer-proxy',
+      groups: [],
+      speed: {
+        model: 'Gemini 4 Carbon (High)',
+        context: { model: 'Gemini 4 Carbon (High)', usedTokens: 450560, maxTokens: 512000, usedFraction: 0.88, compacted: false, sampledAt: '2026-11-26T10:00:09.000Z' },
+      },
+    });
+    await slowP1;
+    assert.equal(bar.shadowRoot.getElementById('context-percent').textContent, '4%');
+    assert.equal(ctl.getSnapshotForBar(CID_1)?.speed?.context?.usedTokens, 20480, 'stale reply (groups=[]) must NOT overwrite snapByCid');
+
+    // 过期慢回包携带 groups=[...] 且较旧 sampledAt，同样不得污染 snapByCid
+    const slowP2 = ctl.refresh({ immediate: true });
+    const fastP2 = ctl.refresh({ immediate: true, freshContext: true });
+    const slowReq2 = pending.shift();
+    const fastReq2 = pending.shift();
+    fastReq2.resolve(makeSnap(25600, { compacted: true, sampledAt: '2026-11-26T10:00:15.000Z' }));
+    await fastP2;
+    slowReq2.resolve(makeSnap(440320, { compacted: false, sampledAt: '2026-11-26T10:00:12.000Z' }));
+    await slowP2;
+    assert.equal(ctl.getSnapshotForBar(CID_1)?.speed?.context?.usedTokens, 25600, 'stale reply (older sampledAt) must NOT overwrite snapByCid');
+
+    // 切到 CID_2 再切回 CID_1：0ms 瞬显必须保持 5%，绝不短暂闪回 86%/88% 旧值
+    conv.setAttribute('data-cascade-id', CID_2);
+    env.window.location.pathname = `/c/${CID_2}`;
+    env.window.location.href = `https://local/c/${CID_2}`;
+    env.emitWin('popstate');
+    conv.setAttribute('data-cascade-id', CID_1);
+    env.window.location.pathname = `/c/${CID_1}`;
+    env.window.location.href = `https://local/c/${CID_1}`;
+    env.emitWin('popstate');
+    assert.equal(bar.shadowRoot.getElementById('context-percent').textContent, '5%', 'returning to CID_1 must render 5% from LRU without flashing stale value');
+  } finally {
+    ctl.destroy();
+  }
+});

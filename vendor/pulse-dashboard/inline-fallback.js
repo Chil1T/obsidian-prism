@@ -131,7 +131,7 @@ function createTelemetryController(envOpts){
 const gW=()=>(envOpts&&envOpts.window)||(typeof window!=='undefined'?window:globalRoot);
 const gD=()=>(envOpts&&envOpts.document)||gW()?.document||null;
 
-let mode='auto',quotaMode='compact',waitTm=null,rescTm=null,pollTm=null,swTm=null,burstTm=null,burstIdx=0,burstBase=null,burstCid=null,cmpOff=null,pickCmpAt=0,wasBusy=false;
+let mode='auto',quotaMode='compact',waitTm=null,rescTm=null,pollTm=null,swTm=null,burstTm=null,burstIdx=0,burstGen=0,burstBase=null,burstCid=null,cmpOff=null,pickCmpAt=0,wasBusy=false;
 let hasHost=false,yielded=false,lastSig='',detAt=0,lastHealAt=0;
 let docOff=null,popOff=null,winResOff=null,lastSnap=null,mApi=null,mRes=null,seatObs=null,healTm=null;
 let expLang='',activeHost=null,winBlur=false,pollSusp=false,blurOff=null,blurObs=null,extGuardHeld=false,lastHref='',lastUrlCid='';
@@ -139,10 +139,12 @@ const pend=new Map(),inFlight=new Map(),insts=new Map(),instByHost=new WeakMap()
 
 const readRouteKey=w=>{const l=w?.location;return l?`${l.href||''}|${l.pathname||''}|${l.hash||''}`:'';};
 const extractUrlCid=w=>{const l=w?.location,m=(typeof l?.pathname==='string'&&l.pathname.match(URL_CID_RE))||(typeof l?.href==='string'&&l.href.match(URL_CID_RE));return m?m[1]:null;};
+const ctxTs=s=>{const v=s?.speed?.context?.sampledAt;if(isFin(v))return v;const t=Date.parse(v||'');return isFin(t)?t:NaN;};
 const putCidSnap=(cid,snap)=>{
 if(!cid||!snap||typeof snap!=='object')return;
 const prev=snapByCid.get(cid);
 if(snap.connection==='local-estimate'&&prev&&prev.connection!=='local-estimate')return;
+if(prev&&prev.connection!=='local-estimate'&&snap.connection!=='local-estimate'){const pt=ctxTs(prev),nt=ctxTs(snap);if(isFin(pt)&&isFin(nt)&&nt<pt)return;}
 snapByCid.delete(cid);snapByCid.set(cid,snap);
 if(snapByCid.size>LRU_MAX)snapByCid.delete(snapByCid.keys().next().value);
 };
@@ -272,7 +274,7 @@ if(w.__agPrismMetricsResolve!==mRes)w.__agPrismMetricsResolve=mRes;
 };
 const clrWait=()=>{waitTm=cT(waitTm);rescTm=cT(rescTm);};
 const clrSw=()=>{swTm=cT(swTm);};
-const clrBurst=()=>{burstTm=cT(burstTm);burstIdx=0;burstBase=burstCid=null;};
+const clrBurst=()=>{burstGen++;burstTm=cT(burstTm);burstIdx=0;burstBase=burstCid=null;};
 const clrPoll=()=>{if(pollTm!==null){clearInterval(pollTm);pollTm=null;}};
 const clrCompactWatch=()=>{try{cmpOff?.();}catch{}cmpOff=null;pickCmpAt=0;wasBusy=false;};
 const isBlur=()=>{const d=gD();return!!(d?.hidden||gA(d?.documentElement,'data-ag-cs-win-blur')==='1'||winBlur);};
@@ -599,16 +601,17 @@ if(mode==='off'||isBlur()||!insts.size)return false;
 const bar=sc?getBarForView(sc):null,ins=(bar&&instByHost.get(bar))||resolveActiveInst();
 const cid=(typeof cidH==='string'&&GUID_RE.test(cidH)?cidH:null)||detCid(sc||ins?.host,insts.size>1)||ins?.cid||null;
 const p=ins?.snap?.speed?.context||(cid&&snapByCid.get(cid)?.speed?.context)||lastSnap?.speed?.context,seq=ds?.length?ds:BURST_STEPS;
-clrBurst();burstCid=cid;
+clrBurst();const gen=burstGen;burstCid=cid;
 burstBase=p?{u:isFin(p.usedTokens)?p.usedTokens:null,f:isFin(p.usedFraction)?p.usedFraction:null,c:!!(p.compacted||p.estimatedAfterCompaction)}:null;
 const tick=()=>{
+if(gen!==burstGen)return;
 burstTm=null;if(mode==='off'||isBlur()||!insts.size)return clrBurst();
 const tg=burstCid;
 void refresh({immediate:true,freshContext:true,cascadeId:tg}).then(s=>{
-if(burstCid!==tg)return;
+if(gen!==burstGen||burstCid!==tg)return;
 if(isCompactedDrop(burstBase,s)||burstIdx>=seq.length)return clrBurst();
 burstTm=stTm(tick,seq[burstIdx++]);
-}).catch(clrBurst);
+}).catch(()=>{if(gen===burstGen)clrBurst();});
 };
 burstTm=stTm(tick,seq[burstIdx++]);return true;
 };
@@ -709,7 +712,7 @@ await Promise.all(Array.from(reqByKey.entries()).map(async([k,p])=>{snaps.set(k,
 let actSnap=null;const act=resolveActiveInst();
 for(let i=0;i<plan.length;i++){
 const{it,reqCid,reqGen,key}=plan[i],snap=snaps.get(key)||null;
-if(isStaleResult(it,reqCid,reqGen,multi)){if(reqCid&&snap&&snap.connection!=='local-estimate')putCidSnap(reqCid,snap);continue;}
+if(isStaleResult(it,reqCid,reqGen,multi))continue;
 applySnapToInst(it,snap);if(it===act||(!act&&i===0))actSnap=snap;
 }
 return actSnap??lastSnap;
