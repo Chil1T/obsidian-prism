@@ -17,12 +17,8 @@
   const STUDIO_MODEL_COLOR_CSS = 'html :is(.ag-cs-home-chart-seg,.ag-cs-home-model-swatch)[data-ag-mc]{background-color:var(--_mc-d);}html[data-ag-cs-theme="light"] :is(.ag-cs-home-chart-seg,.ag-cs-home-model-swatch)[data-ag-mc],html>body:is(.theme-light,.light-theme,.light) :is(.ag-cs-home-chart-seg,.ag-cs-home-model-swatch)[data-ag-mc]{background-color:var(--_mc-l);}';
   const STUDIO_EXTRA_CSS = STUDIO_HEAD_CSS + '.ag-cs-home-tab,.ag-cs-home-range{white-space:nowrap}.ag-cs-home-ws-select{color-scheme:inherit}.ag-cs-home-ws-select option{background:var(--card,#141418);color:var(--foreground,#F2F2F5);}.agy-home{--_a:var(--ag-cs-accent);--_b:1px solid var(--_kb)}.ag-cs-hs-tg,.ag-cs-home-local-note{font-size:11px}.ag-cs-hs-tg{display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 8px;border:var(--_b);border-radius:6px;background:var(--_tb);color:var(--foreground);font-family:inherit;font-weight:500;white-space:nowrap;cursor:pointer;&:hover{background:var(--ag-cs-hover-wash)}&[aria-pressed="true"]{color:var(--_a);border-color:color-mix(in srgb,currentColor 32%,#0000);background:color-mix(in srgb,currentColor 11%,#0000)}& svg{width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}}:is(.ag-cs-home-ws-select,.ag-cs-hs-tg,.ag-cs-quota-refresh):focus-visible{outline:2px solid var(--_a);outline-offset:1px}.ag-cs-home-local-note{line-height:1.4;color:var(--muted-foreground);opacity:.86;padding-top:8px;border-top:var(--_b)}' + STUDIO_MODEL_COLOR_CSS;
 
-  // 高区分度双主题模型阵营子色板（每项为 [深色hex, 浅色hex]），避免同阵营模型落入近似蓝/重复索引
   const MODEL_CAMP_PALETTES = {
-    gemini: [
-      ['#4F8BFF', '#2563EB'], // 钴蓝
-      ['#22D3EE', '#0891B2'], // 电光青
-      ['#818CF8', '#4F46E5'], // 靛紫蓝
+    gemini: [['#4F8BFF', '#2563EB'], ['#22D3EE', '#0891B2'], ['#818CF8', '#4F46E5'],
       ['#2DD4BF', '#0D9488'], // 碧水青绿
       ['#93C5FD', '#1E40AF'], // 冰蓝 / 深海蓝
     ],
@@ -835,12 +831,7 @@ de|Subagenten|Token||Ein|Aus|Wenig Kontingent|Wird knapp|Reichlich|Was steht als
       if (isDestroyed() || !usageCore) return;
       const panel = ensurePanelSeat();
       if (!panel) return;
-      const fmtTok = usageCore.formatCompactTokens;
-      const fmtCnt = usageCore.formatHomeCount;
-      const lang = normStudioLang(getLang());
-      const ui = uiText(lang);
-      const fb = studioFb(lang);
-      const skeleton = !usageHasData;
+      const fmtTok = usageCore.formatCompactTokens, fmtCnt = usageCore.formatHomeCount, lang = normStudioLang(getLang()), ui = uiText(lang), fb = studioFb(lang), skeleton = !usageHasData;
       const aggKey = `${usageDataEpoch}|${usageRecords.size}|${activeRange}|${activeWorkspace}|${+includeArchived}|${lang}|${bookPick}`;
       let data = cachedAggData;
       if (!data || cachedAggKey !== aggKey) {
@@ -869,8 +860,8 @@ de|Subagenten|Token||Ein|Aus|Wenig Kontingent|Wird knapp|Reichlich|Was steht als
         }
       }
 
-      runGuardedMut(() => {
-        panel.innerHTML = '';
+      const clrEl = (e) => G.__agPrismSvgUtil ? G.__agPrismSvgUtil.mount(e) : e.replaceChildren ? e.replaceChildren() : (() => { for (let c; (c = e.firstChild || e.children?.[0]); ) e.removeChild ? e.removeChild(c) : (e.children.length = 0); })();
+      runGuardedMut(() => { clrEl(panel);
 
         const headLeft = dv(HC + 'head-left');
         const tabs = dv(HC + 'tabs');
@@ -1042,7 +1033,7 @@ de|Subagenten|Token||Ein|Aus|Wenig Kontingent|Wird knapp|Reichlich|Was steht als
               const labels = columns.map((c) => usageCore.homeShortDate(fmt, c.date));
               const ticks = usageCore.homeChartTicks(labels.map((l) => Math.max(32, l.length * 6.5)), plot.clientWidth || 420);
               runGuardedMut(() => {
-                axis.innerHTML = '';
+                clrEl(axis);
                 for (const tk of ticks) { const lb = sp(cC + 'label', labels[tk.index]); lb.style.left = `${tk.left}px`; ap(axis, lb); }
               });
             });

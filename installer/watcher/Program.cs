@@ -83,18 +83,15 @@ namespace AgyClaudeStyle.Watcher
         [STAThread]
         private static int Main(string[] args)
         {
-            string mode = "watch";
-            string customDir = null;
-            string customPluginDir = null;
+            int pickExit;
+            if (FilePicker.TryHandleCli(args, out pickExit)) return pickExit;
+            string mode = "watch", customDir = null, customPluginDir = null, outFile = null, langArg = null;
             int? overridePort = null;
-            string outFile = null;
-            string langArg = null;
             bool showHelp = false;
 
             for (int i = 0; i < args.Length; i++)
             {
-                string a = args[i];
-                string parsedLang;
+                string a = args[i], parsedLang;
                 if (a == "--watch") mode = "watch";
                 else if (a == "--once") mode = "once";
                 else if (a == "--remove") mode = "remove";
@@ -104,11 +101,7 @@ namespace AgyClaudeStyle.Watcher
                 else if (a == "--no-relaunch-prompt") _noRelaunchPrompt = true;
                 else if (a == "--dir" && i + 1 < args.Length) customDir = args[++i];
                 else if (a == "--plugin-dir" && i + 1 < args.Length) customPluginDir = args[++i];
-                else if (a == "--cdp-port" && i + 1 < args.Length)
-                {
-                    int p;
-                    if (int.TryParse(args[++i], out p) && p > 0) overridePort = p;
-                }
+                else if (a == "--cdp-port" && i + 1 < args.Length) { int p; if (int.TryParse(args[++i], out p) && p > 0) overridePort = p; }
                 else if (a == "--out" && i + 1 < args.Length) outFile = args[++i];
             }
 

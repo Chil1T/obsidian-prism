@@ -1317,11 +1317,7 @@ function removeLinuxLosslessLauncher(opts = {}) {
   };
 }
 
-const DIRS_TO_SYNC = [
-  "assets",
-  "vendor",
-  "sidecars",
-];
+const DIRS_TO_SYNC = ["assets", "src", "vendor", "sidecars"];
 
 function shouldSkipSyncEntry(name) {
   if (name === "__pycache__" || name === ".DS_Store" || name === ".daemon.pid") return true;

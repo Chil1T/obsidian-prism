@@ -2393,6 +2393,7 @@ test('Adversarial follow-up fixes: langProbe auto/html[lang] precedence, collaps
             path.join(ROOT, 'installer/common/MiniJson.cs'),
             path.join(ROOT, 'installer/common/CdpClient.cs'),
             path.join(ROOT, 'installer/watcher/Program.cs'),
+            path.join(ROOT, 'installer/watcher/FilePicker.cs'),
           ],
           { windowsHide: true, stdio: 'pipe' }
         );

@@ -17,10 +17,8 @@ module.exports = function installAgPulseInlineWidget() {
   window.__agPulseInlineInstalled=true;
   report('boot',{hostFound:true});
   const ID='ag-pulse-status-bar',PANE_BOUNDARY='aside,[role="tabpanel"],[data-aux-pane-open],[data-pane-id]';
-  // Host-specific discovery stays outside the shared widget. The IDE has no
-  // /c/<id> URL, and must never inherit the desktop's conversation fallback.
   const surface=window.__agPulseSurface;
-  const setMarkup=(element,markup)=>{if(surface?.setMarkup)surface.setMarkup(element,markup);else element.innerHTML=markup;};
+  const setMarkup=(e,m)=>{if(surface?.setMarkup)return surface.setMarkup(e,m);const d=new DOMParser().parseFromString(m,'text/html');e.replaceChildren(...d.head.childNodes,...d.body.childNodes);};
   const instances=[];
   let layoutFrame=null,disposed=false;
   const HOVER_DELAY=250,WARM_WINDOW=350,LEAVE_DELAY=120,QUOTA_HOVER_COOLDOWN=20000,MANUAL_REFRESH_COOLDOWN=5000;

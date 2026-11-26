@@ -1037,10 +1037,12 @@ test('non-sandbox pick-folder and reveal-folder invoke execFile safely with stri
     const sampleFile = path.join(validDir, 'a.txt');
     fs.writeFileSync(sampleFile, 'hi', 'utf8');
 
+    const fakeWatcherExe = path.join(env.root, 'obsidian-prism-watcher.exe');
+    fs.writeFileSync(fakeWatcherExe, 'stub-exe', 'utf8');
     const calls = [];
     const mockExecFile = async (file, args, options) => {
       calls.push({ file, args, options });
-      if (file === 'powershell.exe') {
+      if (file === fakeWatcherExe) {
         return { stdout: Buffer.from(validDir, 'utf8').toString('base64'), stderr: '' };
       }
       if (file === '/usr/bin/osascript' || file === 'zenity' || file === 'kdialog') {
@@ -1054,6 +1056,7 @@ test('non-sandbox pick-folder and reveal-folder invoke execFile safely with stri
       sparkRoot: env.sparkRoot,
       knowledgeRoot: env.knowledgeRoot,
       execFile: mockExecFile,
+      watcherExePath: fakeWatcherExe,
     });
 
     const picked = await svc.handleRpcAction('pick-folder', { title: '选择灵感目录', initialDir: validDir });
@@ -1061,6 +1064,26 @@ test('non-sandbox pick-folder and reveal-folder invoke execFile safely with stri
     assert.equal(picked.canceled, false);
     assert.equal(picked.path, validDir);
     assert.equal(calls.length, 1);
+    if (process.platform === 'win32') {
+      assert.equal(calls[0].file, fakeWatcherExe);
+      assert.ok(calls[0].args.includes('--pick-folder'));
+      assert.ok(calls[0].args.includes('--base64'));
+    }
+
+    // Windows dev fallback without installed watcher exe returns manualRequired cleanly with 0 PowerShell
+    const noExeSvc = new SidebarStudioService({
+      statePath: path.join(env.root, 'no-exe-state.json'),
+      sparkRoot: env.sparkRoot,
+      knowledgeRoot: env.knowledgeRoot,
+      platform: 'win32',
+      watcherExePath: null,
+      execFile: async () => { throw new Error('must not spawn subprocess'); },
+    });
+    const noExeRes = await noExeSvc.handleRpcAction('pick-folder', { title: '无 exe 回退' });
+    assert.equal(noExeRes.ok, false);
+    assert.equal(noExeRes.manualRequired, true);
+    assert.equal(noExeRes.code, 'manual-input-required');
+    await noExeSvc.dispose();
 
     const revOk = await svc.handleRpcAction('reveal-folder', { path: validDir });
     assert.equal(revOk.ok, true);

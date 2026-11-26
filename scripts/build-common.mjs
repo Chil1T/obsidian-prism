@@ -305,6 +305,7 @@ function collectNativePluginEntries(activeConfigFile) {
   };
 
   walkSubDir('assets');
+  walkSubDir('src');
   walkSubDir('vendor');
   walkSubDir('sidecars');
   return entries;

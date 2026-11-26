@@ -37,7 +37,7 @@
   const SETTINGS_FALLBACK_CSS =
     '.ag-cs-settings-fold-body:not(.is-open),.ag-cs-settings-group[hidden]{display:none!important}';
 
-  // 承接从 Ch1 (style.css) 减负迁出的设置面板专属样式（第 1+2 批共 52 条）、PR #67 按钮主次/致谢卡片/存储明细及壁纸滑块样式（仅展开设置体时按需注入，0 Ch1 占用）
+  // Ch9 设置面板专属样式（按需注入）
   const SETTINGS_CH9_CSS = (() => {
     const S = 'html[data-ag-cs-style] #ag-cs-settings-sec';
     const L1 = 'html[data-ag-cs-style][data-ag-cs-theme="light"] #ag-cs-settings-sec';
@@ -264,7 +264,7 @@
     return 'r:' + parts.join(',') + (minis ? '+m' : '');
   };
 
-  // ── 紧凑同源 16×10 像素精灵兜底引擎（当 mascot='off' 未注入 Ch10 时依然 100% 真实高清像素渲染）──
+  // 16x10 像素精灵兜底引擎
   const FALLBACK_MASCOT_ART = (() => {
     const decPal = (s, base) => {
       const o = base ? { ...base } : {};
@@ -418,15 +418,18 @@
     return G.__agPrismMascotArt || winRef?.__agPrismMascotArt || G.__agDualMascotRig?.mascotArt || winRef?.__agDualMascotRig?.mascotArt || FALLBACK_MASCOT_ART;
   };
 
-  const SPOTLIGHT_ICON_SVG =
-    '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">' +
-    '<path d="M5.5 2.5h5l-.8 2.6H6.3L5.5 2.5Z" fill="currentColor"/>' +
-    '<path d="M6.2 5.4h3.6L13.5 14h-11L6.2 5.4Z" fill="currentColor" opacity="0.28"/>' +
-    '<path d="M7.2 5.4h1.6L10.4 14H5.6L7.2 5.4Z" fill="currentColor" opacity="0.55"/>' +
-    '<ellipse cx="8" cy="14" rx="5.2" ry="1.1" fill="currentColor" opacity="0.45"/>' +
-    '</svg>';
+  const mkSvgNode = (d, t, a, k) => { const e = d.createElementNS ? d.createElementNS('http://www.w3.org/2000/svg', t) : d.createElement(t); if (a) for (const [p, v] of O.entries(a)) { if (p === 'class') e.className = String(v); e.setAttribute?.(p, String(v)); } if (k) for (const c of k) if (c) e.appendChild?.(c); return e; };
+  const mountSvgMarkup = (d, h, s) => {
+    const u = G.__agPrismSvgUtil;
+    if (u?.parse && u?.mount) return u.mount(h, u.parse(s, d));
+    const src = String(s || '').trim(); if (!d || !h || !src) return;
+    let n = null;
+    if (typeof DOMParser === 'function') { try { const r = new DOMParser().parseFromString(/\bxmlns=/.test(src) ? src : src.replace(/<svg\b/i, '<svg xmlns="http://www.w3.org/2000/svg"'), 'image/svg+xml')?.documentElement; if (r && !/^parsererror$/i.test(r.nodeName)) n = d.importNode ? d.importNode(r, true) : r; } catch {} }
+    if (!n) { const st = []; let m, a; for (const re = /<(\/?)([\w:-]+)([^>]*?)(\/?)>/g; (m = re.exec(src)); ) { if (m[1]) { st.pop(); continue; } const e = mkSvgNode(d, m[2]); for (const ar = /([\w:.-]+)(?:=(?:"([^"]*)"|'([^']*)'))?/g; (a = ar.exec(m[3])); ) { const k = a[1], v = a[2] ?? a[3] ?? ''; if (k === 'class') e.className = v; e.setAttribute?.(k, v); } st.length ? st[st.length - 1].appendChild?.(e) : n || (n = e); if (!m[4]) st.push(e); } }
+    if (n) h.replaceChildren ? h.replaceChildren(n) : (h.removeChild && (() => { let c; while ((c = h.firstChild || h.children?.[0])) h.removeChild(c); })(), h.appendChild?.(n));
+  };
 
-  // ── 3D 视差黑曜石星辰酒馆 HD-2D WebGL2 选角子面板（仅打开且可见时渲染，关闭/隐藏/脱离 DOM 立即停帧并 0×0 + WEBGL_lose_context 回收显存）──
+  // 3D 视差选角子面板（按需渲染，关闭即回收显存）
   const STAGE_SLOTS = O.freeze([
     { key: 'c', toggleId: 'c', kind: 'clawd', cx: 72, i18nKey: 'mascotSpeciesCrab', fb: 'Claude Crab', hex: '#d97757', rayA: '249,115,22', rayB: '251,146,60', cheerPose: 'happy', cheerSym: 'spark' },
     { key: 'k', toggleId: 'k', kind: 'cat', cx: 196, i18nKey: 'mascotSpeciesCat', fb: 'Gemini Cat', hex: '#947fd6', rayA: '139,92,246', rayB: '56,189,248', cheerPose: 'happy', cheerSym: 'heart' },
@@ -974,7 +977,7 @@
       return null;
     };
 
-    // ── HD-2D 像素剧场单帧渲染管线（优先 WebGL2 3D 视差引擎，自动无损降级 2.5D Canvas）──
+    // HD-2D 像素剧场渲染管线
     const ensureCanvasBacking = () => {
       const dpr = Math.min((win?.devicePixelRatio) || 1, 1.5);
       const tw = Math.round(STAGE_W * dpr);
@@ -1061,7 +1064,7 @@
         return;
       }
 
-      // 3. 优雅降级：16:9 多层视差 2.5D 星夜酒馆 Canvas 引擎（兼容无 WebGL2 / Mock 测试环境）
+      // 3. 2.5D 降级引擎
       renderBackend = 'canvas2d';
       const dpr = ensureCanvasBacking();
       const ctx = canvas.getContext?.('2d');
@@ -2346,7 +2349,7 @@
       const foldLeft = mkEl('span', 'ag-cs-settings-fold-left');
       const brandMark = mkEl('span', 'ag-cs-settings-brand-mark');
       sa(brandMark, 'aria-hidden', 'true');
-      brandMark.innerHTML = renderObsidianPrismBrandSvg(20);
+      mountSvgMarkup(doc, brandMark, renderObsidianPrismBrandSvg(20));
       const brandTitle = ui.sectionTitle && /Obsidian Prism/i.test(ui.sectionTitle) ? ui.sectionTitle : 'Obsidian Prism';
       const updBadge = mkEl('span', 'ag-cs-update-badge', '');
       sa(updBadge, 'data-ag-cs-update-badge', '1');
@@ -2356,7 +2359,7 @@
       const chevron = mkEl('span', 'ag-cs-settings-fold-chevron');
       sa(chevron, 'data-ag-cs-chevron');
       sa(chevron, 'aria-hidden', 'true');
-      chevron.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg>';
+      ap(chevron, mkSvgNode(doc, 'svg', { width: 14, height: 14, viewBox: '0 0 16 16', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.8', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, [mkSvgNode(doc, 'path', { d: 'M4 6l4 4 4-4' })]));
       const foldRight = ap(mkEl('span', 'ag-cs-settings-fold-right'), foldSummaryEl, chevron);
       ap(foldHead, foldLeft, foldRight);
 
@@ -2668,25 +2671,10 @@
               ap(leftMeta, countBadge, chipsWrap);
 
               const openStageBtn = mkB(BTN, undefined, 'data-ag-mascot-stage-open', '1');
-              if (openStageBtn.style) {
-                O.assign(openStageBtn.style, {
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  padding: '5px 11px',
-                  borderRadius: '8px',
-                  fontSize: '11.5px',
-                  fontWeight: '600',
-                  border: '1px solid var(--ag-cs-accent, rgba(96,165,250,0.55))',
-                  background: 'color-mix(in srgb, var(--ag-cs-accent, #60a5fa) 14%, transparent)',
-                  cursor: 'pointer',
-                  flexShrink: '0',
-                });
-              }
-              const iconWrap = mkEl('span');
-              sa(iconWrap, 'aria-hidden', 'true');
+              if (openStageBtn.style) O.assign(openStageBtn.style, { display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '5px 11px', borderRadius: '8px', fontSize: '11.5px', fontWeight: '600', border: '1px solid var(--ag-cs-accent, rgba(96,165,250,0.55))', background: 'color-mix(in srgb, var(--ag-cs-accent, #60a5fa) 14%, transparent)', cursor: 'pointer', flexShrink: '0' });
+              const iconWrap = mkEl('span'); sa(iconWrap, 'aria-hidden', 'true');
               if (iconWrap.style) O.assign(iconWrap.style, { display: 'inline-flex', alignItems: 'center', lineHeight: '0' });
-              iconWrap.innerHTML = SPOTLIGHT_ICON_SVG;
+              ap(iconWrap, mkSvgNode(doc, 'svg', { width: 14, height: 14, viewBox: '0 0 16 16', fill: 'none', 'aria-hidden': 'true' }, [mkSvgNode(doc, 'path', { d: 'M5.5 2.5h5l-.8 2.6H6.3L5.5 2.5Z', fill: 'currentColor' }), mkSvgNode(doc, 'path', { d: 'M6.2 5.4h3.6L13.5 14h-11L6.2 5.4Z', fill: 'currentColor', opacity: '0.28' }), mkSvgNode(doc, 'path', { d: 'M7.2 5.4h1.6L10.4 14H5.6L7.2 5.4Z', fill: 'currentColor', opacity: '0.55' }), mkSvgNode(doc, 'ellipse', { cx: 8, cy: 14, rx: '5.2', ry: '1.1', fill: 'currentColor', opacity: '0.45' })]));
               const openLbl = mkEl('span', '', U('mascotStageOpenBtn', 'Open Casting Stage'));
               sa(openLbl, 'data-ag-mascot-stage-open-label', '1');
               ap(openStageBtn, iconWrap, openLbl);
@@ -2989,116 +2977,52 @@
             ap(mkEl('div', 'ag-cs-thought-actions'), ap(mkEl('div', 'ag-cs-thought-btn-group'), restoreCancel, restoreScriptBtn, restoreConfirmOk))
           );
 
-          // 懒加载存储明细与归档工作台抽屉（展开前 0 storage-detail 请求；>14d 预设必须经二次确认且与其它确认框互斥）
+          // 存储明细与归档工作台抽屉
           const stWb = mkEl('details', 'ag-cs-thought-cfg-box');
           sa(stWb, 'data-ag-cs-storage-wb', '1');
-          const stSum = mkEl('summary', '', wbInitUi.summary);
-          const stPre = mkEl('pre', 'ag-cs-license-pre', '');
-          sa(stPre, 'data-ag-cs-storage-detail', '1');
-          const stOldBtn = mkB('ag-cs-repo-sync-btn', wbInitUi.oldMainBtn, 'data-ag-cs-storage-old');
-          sa(stOldBtn, 'data-tone', 'secondary');
-          const stRefBtn = mkB('ag-cs-repo-sync-btn', wbInitUi.refreshBtn, 'data-ag-cs-storage-ref');
-          sa(stRefBtn, 'data-tone', 'secondary');
-          const oldMainConfirmBox = mkEl('div', 'ag-cs-thought-cfg-box');
-          setVis(oldMainConfirmBox, false);
-          sa(oldMainConfirmBox, 'data-ag-cs-storage-old-box', '1');
-          const oldMainConfirmCancel = mkB('ag-cs-thought-btn', U('uninstallCancelBtn', 'Cancel'), 'data-ag-cs-storage-old-cancel');
-          const oldMainConfirmOk = mkB('ag-cs-thought-btn', wbInitUi.oldMainConfirmBtn, 'data-ag-cs-storage-old-confirm');
-          ap(
-            oldMainConfirmBox,
-            mkEl('p', 'ag-cs-thought-hint', wbInitUi.oldMainConfirmDesc),
-            ap(mkEl('div', 'ag-cs-thought-actions'), ap(mkEl('div', 'ag-cs-thought-btn-group'), oldMainConfirmCancel, oldMainConfirmOk))
-          );
-          ap(
-            stWb,
-            stSum,
-            stPre,
-            ap(mkEl('div', 'ag-cs-about-repo-row'), ap(mkEl('div', 'ag-cs-thought-btn-group'), stOldBtn, stRefBtn)),
-            oldMainConfirmBox
-          );
+          const stSum = mkEl('summary', '', wbInitUi.summary), stPre = mkEl('pre', 'ag-cs-license-pre', ''); sa(stPre, 'data-ag-cs-storage-detail', '1');
+          const stOldBtn = mkB('ag-cs-repo-sync-btn', wbInitUi.oldMainBtn, 'data-ag-cs-storage-old'), stRefBtn = mkB('ag-cs-repo-sync-btn', wbInitUi.refreshBtn, 'data-ag-cs-storage-ref');
+          sa(stOldBtn, 'data-tone', 'secondary'); sa(stRefBtn, 'data-tone', 'secondary');
+          const oldMainConfirmBox = mkEl('div', 'ag-cs-thought-cfg-box'); setVis(oldMainConfirmBox, false); sa(oldMainConfirmBox, 'data-ag-cs-storage-old-box', '1');
+          const oldMainConfirmCancel = mkB('ag-cs-thought-btn', U('uninstallCancelBtn', 'Cancel'), 'data-ag-cs-storage-old-cancel'), oldMainConfirmOk = mkB('ag-cs-thought-btn', wbInitUi.oldMainConfirmBtn, 'data-ag-cs-storage-old-confirm');
+          ap(oldMainConfirmBox, mkEl('p', 'ag-cs-thought-hint', wbInitUi.oldMainConfirmDesc), ap(mkEl('div', 'ag-cs-thought-actions'), ap(mkEl('div', 'ag-cs-thought-btn-group'), oldMainConfirmCancel, oldMainConfirmOk)));
+          ap(stWb, stSum, stPre, ap(mkEl('div', 'ag-cs-about-repo-row'), ap(mkEl('div', 'ag-cs-thought-btn-group'), stOldBtn, stRefBtn)), oldMainConfirmBox);
 
-          const goMemChip = mkChip(U('goMemLimitUnset', 'Not set'), 'data-ag-cs-gomemlimit-status');
-          const goMemSel = mkEl('select', 'ag-cs-home-ws-select');
+          const goMemChip = mkChip(U('goMemLimitUnset', 'Not set'), 'data-ag-cs-gomemlimit-status'), goMemSel = mkEl('select', 'ag-cs-home-ws-select');
           sa(goMemSel, 'data-ag-cs-gomemlimit-select', '1');
-          for (const pv of ['2GiB', '2500MiB', '3GiB', '4GiB']) {
-            const opt = mkEl('option', '', pv === '2GiB' ? '2GiB ★' : pv);
-            opt.value = pv;
-            ap(goMemSel, opt);
-          }
+          for (const pv of ['2GiB', '2500MiB', '3GiB', '4GiB']) { const opt = mkEl('option', '', pv === '2GiB' ? '2GiB ★' : pv); opt.value = pv; ap(goMemSel, opt); }
           goMemSel.value = '2GiB';
-          const goMemApplyBtn = mkB('ag-cs-repo-sync-btn', U('goMemLimitApplyBtn', 'Apply'), 'data-ag-cs-gomemlimit-apply');
-          const goMemClearBtn = mkB('ag-cs-repo-sync-btn', U('goMemLimitClearBtn', 'Clear'), 'data-ag-cs-gomemlimit-clear');
+          const goMemApplyBtn = mkB('ag-cs-repo-sync-btn', U('goMemLimitApplyBtn', 'Apply'), 'data-ag-cs-gomemlimit-apply'), goMemClearBtn = mkB('ag-cs-repo-sync-btn', U('goMemLimitClearBtn', 'Clear'), 'data-ag-cs-gomemlimit-clear');
           sa(goMemClearBtn, 'data-tone', 'secondary');
 
-          let storageBusy = false;
-          let goMemBusy = false;
-          let detailLoaded = false;
-          let selectedBatchName = '';
-          let cachedBatches = [];
+          let storageBusy = false, goMemBusy = false, detailLoaded = false, selectedBatchName = '', cachedBatches = [];
           const fmtMbShort = (v) => (Number(v) >= 1024 ? `${(Number(v) / 1024).toFixed(2)} GB` : `${Math.round(Number(v) || 0)} MB`);
           const toggleConfirmBox = (targetBox) => {
-            const boxes = [archConfirmBox, restoreConfirmBox, oldMainConfirmBox];
-            const shouldOpen = Boolean(targetBox && targetBox.hidden);
-            runGuardedMut(() => {
-              for (const box of boxes) setVis(box, box === targetBox ? shouldOpen : false);
-            });
+            const boxes = [archConfirmBox, restoreConfirmBox, oldMainConfirmBox], shouldOpen = Boolean(targetBox && targetBox.hidden);
+            runGuardedMut(() => { for (const box of boxes) setVis(box, box === targetBox ? shouldOpen : false); });
             return shouldOpen;
           };
           const syncRestoreDesc = () => {
-            const uNow = uiText(getLang()) || ui;
-            const wl = getStorageWbUi(getLang());
-            if (selectedBatchName) {
-              restoreDescEl[K_TC] = fmtTpl(wl.restoreSelectedDescTpl || uNow.storageRestoreConfirmDesc || '{0}', [selectedBatchName]);
-              restoreConfirmOk.disabled = false;
-              restoreScriptBtn.disabled = false;
-            } else {
-              restoreDescEl[K_TC] = uNow.storageRestoreEmpty || 'No archive batches yet';
-              restoreConfirmOk.disabled = true;
-              restoreScriptBtn.disabled = true;
-            }
+            const uNow = uiText(getLang()) || ui, wl = getStorageWbUi(getLang()), hasSel = Boolean(selectedBatchName);
+            restoreDescEl[K_TC] = hasSel ? fmtTpl(wl.restoreSelectedDescTpl || uNow.storageRestoreConfirmDesc || '{0}', [selectedBatchName]) : (uNow.storageRestoreEmpty || 'No archive batches yet');
+            restoreConfirmOk.disabled = !hasSel; restoreScriptBtn.disabled = !hasSel;
           };
           const syncRestoreBatches = (batches, latestBatch) => {
             const list = [];
-            if (isArr(batches)) {
-              for (const b of batches) {
-                if (b && typeof b.batchName === 'string' && b.batchName) list.push(b);
-              }
-            }
-            if (list.length === 0 && latestBatch && typeof latestBatch.batchName === 'string' && latestBatch.batchName) {
-              list.push(latestBatch);
-            }
-            cachedBatches = list;
-            const prevSelected = selectedBatchName;
-            restoreBatchSelect[K_TC] = '';
+            if (isArr(batches)) for (const b of batches) if (b && typeof b.batchName === 'string' && b.batchName) list.push(b);
+            if (!list.length && latestBatch && typeof latestBatch.batchName === 'string' && latestBatch.batchName) list.push(latestBatch);
+            cachedBatches = list; const prevSel = selectedBatchName; restoreBatchSelect[K_TC] = '';
             for (const b of list) {
-              const label =
-                b.movedCount !== undefined || b.movedMb !== undefined
-                  ? `${b.batchName} (${b.movedCount || 0}/${fmtMbShort(b.movedMb)})`
-                  : b.batchName;
-              const opt = mkEl('option', '', label);
-              opt.value = b.batchName;
-              ap(restoreBatchSelect, opt);
+              const opt = mkEl('option', '', b.movedCount !== undefined || b.movedMb !== undefined ? `${b.batchName} (${b.movedCount || 0}/${fmtMbShort(b.movedMb)})` : b.batchName);
+              opt.value = b.batchName; ap(restoreBatchSelect, opt);
             }
-            if (list.length > 0) {
-              const kept = list.some((b) => b.batchName === prevSelected) ? prevSelected : list[0].batchName;
-              selectedBatchName = kept;
-              restoreBatchSelect.value = kept;
-              setVis(restoreBatchRow, true);
-            } else {
-              selectedBatchName = '';
-              restoreBatchSelect.value = '';
-              setVis(restoreBatchRow, false);
-            }
+            const kept = list.length ? (list.some((b) => b.batchName === prevSel) ? prevSel : list[0].batchName) : '';
+            selectedBatchName = kept; restoreBatchSelect.value = kept; setVis(restoreBatchRow, list.length > 0);
             syncRestoreDesc();
           };
-          const syncAutoExitButtons = (enabled) => {
-            const on = Boolean(enabled);
-            runGuardedMut(() => {
-              if (!on) sa(autoExitOffBtn, 'data-active', '1');
-              else ra(autoExitOffBtn, 'data-active');
-              if (on) sa(autoExitOnBtn, 'data-active', '1');
-              else ra(autoExitOnBtn, 'data-active');
-            });
+          const syncAutoExitButtons = (en) => {
+            const on = Boolean(en);
+            runGuardedMut(() => { on ? ra(autoExitOffBtn, 'data-active') : sa(autoExitOffBtn, 'data-active', '1'); on ? sa(autoExitOnBtn, 'data-active', '1') : ra(autoExitOnBtn, 'data-active'); });
           };
           syncAutoExitButtons(resolveSettingRowActiveValue('autoArchiveOnExit') === true);
 

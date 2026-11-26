@@ -447,9 +447,11 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
     assert.ok(settingsSec);
     assert.equal(settingsSec.querySelector('h3')?.textContent, 'Obsidian Prism · 黑曜棱镜');
     assert.equal(settingsSec.querySelector('.ag-cs-settings-ver')?.textContent, `v${cdp.PLUGIN_VERSION}`);
-    const brandMarkHtml = settingsSec.querySelector('.ag-cs-settings-brand-mark')?.innerHTML || '';
+    const brandMarkEl = settingsSec.querySelector('.ag-cs-settings-brand-mark');
+    const brandSvgEl = brandMarkEl?.querySelector?.('svg') || brandMarkEl?.children?.[0];
+    const brandMarkCls = String(brandSvgEl?.className || brandSvgEl?.getAttribute?.('class') || '');
     assert.ok(
-      brandMarkHtml.includes('ag-cs-brand-logo-svg') || brandMarkHtml.includes('ag-cs-settings-brand-svg'),
+      brandSvgEl && (brandMarkCls.includes('ag-cs-brand-logo-svg') || brandMarkCls.includes('ag-cs-settings-brand-svg')),
       'Expected vector Obsidian Prism brand mark in collapsible header'
     );
 
@@ -1506,7 +1508,8 @@ test('v3.5.1 mounts dual mascot stage, brand optical glyphs, Orchestrator crysta
     assert.ok(glyph);
     assert.equal(glyph.getAttribute('data-brand'), 'antigravity');
     assert.equal(glyph.getAttribute('data-tier'), 'auto');
-    assert.ok(glyph.innerHTML.includes('ag-spark-orbit-svg'));
+    const glyphSvg = glyph.querySelector('svg') || glyph.children?.[0];
+    assert.ok(String(glyphSvg?.className || glyphSvg?.getAttribute?.('class') || '').includes('ag-spark-orbit-svg'));
 
     // 3. Orchestrator effort bar stays locked & model-selector-panel rows mount optical brand glyphs
     const orchBar = modelPanel.querySelector('[data-testid="orchestrator-effort-bar"]');
@@ -1546,7 +1549,8 @@ test('v3.5.1 mounts dual mascot stage, brand optical glyphs, Orchestrator crysta
     assert.equal(claudeRowGlyph.getAttribute('data-selected'), 'true');
     assert.equal(claudeRowGlyph.style.getPropertyValue('opacity'), '1');
     assert.ok(claudeRowGlyph.style.getPropertyValue('filter').includes('drop-shadow'));
-    assert.ok(claudeRowGlyph.innerHTML.includes('var(--glyph-color-hi)'));
+    const claudePath = claudeRowGlyph.querySelector('path') || claudeRowGlyph.children?.[0]?.children?.[0];
+    assert.ok(String(claudePath?.getAttribute?.('style') || '').includes('var(--glyph-color-hi)'));
     claudeMenuItem.setAttribute('data-ces-model-selected', 'false');
     claudeMenuItem.className = 'agy-overlay-item text-secondary-foreground hover:text-foreground';
 

@@ -48,21 +48,26 @@ function buildInstaller({ outputPath = path.join(ROOT_DIR, 'installer.exe'), con
     const commonMiniJson = path.join(ROOT_DIR, 'installer', 'common', 'MiniJson.cs');
     const commonCdpClient = path.join(ROOT_DIR, 'installer', 'common', 'CdpClient.cs');
     const watcherMain = path.join(ROOT_DIR, 'installer', 'watcher', 'Program.cs');
+    const watcherPicker = path.join(ROOT_DIR, 'installer', 'watcher', 'FilePicker.cs');
 
     execFileSync(csc, [
       '/nologo',
       '/utf8output',
       '/codepage:65001',
+      '/warnaserror',
       '/target:winexe',
       '/optimize+',
       `/win32icon:${icoPath}`,
       `/out:${watcherOut}`,
       '/r:System.dll',
       '/r:System.Core.dll',
+      '/r:System.Drawing.dll',
       '/r:System.Net.Http.dll',
+      '/r:System.Windows.Forms.dll',
       commonMiniJson,
       commonCdpClient,
       watcherMain,
+      watcherPicker,
     ], { stdio: 'inherit' });
 
     const activeConfigFile = resolveActiveConfigFile(configPath);

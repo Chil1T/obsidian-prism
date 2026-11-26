@@ -13,6 +13,7 @@ import {
   validateOpenAiBaseUrl,
   isKeylessAllowedEndpoint,
 } from '../vendor/thought-translator/translator-service.mjs';
+import { OmniServer } from '../vendor/omni-viewer/omni-server.mjs';
 import { createLiveHostAdapter } from '../vendor/sidebar-studio/live-host-adapter.mjs';
 import { MetricsStore } from '../vendor/pulse-dashboard/sidecars/panel/store.mjs';
 import { TrajectoryReader } from '../vendor/pulse-dashboard/sidecars/panel/trajectory-reader.mjs';
@@ -489,11 +490,18 @@ test('P1 translator-service: blocks IPv6 SSRF variants, tightens keyless ULA reg
     assert.equal(normalizeOpenAiBaseUrl(url), 'https://api.openai.com/v1');
   }
 
-  // 2) 合法本地大模型与普通内网地址保留放行
-  const allowedLocalUrls = [
+  // 2) 显式回环默认允许 http://；非回环远程/内网默认强制 https://，仅显式 allowInsecureHttp: true 才放行 http://
+  const allowedLoopbackUrls = [
     'http://127.0.0.1:11434/v1',
     'http://[::1]:8000/v1',
     'http://localhost:1234/v1',
+  ];
+  for (const url of allowedLoopbackUrls) {
+    assert.equal(validateOpenAiBaseUrl(url).ok, true, `合法本地回环端点应默认放行: ${url}`);
+    assert.equal(isKeylessAllowedEndpoint(url), true, `合法本地回环端点应允许免 Key: ${url}`);
+  }
+  const nonLoopbackHttpUrls = [
+    'http://api.example.com/v1',
     'http://192.168.1.20:11434/v1',
     'http://10.0.0.8:8000/v1',
     'http://172.16.0.5:8000/v1',
@@ -501,9 +509,12 @@ test('P1 translator-service: blocks IPv6 SSRF variants, tightens keyless ULA reg
     'http://[fd12:3456::1]:11434/v1',
     'http://[fc00::1]:11434/v1',
   ];
-  for (const url of allowedLocalUrls) {
-    assert.equal(validateOpenAiBaseUrl(url).ok, true, `合法本地/内网端点不应被误杀: ${url}`);
-    assert.equal(isKeylessAllowedEndpoint(url), true, `合法本地/内网端点应允许免 Key: ${url}`);
+  for (const url of nonLoopbackHttpUrls) {
+    assert.equal(validateOpenAiBaseUrl(url).ok, false, `非回环明文 http:// 默认必须拦截: ${url}`);
+    assert.equal(validateOpenAiBaseUrl(url, { allowInsecureHttp: true }).ok, true, `显式 allowInsecureHttp: true 后应放行: ${url}`);
+  }
+  for (const url of nonLoopbackHttpUrls.slice(1)) {
+    assert.equal(isKeylessAllowedEndpoint(url), true, `局域网内网端点仍可识别为免 Key: ${url}`);
   }
 
   // 3) isKeylessAllowedEndpoint 公网 fc/fd 域名前缀禁止误放行
@@ -722,4 +733,291 @@ test('P2 pulse-dashboard: store LRU preserves processing background sessions & b
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
+});
+
+test('security-vendor 7: ThoughtTranslatorService _request blocks DNS-rebinding SSRF (direct & HTTP proxy), allows explicit loopback, and forces redirect=error', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-tt-ssrf-'));
+  try {
+    const blockedIps = [
+      { address: '127.0.0.1', family: 4 },
+      { address: '169.254.169.254', family: 4 },
+      { address: '10.0.0.8', family: 4 },
+      { address: '172.16.0.5', family: 4 },
+      { address: '192.168.1.20', family: 4 },
+      { address: '0.0.0.0', family: 4 },
+      { address: 'fc00::1', family: 6 },
+      { address: 'fe80::1', family: 6 },
+      { address: '::1', family: 6 },
+      { address: '::ffff:127.0.0.1', family: 6 },
+    ];
+
+    // 1) 直连 DNS Rebinding 到内网/云元数据/回环必须全部拦截，0 fetch 调用
+    for (const ipEntry of blockedIps) {
+      let fetchCalls = 0;
+      const svc = new ThoughtTranslatorService({
+        storePath: path.join(tmpDir, 'direct.json'),
+        dnsLookup: async () => [ipEntry],
+        fetchImpl: async () => {
+          fetchCalls += 1;
+          return { ok: true, status: 200, text: async () => '{}' };
+        },
+      });
+      await assert.rejects(
+        () => svc._request('https://rebind.evil.example/v1/models', { method: 'GET' }),
+        /SSRF|private|loopback|reserved|internal|DNS|内网|回环|保留/i,
+        `DNS rebinding -> ${ipEntry.address} must be blocked on direct path`
+      );
+      assert.equal(fetchCalls, 0, `fetchImpl must not execute for rebinding IP ${ipEntry.address}`);
+    }
+
+    // 2) HTTP 代理通路同样先做 DNS Rebinding 二次校验，命中内网/云元数据立即拦截
+    const proxySvc = new ThoughtTranslatorService({
+      storePath: path.join(tmpDir, 'proxy.json'),
+      dnsLookup: async () => [{ address: '169.254.169.254', family: 4 }],
+    });
+    let proxyFetchInvoked = false;
+    proxySvc._fetchViaProxy = async () => {
+      proxyFetchInvoked = true;
+      return { ok: true, status: 200, text: async () => '{}' };
+    };
+    await assert.rejects(
+      () =>
+        proxySvc._request(
+          'https://metadata-rebind.evil.example/latest/meta-data/',
+          { method: 'GET' },
+          { proxyMode: 'custom', customProxyUrl: 'http://127.0.0.1:7890' }
+        ),
+      /SSRF|private|loopback|reserved|internal|DNS|内网|回环|保留/i,
+      'DNS rebinding must also be blocked on HTTP proxy path'
+    );
+    assert.equal(proxyFetchInvoked, false, '_fetchViaProxy must not run when DNS resolves to blocked metadata IP');
+
+    // 3) 用户显式填写本机回环 (Ollama / LM Studio) 放行，且强制 redirect='error'
+    const captured = [];
+    const okSvc = new ThoughtTranslatorService({
+      storePath: path.join(tmpDir, 'ok.json'),
+      dnsLookup: async (host) =>
+        host === 'api.public.example'
+          ? [{ address: '93.184.216.34', family: 4 }]
+          : [{ address: '127.0.0.1', family: 4 }],
+      fetchImpl: async (url, init) => {
+        captured.push({ url, init });
+        return { ok: true, status: 200, text: async () => '{"data":[]}' };
+      },
+    });
+    await okSvc._request('http://127.0.0.1:11434/v1/models', { method: 'GET', redirect: 'follow' });
+    await okSvc._request('http://localhost:1234/v1/models', { method: 'GET' });
+    await okSvc._request('https://api.public.example/v1/models', {
+      method: 'GET',
+      redirect: 'follow',
+      headers: { Authorization: 'Bearer sk-secret-token' },
+    });
+    assert.equal(captured.length, 3);
+    assert.equal(captured[0].init.redirect, 'error', 'Explicit loopback request must still enforce redirect=error');
+    assert.equal(captured[1].init.redirect, 'error', 'Localhost request must enforce redirect=error');
+    assert.equal(captured[2].init.redirect, 'error', 'Public API request must override redirect=follow with redirect=error');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('security-vendor 8: ThoughtTranslatorService _persistStore and _flushCacheToDisk reject symlink/junction paths and write atomically', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-tt-atomic-'));
+  try {
+    // 1) 正常原子落盘校验
+    const cleanDir = path.join(tmpDir, 'clean');
+    const configFile = path.join(cleanDir, 'thought-translator.json');
+    const cacheFile = path.join(cleanDir, 'thought-translator-cache.json');
+    const svc = new ThoughtTranslatorService({ configFile, cacheFile });
+    const persisted = svc._persistStore({ ...svc._config, model: 'gpt-4o-mini' });
+    assert.equal(persisted?.ok, true);
+    assert.equal(fs.existsSync(configFile), true);
+    assert.equal(JSON.parse(fs.readFileSync(configFile, 'utf8')).model, 'gpt-4o-mini');
+
+    svc.memCache.set('k-atomic', '原子写入测试');
+    svc._flushCacheToDisk();
+    assert.equal(fs.existsSync(cacheFile), true);
+    assert.match(fs.readFileSync(cacheFile, 'utf8'), /原子写入测试/);
+
+    // 2) 父目录存在 symlink/junction 时必须拒绝写入，不污染真实目录中的诱饵文件
+    const victimDir = path.join(tmpDir, 'victim-real');
+    fs.mkdirSync(victimDir, { recursive: true });
+    const victimStore = path.join(victimDir, 'store.json');
+    const victimCache = path.join(victimDir, 'cache.json');
+    fs.writeFileSync(victimStore, '{"sentinel":"do-not-touch"}\n', 'utf8');
+    fs.writeFileSync(victimCache, '{"sentinel":"cache-untouched"}\n', 'utf8');
+
+    const linkDir = path.join(tmpDir, 'link-dir');
+    fs.symlinkSync(victimDir, linkDir, process.platform === 'win32' ? 'junction' : 'dir');
+
+    const linkSvc = new ThoughtTranslatorService({
+      configFile: path.join(linkDir, 'store.json'),
+      cacheFile: path.join(linkDir, 'cache.json'),
+    });
+    const storeWriteRes = linkSvc._persistStore({ ...linkSvc._config, model: 'evil-overwrite' });
+    assert.equal(Boolean(storeWriteRes?.ok), false, '_persistStore must refuse writing through symlink/junction path');
+    assert.equal(
+      JSON.parse(fs.readFileSync(victimStore, 'utf8')).sentinel,
+      'do-not-touch',
+      'Victim store file must remain untouched'
+    );
+
+    linkSvc.memCache.set('k-evil', 'evil');
+    linkSvc._flushCacheToDisk();
+    assert.equal(
+      JSON.parse(fs.readFileSync(victimCache, 'utf8')).sentinel,
+      'cache-untouched',
+      '_flushCacheToDisk must refuse writing through symlink/junction path'
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('security-vendor 9: OmniServer._isTrustedLocalOrigin rejects arbitrary file:// origins while preserving Antigravity local origins', () => {
+  const srv = new OmniServer();
+  for (const bad of [
+    'file://',
+    'file:///',
+    'file:///C:/Users/victim/Downloads/evil.html',
+    'file://attacker.local/share/payload.html',
+    'file://localhost/tmp/evil.html',
+    'https://evil.example.com',
+    'http://127.0.0.1.evil.example',
+    'vscode-file://vscode-app/extra/path',
+    'null',
+    '',
+  ]) {
+    assert.equal(srv._isTrustedLocalOrigin(bad), false, `Untrusted origin must be rejected: ${bad}`);
+  }
+
+  for (const good of [
+    'vscode-file://vscode-app',
+    'app://antigravity',
+    'http://127.0.0.1:4321',
+    'https://127.0.0.1:4321',
+    'http://localhost:8080',
+    'https://[::1]:9000',
+  ]) {
+    assert.equal(srv._isTrustedLocalOrigin(good), true, `Trusted local origin must be accepted: ${good}`);
+  }
+});
+
+test('security-vendor 10: effort-slider upstream-client dumpTrace redacts Windows/macOS/Linux user home directories to <USER_HOME>', () => {
+  const code = fs.readFileSync(path.join(ROOT_DIR, 'vendor', 'effort-slider', 'upstream-client.js'), 'utf8');
+  let copiedText = '';
+  const listeners = new Map();
+  const makeEl = (tag) => {
+    const el = {
+      tagName: String(tag || 'div').toUpperCase(),
+      className: '',
+      textContent: '',
+      style: {},
+      children: [],
+      attrs: new Map(),
+      classList: {
+        add() {},
+        remove() {},
+        toggle() {},
+        contains() {
+          return false;
+        },
+      },
+      setAttribute(k, v) {
+        this.attrs.set(k, String(v));
+      },
+      getAttribute(k) {
+        return this.attrs.has(k) ? this.attrs.get(k) : null;
+      },
+      appendChild(c) {
+        this.children.push(c);
+        return c;
+      },
+      addEventListener(type, fn) {
+        if (!listeners.has(this)) listeners.set(this, new Map());
+        listeners.get(this).set(type, fn);
+      },
+      remove() {},
+    };
+    return el;
+  };
+  const body = makeEl('body');
+  const head = makeEl('head');
+  const docEl = makeEl('html');
+  const doc = {
+    body,
+    head,
+    documentElement: docEl,
+    readyState: 'complete',
+    createElement: makeEl,
+    getElementById: () => null,
+    querySelector: () => null,
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  const win = {
+    document: doc,
+    innerWidth: 1200,
+    innerHeight: 800,
+    __agCodexEffortSliderDisableAutoBoot: true,
+    navigator: {
+      language: 'en',
+      userAgent: 'Electron C:\\Users\\alice_secret\\AppData /Users/bob_secret/Library /home/carol_secret/.config',
+      clipboard: {
+        writeText(t) {
+          copiedText = String(t);
+        },
+      },
+    },
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  doc.defaultView = win;
+  const ctx = vm.createContext({
+    window: win,
+    document: doc,
+    navigator: win.navigator,
+    globalThis: win,
+    console,
+    setTimeout,
+    clearTimeout,
+    Date,
+    Math,
+    JSON,
+    Object,
+    Array,
+    Map,
+    Set,
+    Number,
+    String,
+    Boolean,
+    RegExp,
+    Error,
+  });
+  ctx.globalThis = ctx;
+  vm.runInContext(code, ctx);
+  const api = ctx.AntigravityCodexEffortSlider || win.AntigravityCodexEffortSlider;
+  assert.ok(api && typeof api.openSettingsPanel === 'function');
+  const close = api.openSettingsPanel({ document: doc, window: win });
+  const panel = body.children.find((c) => c.className === 'ces-set');
+  assert.ok(panel, 'Settings panel must be mounted');
+  const findBtn = (node) => {
+    if (!node) return null;
+    if (node.tagName === 'BUTTON' && /Copy Debug|复制诊断/.test(node.textContent)) return node;
+    for (const ch of node.children || []) {
+      const hit = findBtn(ch);
+      if (hit) return hit;
+    }
+    return null;
+  };
+  const debugBtn = findBtn(panel);
+  assert.ok(debugBtn, 'Copy Debug button must exist');
+  const onClick = listeners.get(debugBtn)?.get('click');
+  assert.equal(typeof onClick, 'function');
+  onClick({ stopPropagation() {}, preventDefault() {} });
+  close();
+
+  assert.ok(copiedText.length > 0, 'dumpTrace must write sanitized JSON to clipboard');
+  assert.equal(/alice_secret|bob_secret|carol_secret/i.test(copiedText), false, 'User home directory names must be redacted');
+  assert.match(copiedText, /<USER_HOME>/, 'Redacted trace must contain <USER_HOME> placeholder');
 });

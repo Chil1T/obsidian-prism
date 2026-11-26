@@ -731,7 +731,7 @@ test('2) Native Node SOCKS5/SOCKS5H tunnel: RFC 1928 no-auth, RFC 1929 auth + re
 
   try {
     // A) RFC 1928 no-auth SOCKS5 HTTP forwarding (no Proxy-Authorization leaked to target)
-    const svcNoAuth = new ThoughtTranslatorService({ configDir: tmpDir, proxyEnv: {} });
+    const svcNoAuth = new ThoughtTranslatorService({ configDir: tmpDir, proxyEnv: {}, allowInsecureHttp: true });
     const saveNoAuth = svcNoAuth.saveConfig({
       customProxyUrl: `socks5://127.0.0.1:${noAuthPort}`,
       profiles: [{ id: 'default', name: 'S5', baseUrl: 'http://external.socks5-noauth.test/v1', apiKey: 'sk-s5-1', model: 'm1' }],
@@ -748,7 +748,7 @@ test('2) Native Node SOCKS5/SOCKS5H tunnel: RFC 1928 no-auth, RFC 1929 auth + re
     // B) RFC 1929 username/password auth SOCKS5H + SSE streaming + masked config round-trip
     const encodedPass = encodeURIComponent(secretPass);
     const rawAuthProxy = `socks5h://${secretUser}:${encodedPass}@127.0.0.1:${authPort}`;
-    const svcAuth = new ThoughtTranslatorService({ configDir: tmpDir, proxyEnv: {} });
+    const svcAuth = new ThoughtTranslatorService({ configDir: tmpDir, proxyEnv: {}, allowInsecureHttp: true });
     const saveAuth = svcAuth.saveConfig({
       customProxyUrl: rawAuthProxy,
       profiles: [{ id: 'default', name: 'S5H', baseUrl: 'http://external.socks5-auth.test/v1', apiKey: 'sk-s5-2', model: 'm2' }],
@@ -801,7 +801,7 @@ test('2) Native Node SOCKS5/SOCKS5H tunnel: RFC 1928 no-auth, RFC 1929 auth + re
 
     // E) Wrong SOCKS5 credentials fail cleanly AND redact username/password from all error text
     const badPass = 'WrongTopSecret777';
-    const svcBadAuth = new ThoughtTranslatorService({ configDir: tmpDir, proxyEnv: {} });
+    const svcBadAuth = new ThoughtTranslatorService({ configDir: tmpDir, proxyEnv: {}, allowInsecureHttp: true });
     svcBadAuth.saveConfig({
       customProxyUrl: `socks5h://${secretUser}:${badPass}@127.0.0.1:${authPort}`,
       profiles: [{ id: 'default', name: 'Bad', baseUrl: 'http://external.socks5-auth.test/v1', apiKey: 'sk-s5-3', model: 'm3' }],
@@ -1986,6 +1986,7 @@ test('11) Red-team #192 [P2-1 & P2-2]: CONNECT 15s timeout, handover RST crash g
     const svcSocksV4 = new ThoughtTranslatorService({
       configDir: tmpDir,
       proxyEnv: {},
+      allowInsecureHttp: true,
       dnsLookup: async (host) => {
         dnsCalls++;
         if (host === 'pub-v4.example.test') return { address: '93.184.216.34', family: 4 };
