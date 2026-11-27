@@ -16,6 +16,7 @@ const PERIODIC_MODULE_ORDER = [
   'audio-fx.js',
   'model-catalog.js',
   'host-bridge.js',
+  'orch-live-badge.js',
   'oled-cyber-screen.js',
   'keyboard-3d-gl.js',
   'bento-ui.js',
@@ -1385,6 +1386,7 @@ test('Security static audit (8 vendor files: 0 innerHTML, 0 setPrefValue, 0 loca
   assert.equal(mainExpr.includes('__agPeriodicAudioFx'), false, 'Channel 1 must not embed __agPeriodicAudioFx');
   assert.equal(mainExpr.includes('__agPeriodicModelCatalog'), false, 'Channel 1 must not embed __agPeriodicModelCatalog');
   assert.equal(mainExpr.includes('__agPeriodicHostBridge'), false, 'Channel 1 must not embed __agPeriodicHostBridge');
+  assert.equal(mainExpr.includes('__agPeriodicOrchLiveBadge'), false, 'Channel 1 must not embed __agPeriodicOrchLiveBadge');
   assert.equal(mainExpr.includes('__agPrismOledScreen'), false, 'Channel 1 must not embed __agPrismOledScreen');
   assert.equal(mainExpr.includes('__agPrismKeyboard3D'), false, 'Channel 1 must not embed __agPrismKeyboard3D');
   assert.equal(mainExpr.includes('__agPeriodicBentoUi'), false, 'Channel 1 must not embed __agPeriodicBentoUi');
@@ -1396,6 +1398,7 @@ test('Security static audit (8 vendor files: 0 innerHTML, 0 setPrefValue, 0 loca
   assert.equal(mountExpr.includes('__agPeriodicAudioFx'), true, 'Channel 8 must bundle audio-fx.js');
   assert.equal(mountExpr.includes('__agPeriodicModelCatalog'), true, 'Channel 8 must bundle model-catalog.js');
   assert.equal(mountExpr.includes('__agPeriodicHostBridge'), true, 'Channel 8 must bundle host-bridge.js');
+  assert.equal(mountExpr.includes('__agPeriodicOrchLiveBadge'), true, 'Channel 8 must bundle orch-live-badge.js');
   assert.equal(mountExpr.includes('__agPrismOledScreen'), true, 'Channel 8 must bundle oled-cyber-screen.js');
   assert.equal(mountExpr.includes('__agPrismKeyboard3D'), true, 'Channel 8 must bundle keyboard-3d-gl.js');
   assert.equal(mountExpr.includes('__agPeriodicBentoUi'), true, 'Channel 8 must bundle bento-ui.js');
@@ -1456,6 +1459,7 @@ test('Security static audit (8 vendor files: 0 innerHTML, 0 setPrefValue, 0 loca
       '__agPeriodicAudioFx',
       '__agPeriodicModelCatalog',
       '__agPeriodicHostBridge',
+      '__agPeriodicOrchLiveBadge',
       '__agPeriodicBentoUi',
     ]) {
       assert.equal(env.window[gKey], undefined, `${gKey} must be deleted from window`);
@@ -8157,4 +8161,154 @@ test('Stub SPA re-badge: auto-paints left-pinned [10Ne] on new trigger after SPA
     activeRafs: 0,
     activeObservers: 0,
   });
+});
+
+test('Orchestrator mini-keycap dynamically tracks live invoked telemetry model, scopes MO strictly to #context-model & falls back cleanly', () => {
+  const env = createPeriodicSandbox();
+  const factory = loadPeriodicFactoryInSandbox(env);
+
+  const convView = env.makeElement('div', { attrs: { 'data-testid': 'conversation-view' } });
+  const inputBox = env.makeElement('div', { attrs: { 'data-testid': 'agent-input-box' } });
+  const triggerBtn = env.makeElement('button', {
+    attrs: { 'data-testid': 'model-selector-trigger' },
+    text: 'Orchestrator Gemini 4 Neon High',
+  });
+  inputBox.appendChild(triggerBtn);
+
+  const pulseBar = env.makeElement('div', {
+    attrs: { id: 'ag-pulse-status-bar', 'data-ag-pulse-bar': 'true' },
+  });
+  const shadowRoot = env.makeElement('div');
+  const ctxModel = env.makeElement('dd', { attrs: { id: 'context-model' }, text: 'Gemini 4 Hydrogen (High)' });
+  shadowRoot.appendChild(ctxModel);
+  shadowRoot.getElementById = (id) => (id === 'context-model' ? ctxModel : null);
+  pulseBar.shadowRoot = shadowRoot;
+  inputBox.appendChild(pulseBar);
+  convView.appendChild(inputBox);
+  env.body.appendChild(convView);
+
+  env.window.__agPeriodicMockHost = {
+    selectedModel: { label: 'Orchestrator Gemini 4 Neon High', modelId: 'orchestrator' },
+    orchestratorPick: { model: { label: 'Gemini 4 Neon (High)', modelId: 'gemini-4-neon' } },
+    modelOptions: [
+      { label: 'Gemini 4 Neon (High)' },
+      { label: 'Gemini 4 Carbon (High)' },
+      { label: 'Orchestrator' },
+    ],
+  };
+
+  const inst = factory.mountPeriodicPicker({ root: env.window, doc: env.document, mode: 'on' });
+  const getBadge = () => triggerBtn.querySelector('.ag-pp-mini-keycap');
+
+  // 0) Wave P3 hard check: ZERO document.body MO, characterData MO strictly scoped to #context-model
+  const observed = env.getObservedCalls();
+  assert.equal(observed.some((c) => c.target === env.body), false, 'Must NEVER attach MutationObserver to document.body');
+  const charDataCalls = observed.filter((c) => c.opts && c.opts.characterData);
+  assert.equal(charDataCalls.length, 1, 'Expected exactly 1 scoped characterData observer');
+  assert.equal(charDataCalls[0].target, ctxModel, 'characterData observer must target ONLY #context-model');
+  assert.equal(env.getCounts().activeObservers, 2, 'Expected themeObserver (html) + single #context-model observer');
+
+  // 1) Live invoked model is Hydrogen -> 0·1H with sky-blue Hydrogen tint
+  let badge = getBadge();
+  assert.ok(badge, 'Expected mini-keycap badge on Orchestrator trigger');
+  assert.equal(badge.textContent, '0·1H');
+  assert.equal(badge.getAttribute('data-symbol'), '0·1H');
+  assert.equal(badge.getAttribute('data-live-model'), 'Gemini 4 Hydrogen (High)');
+  const hydroBg = badge.style.getPropertyValue('--mk-bg');
+
+  // 2) Mutating #context-model updates via scoped MutationObserver without body observer
+  const transitions = [
+    ['Gemini 4 Neon (High)', '0·Ne'],
+    ['Gemini 4 Carbon (High)', '0·6C'],
+    ['Claude Opus 4.6 (Thinking)', '0·Op'],
+  ];
+  for (const [modelName, expectedBadge] of transitions) {
+    ctxModel.textContent = modelName;
+    env.triggerMutations(ctxModel, [{ type: 'characterData', target: ctxModel }]);
+    env.advanceTime(50);
+    badge = getBadge();
+    assert.equal(badge.textContent, expectedBadge, `Expected ${expectedBadge} when live model is ${modelName}`);
+    assert.equal(badge.getAttribute('data-live-model'), modelName);
+    if (expectedBadge === '0·Ne') {
+      assert.notEqual(badge.style.getPropertyValue('--mk-bg'), hydroBg, 'Hydrogen tint must differ from Orchestrator gold tint');
+    }
+  }
+
+  // 3) Same-symbol transition: live Gemini 4 Neon (0·Ne) -> placeholder '—' fallback (0·Ne) clears data-live-model & re-sets on live restore
+  ctxModel.textContent = 'Gemini 4 Neon (High)';
+  env.triggerMutations(ctxModel, [{ type: 'characterData', target: ctxModel }]);
+  env.advanceTime(50);
+  badge = getBadge();
+  assert.equal(badge.textContent, '0·Ne');
+  assert.equal(badge.getAttribute('data-live-model'), 'Gemini 4 Neon (High)');
+
+  ctxModel.textContent = '—';
+  env.triggerMutations(ctxModel, [{ type: 'characterData', target: ctxModel }]);
+  env.advanceTime(50);
+  badge = getBadge();
+  assert.equal(badge.textContent, '0·Ne');
+  assert.equal(badge.getAttribute('data-live-model'), null, 'Fallback with same shortLabel must still clear data-live-model');
+
+  ctxModel.textContent = 'Antigravity Model';
+  env.triggerMutations(ctxModel, [{ type: 'characterData', target: ctxModel }]);
+  env.advanceTime(50);
+  badge = getBadge();
+  assert.equal(badge.textContent, '0·Ne');
+  assert.equal(badge.getAttribute('data-live-model'), null, 'Placeholder Antigravity Model must fall back cleanly');
+
+  ctxModel.textContent = 'Orchestrator';
+  env.triggerMutations(ctxModel, [{ type: 'characterData', target: ctxModel }]);
+  env.advanceTime(50);
+  badge = getBadge();
+  assert.equal(badge.textContent, '0·Ne');
+  assert.equal(badge.getAttribute('data-live-model'), null, 'Bare Orchestrator label must fall back cleanly');
+
+  // 4) Fallback bar with connection: local-estimate is ignored and falls back to planner (0·Ne)
+  pulseBar.setAttribute('data-ag-prism-fallback', '1');
+  ctxModel.textContent = 'Gemini 4 Hydrogen (High)';
+  env.window.__agPrismTelemetry = {
+    getSnapshotForBar: () => ({
+      connection: 'local-estimate',
+      speed: { context: { model: 'Gemini 4 Hydrogen (High)' } },
+    }),
+  };
+  inst.syncBadges();
+  badge = getBadge();
+  assert.equal(badge.textContent, '0·Ne');
+  assert.equal(badge.getAttribute('data-live-model'), null);
+
+  // 5) Switching away from Orchestrator to a regular model immediately disconnects #context-model MO (zero idle observer overhead)
+  triggerBtn.textContent = 'Gemini 4 Carbon (High)';
+  env.window.__agPeriodicMockHost.selectedModel = { label: 'Gemini 4 Carbon (High)', modelId: 'gemini-4-c-high' };
+  inst.syncBadges();
+  badge = getBadge();
+  assert.equal(badge.getAttribute('data-z'), '6');
+  assert.equal(badge.getAttribute('data-live-model'), null);
+  assert.equal(env.getCounts().activeObservers, 1, 'Leaving Orchestrator must disconnect #context-model MO immediately (leaving only themeObserver)');
+
+  // 6) Switching back to Orchestrator re-attaches scoped MO, and setMode('off') / destroy() cleanly tear down 100%
+  pulseBar.removeAttribute('data-ag-prism-fallback');
+  delete env.window.__agPrismTelemetry;
+  triggerBtn.textContent = 'Orchestrator Gemini 4 Neon High';
+  env.window.__agPeriodicMockHost.selectedModel = { label: 'Orchestrator Gemini 4 Neon High', modelId: 'orchestrator' };
+  inst.syncBadges();
+  assert.equal(env.getCounts().activeObservers, 2, 'Returning to Orchestrator must re-attach #context-model MO');
+  assert.equal(getBadge().textContent, '0·1H');
+
+  inst.setMode('off');
+  const offCounts = env.getCounts();
+  assert.equal(offCounts.activeTimers, 0);
+  assert.equal(offCounts.activeObservers, 0);
+  assert.equal(offCounts.docListeners, 0);
+  assert.equal(offCounts.winListeners, 0);
+
+  inst.setMode('on');
+  assert.equal(env.getCounts().activeObservers, 2);
+
+  inst.destroy();
+  const endCounts = env.getCounts();
+  assert.equal(endCounts.activeTimers, 0);
+  assert.equal(endCounts.activeObservers, 0);
+  assert.equal(endCounts.docListeners, 0);
+  assert.equal(endCounts.winListeners, 0);
 });
