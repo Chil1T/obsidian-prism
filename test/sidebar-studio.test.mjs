@@ -4131,3 +4131,360 @@ test('Issue #78 + PR #77: sidebar-client matches data-ag-cs-theme=light, body.th
 
   sandbox.__agPrismSidebar.destroy();
 });
+
+test('PR #154: lock unavailable/zero-quota models, auto-pick first available, toggle model menu closed on second click, locale toast & stopPropagation on sidebar contextmenu', async () => {
+  const clientSrc = fs.readFileSync(CLIENT_FILE, 'utf8');
+
+  const makeInteractiveNode = (tagName = 'DIV') => {
+    const attrs = new Map();
+    const styleProps = new Map();
+    const classes = new Set();
+    const listeners = new Map();
+    const styleObj = new Proxy(
+      {
+        setProperty: (k, v) => styleProps.set(k, String(v)),
+        removeProperty: (k) => styleProps.delete(k),
+        getPropertyValue: (k) => styleProps.get(k) || '',
+      },
+      {
+        get(target, prop) {
+          if (prop in target) return target[prop];
+          return styleProps.get(String(prop)) || '';
+        },
+        set(_target, prop, val) {
+          styleProps.set(String(prop), String(val ?? ''));
+          return true;
+        },
+      }
+    );
+    const matchSel = (el, sel) => {
+      const s = String(sel || '').trim();
+      if (!s) return false;
+      if (s.includes(',')) return s.split(',').some((p) => matchSel(el, p));
+      if (/\s+/.test(s)) {
+        const parts = s.split(/\s+/);
+        if (!matchSel(el, parts[parts.length - 1])) return false;
+        let cur = el.parentElement;
+        for (let i = parts.length - 2; i >= 0; i--) {
+          let ok = false;
+          while (cur) {
+            if (matchSel(cur, parts[i])) { ok = true; cur = cur.parentElement; break; }
+            cur = cur.parentElement;
+          }
+          if (!ok) return false;
+        }
+        return true;
+      }
+      if (s.startsWith('#')) return el.id === s.slice(1).replace(/\\\./g, '.');
+      if (s.startsWith('.')) return el.classList.contains(s.slice(1));
+      const attrM = /^\[([^=\]]+)(?:="([^"]*)")?\]$/.exec(s);
+      if (attrM) return attrM[2] === undefined ? el.hasAttribute(attrM[1]) : el.getAttribute(attrM[1]) === attrM[2];
+      return el.tagName === s.toUpperCase();
+    };
+    const node = {
+      nodeType: 1,
+      tagName: tagName.toUpperCase(),
+      nodeName: tagName.toUpperCase(),
+      id: '',
+      type: '',
+      disabled: false,
+      textContent: '',
+      children: [],
+      parentElement: null,
+      get childElementCount() { return this.children.length; },
+      get firstChild() { return this.children[0] || null; },
+      get firstElementChild() { return this.children[0] || null; },
+      get className() { return [...classes].join(' '); },
+      set className(v) {
+        classes.clear();
+        for (const c of String(v || '').split(/\s+/).filter(Boolean)) classes.add(c);
+      },
+      classList: {
+        add: (...xs) => xs.forEach((x) => classes.add(x)),
+        remove: (...xs) => xs.forEach((x) => classes.delete(x)),
+        contains: (x) => classes.has(x),
+      },
+      style: styleObj,
+      setAttribute: (k, v) => {
+        attrs.set(String(k), String(v));
+        if (k === 'id') node.id = String(v);
+      },
+      getAttribute: (k) => (attrs.has(String(k)) ? attrs.get(String(k)) : null),
+      hasAttribute: (k) => attrs.has(String(k)),
+      removeAttribute: (k) => attrs.delete(String(k)),
+      appendChild: (ch) => {
+        if (ch.parentElement) ch.parentElement.removeChild(ch);
+        ch.parentElement = node;
+        node.children.push(ch);
+        return ch;
+      },
+      insertBefore: (ch, ref) => {
+        if (ch.parentElement) ch.parentElement.removeChild(ch);
+        ch.parentElement = node;
+        const idx = node.children.indexOf(ref);
+        if (idx >= 0) node.children.splice(idx, 0, ch);
+        else node.children.push(ch);
+        return ch;
+      },
+      removeChild: (ch) => {
+        const idx = node.children.indexOf(ch);
+        if (idx >= 0) node.children.splice(idx, 1);
+        ch.parentElement = null;
+        return ch;
+      },
+      remove: () => { if (node.parentElement) node.parentElement.removeChild(node); },
+      addEventListener: (t, fn) => {
+        if (!listeners.has(t)) listeners.set(t, new Set());
+        listeners.get(t).add(fn);
+      },
+      removeEventListener: (t, fn) => listeners.get(t)?.delete(fn),
+      dispatch: (t, ev = {}) => {
+        const evt = {
+          type: t,
+          target: node,
+          prevented: false,
+          stopped: false,
+          preventDefault() { this.prevented = true; },
+          stopPropagation() { this.stopped = true; },
+          stopImmediatePropagation() { this.stopped = true; },
+          ...ev,
+        };
+        for (const fn of [...(listeners.get(t) || [])]) fn(evt);
+        return evt;
+      },
+      contains: (other) => {
+        for (let c = other; c; c = c.parentElement) if (c === node) return true;
+        return false;
+      },
+      closest: (sel) => {
+        for (let c = node; c; c = c.parentElement) if (matchSel(c, sel)) return c;
+        return null;
+      },
+      querySelectorAll: (sel) => {
+        const out = [];
+        const walk = (n) => {
+          for (const ch of n.children || []) {
+            if (matchSel(ch, sel)) out.push(ch);
+            walk(ch);
+          }
+        };
+        walk(node);
+        return out;
+      },
+      querySelector: (sel) => node.querySelectorAll(sel)[0] || null,
+      getBoundingClientRect: () => ({ left: 20, top: 40, width: 256, bottom: 720, right: 276, height: 680 }),
+    };
+    return node;
+  };
+
+  const docListeners = new Map();
+  const htmlEl = makeInteractiveNode('HTML');
+  htmlEl.setAttribute('data-ag-cs-style', '1');
+  htmlEl.setAttribute('data-ag-cs-lang', 'zh-CN');
+  const headEl = makeInteractiveNode('HEAD');
+  const bodyEl = makeInteractiveNode('BODY');
+  const rootEl = makeInteractiveNode('DIV');
+  rootEl.id = 'root';
+  const layoutEl = makeInteractiveNode('DIV');
+  const nativeSb = makeInteractiveNode('ASIDE');
+  nativeSb.setAttribute('data-testid', 'conversation-list-sidebar');
+  const mainEl = makeInteractiveNode('MAIN');
+  const inputBox = makeInteractiveNode('DIV');
+  inputBox.id = 'antigravity.agentSidePanelInputBox';
+  const runningTrig = makeInteractiveNode('BUTTON');
+  runningTrig.setAttribute('data-testid', 'model-selector-trigger');
+  inputBox.appendChild(runningTrig);
+  mainEl.appendChild(inputBox);
+  layoutEl.appendChild(nativeSb);
+  layoutEl.appendChild(mainEl);
+  rootEl.appendChild(layoutEl);
+  bodyEl.appendChild(rootEl);
+
+  const dispatched = [];
+  const fakeStore = {
+    getState: () => ({
+      userStatus: {
+        cascadeModelConfigData: {
+          clientModelConfigs: [
+            { label: 'Gemini 4 Neon (High)', disabled: true, modelOrAlias: { choice: { case: 'model', value: 101 } } },
+            { label: 'Gemini 4 Carbon (High)', quotaInfo: { remainingFraction: 0 }, modelOrAlias: { choice: { case: 'model', value: 102 } } },
+            { label: 'Gemini 4 Argon (High)', tagDescription: 'Not included in your plan', modelOrAlias: { choice: { case: 'model', value: 103 } } },
+            { label: 'Gemini 4 Hydrogen (High)', quotaInfo: { remainingFraction: null }, modelOrAlias: { choice: { case: 'model', value: 104 } } },
+            { label: 'Gemini 3.8 Flash (Medium)', quotaInfo: { remainingFraction: 0.7 }, modelOrAlias: { choice: { case: 'model', value: 105 } } },
+          ],
+        },
+      },
+      trajectorySummaries: { summaries: {} },
+    }),
+    dispatch: (action) => dispatched.push(action),
+    subscribe: () => () => {},
+  };
+  const fakeRouter = {
+    state: { location: { pathname: '/' } },
+    navigate: () => {},
+    subscribe: () => () => {},
+  };
+  rootEl.__reactFiber$test = {
+    tag: 10,
+    memoizedProps: { value: { store: fakeStore } },
+    child: { tag: 10, memoizedProps: { value: fakeRouter } },
+  };
+
+  const doc = {
+    hidden: false,
+    documentElement: htmlEl,
+    body: bodyEl,
+    head: headEl,
+    activeElement: null,
+    createElement: (tag) => makeInteractiveNode(tag),
+    createElementNS: (_ns, tag) => makeInteractiveNode(tag),
+    importNode: (n) => n,
+    getElementById: (id) => (id === 'root' ? rootEl : bodyEl.querySelector('#' + id)),
+    querySelector: (sel) => {
+      if (sel === '[data-testid="conversation-list-sidebar"]') return nativeSb;
+      if (sel === 'main') return mainEl;
+      if (sel.includes('model-selector-trigger')) return runningTrig;
+      return bodyEl.querySelector(sel);
+    },
+    querySelectorAll: (sel) => bodyEl.querySelectorAll(sel),
+    addEventListener: (t, fn, cap) => {
+      if (!docListeners.has(t)) docListeners.set(t, []);
+      docListeners.get(t).push({ fn, cap: Boolean(cap && (cap === true || cap.capture)) });
+    },
+    removeEventListener: (t, fn) => {
+      const list = docListeners.get(t);
+      if (list) docListeners.set(t, list.filter((x) => x.fn !== fn));
+    },
+    dispatch: (t, ev = {}) => {
+      const evt = { type: t, prevented: false, stopped: false, preventDefault() { this.prevented = true; }, stopPropagation() { this.stopped = true; }, stopImmediatePropagation() { this.stopped = true; }, ...ev };
+      const list = [...(docListeners.get(t) || [])];
+      const ordered = [...list.filter((x) => x.cap), ...list.filter((x) => !x.cap)];
+      for (const item of ordered) {
+        item.fn(evt);
+        if (evt.stopped) break;
+      }
+      return evt;
+    },
+  };
+
+  const snap = {
+    schemaVersion: 2,
+    storeId: 'store-pr154-test',
+    rev: 1,
+    activeMode: 'chat',
+    currentView: '/',
+    chatDraft: { kind: 'knowledge', folderId: null, sparkProjectId: null },
+    chatPolicy: {},
+    knowledgeFolders: [{ id: 'kf-1', name: 'Notes', collapsed: false }],
+    sparkProjects: [{ id: 'sp-1', name: 'Workspace', collapsed: false }],
+    assignments: {},
+    chatSidebar: {
+      knowledge: {
+        rootItems: [{ cascadeId: 'chat-1', title: 'Chat One', updatedAt: Date.now() }],
+        folders: [{ id: 'kf-1', name: 'Notes', collapsed: false, items: [] }],
+      },
+      spark: {
+        projects: [{ id: 'sp-1', name: 'Workspace', collapsed: false, items: [] }],
+      },
+      archived: { items: [], totalCount: 0 },
+    },
+    navRev: 1,
+    draftRev: 1,
+  };
+
+  const sandbox = {
+    window: null,
+    globalThis: null,
+    document: doc,
+    navigator: { language: 'zh-CN' },
+    location: { href: 'https://127.0.0.1:8686/', pathname: '/' },
+    MutationObserver: class { observe() {} disconnect() {} },
+    setTimeout,
+    clearTimeout,
+    requestAnimationFrame: (fn) => setTimeout(fn, 0),
+    cancelAnimationFrame: (t) => clearTimeout(t),
+    getComputedStyle: () => ({ position: 'static' }),
+    __agPrismSidebarBridge: {
+      isOnline: () => true,
+      call: async () => ({ ok: true, snapshot: snap }),
+    },
+    __agPrism: { getState: () => ({ cfg: { sidebarStudio: 'on', language: 'zh-CN' } }) },
+  };
+  sandbox.window = sandbox;
+  sandbox.globalThis = sandbox;
+  vm.runInNewContext(clientSrc, sandbox);
+  await new Promise((r) => setTimeout(r, 120));
+
+  try {
+    // 1) Auto-select first available model (skip disabled/zero-quota/plan-locked; keep remainingFraction=null available)
+    const ghostBtns = bodyEl.querySelectorAll('.ag-prism-ghost-btn');
+    const modelBtn = ghostBtns.find((b) => b.children.some((c) => c.textContent && c.textContent.includes('Gemini')));
+    assert.ok(modelBtn, 'Chat Home model selector button must be mounted');
+    const modelLbl = modelBtn.children.find((c) => c.tagName === 'SPAN');
+    assert.ok(modelLbl.textContent.includes('Gemini 4 Hydrogen'), `Auto-select must skip unavailable models and pick Gemini 4 Hydrogen, got: ${modelLbl.textContent}`);
+
+    // 2) Open model menu: unavailable models grayed/locked with lock icon and unclickable
+    modelBtn.dispatch('click');
+    const pop1 = bodyEl.querySelector('[data-testid="prism-chat-home-model-menu"]');
+    assert.ok(pop1, 'Clicking model trigger must open prism-chat-home-model-menu');
+    const opts = pop1.querySelectorAll('.ag-prism-model-opt');
+    assert.equal(opts.length, 5);
+    for (const lockedId of ['Gemini 4 Neon', 'Gemini 4 Carbon', 'Gemini 4 Argon']) {
+      const opt = opts.find((o) => o.getAttribute('data-model-id') === lockedId);
+      assert.equal(opt.disabled, true, `${lockedId} must be disabled`);
+      assert.equal(opt.getAttribute('aria-disabled'), 'true');
+      assert.equal(opt.style.opacity, '0.45');
+      assert.equal(opt.style.cursor, 'not-allowed');
+      const lockPaths = opt.querySelectorAll('path').map((p) => p.getAttribute('d'));
+      assert.ok(lockPaths.includes('M7 11V7A5 5 0 0 1 17 7V11'), `${lockedId} must render lock SVG path instead of info fallback`);
+      opt.dispatch('click');
+    }
+    // Menu stays open after clicking locked options and selection stays Gemini 4 Hydrogen
+    assert.ok(bodyEl.querySelector('[data-testid="prism-chat-home-model-menu"]'), 'Clicking locked models must not close menu');
+    assert.ok(modelLbl.textContent.includes('Gemini 4 Hydrogen'));
+
+    // 3) Second click on model trigger toggles menu closed
+    modelBtn.dispatch('click');
+    assert.equal(bodyEl.querySelector('[data-testid="prism-chat-home-model-menu"]'), null, 'Second click on model button must toggle popover closed');
+
+    // 4) Re-open and pick available model Gemini 3.8 Flash
+    modelBtn.dispatch('click');
+    const pop2 = bodyEl.querySelector('[data-testid="prism-chat-home-model-menu"]');
+    const flashOpt = pop2.querySelectorAll('.ag-prism-model-opt').find((o) => o.getAttribute('data-model-id') === 'Gemini 3.8 Flash');
+    assert.equal(flashOpt.disabled, false);
+    flashOpt.dispatch('click');
+    assert.equal(bodyEl.querySelector('[data-testid="prism-chat-home-model-menu"]'), null);
+    assert.ok(modelLbl.textContent.includes('Gemini 3.8 Flash'));
+
+    // 5) Running session model switch respects zh-CN vs en toast copy
+    snap.currentView = '/c/chat-1';
+    fakeRouter.state.location.pathname = '/c/chat-1';
+    doc.dispatch('click', { target: runningTrig });
+    const runPopZh = bodyEl.querySelector('[data-testid="prism-chat-running-model-menu"]');
+    assert.ok(runPopZh, 'Clicking running model trigger must open prism-chat-running-model-menu');
+    runPopZh.querySelectorAll('.ag-prism-model-opt').find((o) => o.getAttribute('data-model-id') === 'Gemini 4 Hydrogen').dispatch('click');
+    const toastZh = bodyEl.querySelector('.ag-prism-sb-toast');
+    assert.ok(toastZh && toastZh.textContent === '已切换为 Gemini 4 Hydrogen', `zh-CN toast must stay Chinese, got: ${toastZh?.textContent}`);
+    assert.ok(dispatched.some((a) => a.type === 'modelSelection/modelPicked' && a.payload.model === 104));
+
+    sandbox.__agPrismSidebar.sync({ sidebarStudio: 'on', language: 'en' });
+    doc.dispatch('click', { target: runningTrig });
+    const runPopEn = bodyEl.querySelector('[data-testid="prism-chat-running-model-menu"]');
+    runPopEn.querySelectorAll('.ag-prism-model-opt').find((o) => o.getAttribute('data-model-id') === 'Gemini 3.8 Flash').dispatch('click');
+    const toastEn = bodyEl.querySelector('.ag-prism-sb-toast');
+    assert.ok(toastEn && toastEn.textContent === 'Switched to Gemini 3.8 Flash', `en toast must be English, got: ${toastEn?.textContent}`);
+
+    // 6) Sidebar contextmenu handlers call both preventDefault() and stopPropagation()
+    const chatRowBtn = bodyEl.querySelector('.ag-prism-sb-row');
+    const groupHeads = bodyEl.querySelectorAll('.ag-prism-sb-group-head');
+    assert.ok(chatRowBtn, 'Chat session row must exist');
+    assert.equal(groupHeads.length, 2, 'Both Knowledge folder header and Spark workspace header must exist');
+    for (const target of [chatRowBtn, groupHeads[0], groupHeads[1]]) {
+      const ev = target.dispatch('contextmenu');
+      assert.equal(ev.prevented, true, 'Sidebar contextmenu must call preventDefault()');
+      assert.equal(ev.stopped, true, 'Sidebar contextmenu must call stopPropagation() to suppress host native menu');
+    }
+  } finally {
+    sandbox.__agPrismSidebar.destroy();
+  }
+});

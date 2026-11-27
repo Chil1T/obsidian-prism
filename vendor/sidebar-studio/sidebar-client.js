@@ -54,6 +54,7 @@
     file: ['M14 2H6A2 2 0 0 0 4 4V20A2 2 0 0 0 6 22H18A2 2 0 0 0 20 20V8Z', 'M14 2V8H20'],
     paperclip: ['M21.44 11.05L12.25 20.24A6 6 0 0 1 3.76 11.75L12.95 2.56A4 4 0 0 1 18.61 8.22L9.41 17.41A2 2 0 0 1 6.59 14.59L15.07 6.1'],
     upload: ['M21 15V19A2 2 0 0 1 19 21H5A2 2 0 0 1 3 19V15', 'M17 8L12 3L7 8', 'M12 3V15'],
+    lock: ['M7 11V7A5 5 0 0 1 17 7V11', 'M5 11H19V21H5Z'],
   };
 
   const DEFAULT_CHAT_POLICY = {
@@ -788,10 +789,16 @@
                 efforts: new Set(),
                 modelEnums: {},
                 defaultEffort: preset ? preset.defaultEffort : 'High',
+                available: false,
               });
               order.push(key);
             }
             const entry = grouped.get(key);
+            const rawD = typeof m.tagDescription === 'string' ? m.tagDescription : '';
+            const remFrac = m.quotaInfo && m.quotaInfo.remainingFraction;
+            if (!m.disabled && !/not included|paid .*plan/i.test(rawD) && !(remFrac != null && Number(remFrac) <= 0)) {
+              entry.available = true;
+            }
             if (effort) {
               entry.efforts.add(effort);
               if (modelEnum !== null) entry.modelEnums[effort] = modelEnum;
@@ -816,12 +823,15 @@
               efforts: arr,
               modelEnums: g.modelEnums,
               defaultEffort: arr.includes(g.defaultEffort) ? g.defaultEffort : arr[arr.length - 1] || 'High',
+              available: g.available,
             };
           });
           liveGeminiModels = nextList;
-          if (!liveGeminiModels.some((x) => x.id === selectedModel)) {
-            selectedModel = liveGeminiModels[0].id;
-            selectedEffort = liveGeminiModels[0].defaultEffort;
+          const curM = liveGeminiModels.find((x) => x.id === selectedModel);
+          if (!curM || curM.available === false) {
+            const ok = liveGeminiModels.find((x) => x.available !== false) || liveGeminiModels[0];
+            selectedModel = ok.id;
+            selectedEffort = ok.defaultEffort;
           }
         }
       } catch {}
@@ -1742,6 +1752,7 @@
     // 注册受控宿主原语供 Daemon live-host-adapter 安全调用（严格仅操作项目级 projectSettingsProvider 或单会话 lsClient）
     function registerHostOps() {
       if (destroyed || currentCfg.sidebarStudio !== 'on') return;
+      const rpcErr = (err) => ({ ok: false, error: String(err && err.message ? err.message : err) });
       const invokePspSetter = async (methodName, args) => {
         if (!host.psp || typeof host.psp[methodName] !== 'function') {
           return { ok: false, error: `psp.${methodName} unavailable` };
@@ -1776,7 +1787,7 @@
           await host.psp[methodName](targetId, wireValue);
           return { ok: true };
         } catch (err) {
-          return { ok: false, error: String(err && err.message ? err.message : err) };
+          return rpcErr(err);
         }
       };
 
@@ -1811,7 +1822,7 @@
                   },
                 };
               } catch (err) {
-                return { ok: false, error: String(err && err.message ? err.message : err) };
+                return rpcErr(err);
               }
             }
             if (typeof host.psp.getProjectPermissionGrants !== 'function') {
@@ -1822,7 +1833,7 @@
               if (!raw || typeof raw !== 'object') return { ok: false, error: 'empty-grants' };
               return { ok: true, grants: { ...raw } };
             } catch (err) {
-              return { ok: false, error: String(err && err.message ? err.message : err) };
+              return rpcErr(err);
             }
           },
           setProjectAutoExecutionPolicy: (args) => invokePspSetter('setProjectAutoExecutionPolicy', args),
@@ -1886,7 +1897,7 @@
               setBoundedMapEntry(host.reservedMap, idempotencyKey, rec);
               return { ok: true, ...rec, replayed: Boolean(out.replayed) };
             } catch (err) {
-              return { ok: false, error: String(err && err.message ? err.message : err) };
+              return rpcErr(err);
             }
           }
           const ls = getHostLsClient();
@@ -2126,7 +2137,7 @@
             }
             return { ok: false, error: 'host-annotations-api-unavailable' };
           } catch (err) {
-            return { ok: false, error: String(err && err.message ? err.message : err) };
+            return rpcErr(err);
           }
         },
         deleteConversation: async ({ cascadeId }) => {
@@ -2143,7 +2154,7 @@
             }
             return { ok: false, error: 'host-delete-api-unavailable' };
           } catch (err) {
-            return { ok: false, error: String(err && err.message ? err.message : err) };
+            return rpcErr(err);
           }
         },
         cancelConversation: async ({ cascadeId }) => {
@@ -2160,7 +2171,7 @@
             }
             return { ok: false, error: 'host-cancel-api-unavailable' };
           } catch (err) {
-            return { ok: false, error: String(err && err.message ? err.message : err) };
+            return rpcErr(err);
           }
         },
       };
@@ -2420,31 +2431,36 @@ return { nav: cachedSidebarSlots.nav, nativeList: cachedSidebarSlots.nativeList,
     }
 
     function openModelMenu(anchorEl, opts) {
-      refreshLiveGeminiModels();
       const isRunning = Boolean(opts && opts.runningSession);
+      const tid = isRunning ? 'prism-chat-running-model-menu' : 'prism-chat-home-model-menu';
+      if (activePopover && activePopover.getAttribute('data-testid') === tid) {
+        closePopover();
+        return;
+      }
+      refreshLiveGeminiModels();
       const runningCid = isRunning && typeof opts.cascadeId === 'string' ? opts.cascadeId : '';
       const models = liveGeminiModels && liveGeminiModels.length ? liveGeminiModels : DEFAULT_GEMINI_MODELS;
       const currentModelId = isRunning ? resolveRunningSessionModelId(runningCid) : selectedModel;
       const isEn = getCurrentLang() === 'en';
       const pop = el('div', 'ag-prism-sidebar-popover ag-prism-model-popover');
-      pop.setAttribute('data-testid', isRunning ? 'prism-chat-running-model-menu' : 'prism-chat-home-model-menu');
-      pop.appendChild(
-        el(
-          'div',
-          'ag-prism-menu-note',
-          isRunning
-            ? isEn ? 'Gemini Models' : 'Gemini 模型'
-            : isEn ? 'Gemini Models' : 'Gemini 模型'
-        )
-      );
+      pop.setAttribute('data-testid', tid);
+      pop.appendChild(el('div', 'ag-prism-menu-note', isEn ? 'Gemini Models' : 'Gemini 模型'));
 
       for (let i = 0; i < models.length; i++) {
         const m = models[i];
         const isSel = currentModelId === m.id;
+        const descTxt = String(isEn ? m.descEn || m.desc : m.desc || '');
+        const isAvail = m.available !== false && !m.disabled && !/not included|paid .*plan/i.test(descTxt);
         const opt = el('button', 'ag-prism-model-opt');
         opt.type = 'button';
         opt.setAttribute('data-selected', isSel ? '1' : '0');
         opt.setAttribute('data-model-id', m.id);
+        if (!isAvail) {
+          opt.disabled = true;
+          opt.setAttribute('aria-disabled', 'true');
+          opt.style.opacity = '0.45';
+          opt.style.cursor = 'not-allowed';
+        }
 
         const lead = el('span', 'ag-prism-model-lead');
         const ic = el('span', 'ag-prism-model-icon');
@@ -2453,18 +2469,19 @@ return { nav: cachedSidebarSlots.nav, nativeList: cachedSidebarSlots.nativeList,
 
         const txt = el('span', 'ag-prism-model-text');
         txt.appendChild(el('span', 'ag-prism-model-name', m.id));
-        txt.appendChild(el('span', 'ag-prism-model-desc', isEn ? m.descEn || m.desc : m.desc));
+        txt.appendChild(el('span', 'ag-prism-model-desc', descTxt));
         lead.appendChild(txt);
         opt.appendChild(lead);
 
-        if (isSel) {
+        if (isSel || !isAvail) {
           const ck = el('span', 'ag-prism-model-check');
-          ck.appendChild(makeMonoSvg('check', 13));
+          ck.appendChild(makeMonoSvg(!isAvail ? 'lock' : 'check', !isAvail ? 12 : 13));
           opt.appendChild(ck);
         }
 
         opt.addEventListener('click', (e) => {
           e.stopPropagation();
+          if (!isAvail) return;
           if (isRunning) {
             const eff = m.defaultEffort || (m.id.includes('3.8') ? 'Medium' : 'High');
             const modelEnum = resolveModelEnum(m.id, eff);
@@ -2482,7 +2499,7 @@ return { nav: cachedSidebarSlots.nav, nativeList: cachedSidebarSlots.nativeList,
               }
             }
             closePopover();
-            showToast(`已切换为 ${m.id}`);
+            showToast(isEn ? `Switched to ${m.id}` : `已切换为 ${m.id}`);
           } else {
             selectedModel = m.id;
             const allowed = Array.isArray(m.efforts) && m.efforts.length ? m.efforts : ['Low', 'Medium', 'High'];
@@ -4159,19 +4176,19 @@ return { nav: cachedSidebarSlots.nav, nativeList: cachedSidebarSlots.nativeList,
       mountPopover(pop, anchorEl, false);
     }
 
+    function openNewChatDraft(draft) {
+      greetingSeed = Math.floor(Math.random() * 100);
+      void callDaemonRpc('navigate', { mode: 'chat', view: '/', navRev: snapshot.navRev }).then(() => {
+        void callDaemonRpc('set-chat-draft', { draft, navRev: snapshot.navRev, draftRev: snapshot.draftRev });
+      });
+      navigateHostRoute('/');
+    }
+
     function openKnowledgeFolderMenu(folder, anchorEl) {
       const pop = el('div', 'ag-prism-sidebar-popover');
       pop.appendChild(
         makeMenuItem('plus', '在此文件夹新建对话', () => {
-          greetingSeed = Math.floor(Math.random() * 100);
-          void callDaemonRpc('navigate', { mode: 'chat', view: '/', navRev: snapshot.navRev }).then(() => {
-            void callDaemonRpc('set-chat-draft', {
-              draft: { kind: 'knowledge', folderId: folder.id, sparkProjectId: null },
-              navRev: snapshot.navRev,
-              draftRev: snapshot.draftRev,
-            });
-          });
-          navigateHostRoute('/');
+          openNewChatDraft({ kind: 'knowledge', folderId: folder.id, sparkProjectId: null });
         })
       );
       pop.appendChild(
@@ -4194,15 +4211,7 @@ return { nav: cachedSidebarSlots.nav, nativeList: cachedSidebarSlots.nativeList,
       const pop = el('div', 'ag-prism-sidebar-popover');
       pop.appendChild(
         makeMenuItem('plus', '在此工作区新建对话', () => {
-          greetingSeed = Math.floor(Math.random() * 100);
-          void callDaemonRpc('navigate', { mode: 'chat', view: '/', navRev: snapshot.navRev }).then(() => {
-            void callDaemonRpc('set-chat-draft', {
-              draft: { kind: 'spark', folderId: null, sparkProjectId: project.id },
-              navRev: snapshot.navRev,
-              draftRev: snapshot.draftRev,
-            });
-          });
-          navigateHostRoute('/');
+          openNewChatDraft({ kind: 'spark', folderId: null, sparkProjectId: project.id });
         })
       );
       pop.appendChild(
@@ -4360,6 +4369,7 @@ return { nav: cachedSidebarSlots.nav, nativeList: cachedSidebarSlots.nativeList,
       });
       btn.addEventListener('contextmenu', (e) => {
         e.preventDefault();
+        e.stopPropagation();
         openChatSessionMenu(item, btn);
       });
 
@@ -4554,6 +4564,7 @@ return { nav: cachedSidebarSlots.nav, nativeList: cachedSidebarSlots.nativeList,
           });
           gh.addEventListener('contextmenu', (e) => {
             e.preventDefault();
+            e.stopPropagation();
             openKnowledgeFolderMenu(f, gh);
           });
 
@@ -4564,15 +4575,7 @@ return { nav: cachedSidebarSlots.nav, nativeList: cachedSidebarSlots.nativeList,
           fNew.appendChild(makeMonoSvg('plus', 12));
           fNew.addEventListener('click', (e) => {
             e.stopPropagation();
-            greetingSeed = Math.floor(Math.random() * 100);
-            void callDaemonRpc('navigate', { mode: 'chat', view: '/', navRev: snapshot.navRev }).then(() => {
-              void callDaemonRpc('set-chat-draft', {
-                draft: { kind: 'knowledge', folderId: f.id, sparkProjectId: null },
-                navRev: snapshot.navRev,
-                draftRev: snapshot.draftRev,
-              });
-            });
-            navigateHostRoute('/');
+            openNewChatDraft({ kind: 'knowledge', folderId: f.id, sparkProjectId: null });
           });
           const fMore = el('button', 'ag-prism-sb-act-btn');
           fMore.type = 'button';
@@ -4676,6 +4679,7 @@ return { nav: cachedSidebarSlots.nav, nativeList: cachedSidebarSlots.nativeList,
             });
             gh.addEventListener('contextmenu', (e) => {
               e.preventDefault();
+              e.stopPropagation();
               openSparkWorkspaceMenu(p, gh);
             });
 
@@ -4686,15 +4690,7 @@ return { nav: cachedSidebarSlots.nav, nativeList: cachedSidebarSlots.nativeList,
             pNew.appendChild(makeMonoSvg('plus', 12));
             pNew.addEventListener('click', (e) => {
               e.stopPropagation();
-              greetingSeed = Math.floor(Math.random() * 100);
-              void callDaemonRpc('navigate', { mode: 'chat', view: '/', navRev: snapshot.navRev }).then(() => {
-                void callDaemonRpc('set-chat-draft', {
-                  draft: { kind: 'spark', folderId: null, sparkProjectId: p.id },
-                  navRev: snapshot.navRev,
-                  draftRev: snapshot.draftRev,
-                });
-              });
-              navigateHostRoute('/');
+              openNewChatDraft({ kind: 'spark', folderId: null, sparkProjectId: p.id });
             });
             const pMore = el('button', 'ag-prism-sb-act-btn');
             pMore.type = 'button';
@@ -5258,33 +5254,28 @@ return { nav: cachedSidebarSlots.nav, nativeList: cachedSidebarSlots.nativeList,
       if (!trig) return null;
       return { trig, cid: decodeURIComponent(mCid[1]) };
     };
-    const onDocModelPointerCapture = (e) => {
-      const hit = matchChatRunningModelTrigger(e);
-      if (!hit) return;
-      // Radix DropdownMenu 在 pointerdown/mousedown 阶段就会打开原生菜单，必须在捕获阶段直接拦截
+    const stopHostEvt = (e) => {
       e.preventDefault();
       e.stopPropagation();
       if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
     };
+    const onDocModelPointerCapture = (e) => {
+      const hit = matchChatRunningModelTrigger(e);
+      if (!hit) return;
+      // Radix DropdownMenu 在 pointerdown/mousedown 阶段就会打开原生菜单，必须在捕获阶段直接拦截
+      stopHostEvt(e);
+    };
     const onDocModelTriggerCapture = (e) => {
       const hit = matchChatRunningModelTrigger(e);
       if (!hit) return;
-      e.preventDefault();
-      e.stopPropagation();
-      if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
-      if (activePopover && activePopover.getAttribute('data-testid') === 'prism-chat-running-model-menu') {
-        closePopover();
-        return;
-      }
+      stopHostEvt(e);
       openModelMenu(hit.trig, { runningSession: true, cascadeId: hit.cid });
     };
     const onDocModelKeyCapture = (e) => {
       if (!e || (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'ArrowDown')) return;
       const hit = matchChatRunningModelTrigger(e);
       if (!hit) return;
-      e.preventDefault();
-      e.stopPropagation();
-      if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
+      stopHostEvt(e);
       openModelMenu(hit.trig, { runningSession: true, cascadeId: hit.cid });
     };
     const onDocKeydown = (e) => {
