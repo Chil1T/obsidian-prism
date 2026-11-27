@@ -22,6 +22,7 @@ const ROOT_DIR = path.resolve(__dirname, "..");
 const {
   PLUGIN_VERSION,
   SYNC_ROOT_FILES,
+  SYNC_SUBDIRS,
   readPidFromLockFile,
   isExpectedDaemonProcess,
   ensureAntigravityShortcutsCdpFlag,
@@ -1506,7 +1507,8 @@ async function installPlugin(opts = {}) {
   const stoppedOldPid = await stopExistingDaemonInDir(targetDir, opts.daemonStopOpts);
 
   const { copiedFiles: syncedCount, missingOptional } = repoSync.syncPluginDirWithManifest({
-    sourceDir, targetDir, rootFiles: ROOT_FILES_TO_SYNC, dirs: DIRS_TO_SYNC,
+    sourceDir, targetDir, rootFiles: ROOT_FILES_TO_SYNC,
+    dirs: Array.isArray(SYNC_SUBDIRS) && SYNC_SUBDIRS.length > 0 ? SYNC_SUBDIRS : DIRS_TO_SYNC,
     assertNotSymlink: assertNotSymbolicLink, _testHooks: opts._atomicTestHooks || null,
   });
   let copiedFiles = syncedCount;
