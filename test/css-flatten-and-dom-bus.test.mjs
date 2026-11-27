@@ -527,9 +527,13 @@ test('Issue #97 flexible model selector width, Blink CSS pruning, scoped motion=
   // Narrow collapse guard still intact so telemetry/right buttons never break
   assert.ok(css.includes('&[data-t~="1"] [data-testid="model-selector-trigger"]>span:not(.ag-cs-model-glyph):not(.ag-pp-mini-keycap)'));
 
-  // Blink content-visibility legacy guards + bleed exemption + non-flickering performance/motion=off blur suppression
+  // Blink content-visibility legacy guards + bleed exemption + sticky-safe pre/turn exclusion (PR #138) + non-flickering performance/motion=off blur suppression
+  const flatCss = cssFlatten.flattenNestedCss(css);
   assert.ok(css.includes('[data-testid="conversation-row-history"]:not([data-ag-cs-bleed="1"]){content-visibility:auto;contain-intrinsic-size:auto 44px;'));
-  assert.ok(/pre:not\(:last-child\):not\(\[data-ag-cs-bleed="1"\]\)\{content-visibility:auto;contain-intrinsic-size:auto 180px;?\}/.test(css));
+  assert.equal(/\[data-markdown-root\]\s*pre[^\n{]*\{[^}]*content-visibility:\s*auto/.test(css), false, 'style.css must not apply content-visibility:auto on markdown pre blocks (preserves sticky headers)');
+  assert.equal(/\[data-markdown-root\]\s*pre[^{]*\{[^}]*content-visibility:\s*auto/.test(flatCss), false, 'flattened CSS must not apply content-visibility:auto on markdown pre blocks');
+  assert.equal(/div\.flex\.items-start[^\n{]*\{[^\n}]*content-visibility:\s*auto/.test(css), false, 'style.css must not apply content-visibility:auto on whole turn items');
+  assert.equal(/div\.flex\.items-start(?::not\([^)]*\))*\{[^}]*content-visibility:\s*auto/.test(flatCss), false, 'flattened CSS must not apply content-visibility:auto directly on whole turn items');
   assert.ok(css.includes(':is([data-ag-cs-perf-mode="performance"],[data-ag-cs-motion="off"])'));
   assert.equal(css.includes('data-ag-perf-busy="1"'), false, 'style.css must not toggle backdrop-filter on transient perf-busy');
   assert.equal(css.includes('data-ag-cs-stream-active="1"'), false, 'style.css must not toggle backdrop-filter on transient stream-active');
@@ -563,22 +567,28 @@ test('Conversation viewport stability: bottom-16 content-visibility exemption & 
   const css = fs.readFileSync(path.join(ROOT, 'style.css'), 'utf8');
   const flat = cssFlatten.flattenNestedCss(css);
 
-  // 1) Keep bottom 16 visible turns (and their nested thinking/tool/step/pre blocks) out of content-visibility:auto
+  // 1) Remove sticky-breaking whole-turn & markdown pre content-visibility:auto (PR #138),
+  //    while keeping expanded thinking/tool/step virtualization scoped outside bottom 16 turns (PR #127)
   //    so dynamic takeover/ask_question viewport height changes never trigger Chromium DisplayLock blanking.
   const turnCvAnchor =
     '[data-testid="conversation-view"] [data-testid="autoscroll-viewport"] .relative.flex.flex-col>div.flex.items-start:not(:nth-last-child(-n+16)):not([data-ag-cs-bleed="1"])';
-  assert.ok(css.includes(turnCvAnchor + '{content-visibility:auto;contain-intrinsic-size:auto 200px;'), 'raw style.css must scope turn content-visibility:auto outside bottom 16 turns');
-  assert.ok(
-    flat.includes(`html[data-ag-cs-style] ${turnCvAnchor}{content-visibility:auto;contain-intrinsic-size:auto 200px`),
-    'flattened CSS must emit scoped turn content-visibility:auto rule'
+  assert.equal(
+    flat.includes(`html[data-ag-cs-style] ${turnCvAnchor}{content-visibility:auto`),
+    false,
+    'flattened CSS must not apply content-visibility:auto directly on whole turn rows'
+  );
+  assert.equal(
+    flat.includes('[data-markdown-root] pre:not(:last-child):not([data-ag-cs-bleed="1"]){content-visibility:auto'),
+    false,
+    'flattened CSS must not apply content-visibility:auto on markdown pre blocks'
   );
   assert.ok(
     flat.includes(`html[data-ag-cs-style] ${turnCvAnchor} :is([data-testid="thinking-collapsible-trigger"],[data-testid="tool-group-collapsible"],[data-testid="worked-for-collapsible"])[aria-expanded="true"]+div:not([data-ag-cs-bleed="1"]){content-visibility:auto;contain-intrinsic-size:auto 140px`),
     'flattened CSS must scope expanded thinking/tool body content-visibility:auto inside >16-from-bottom turns'
   );
   assert.ok(
-    flat.includes(`html[data-ag-cs-style] ${turnCvAnchor} [data-markdown-root] pre:not(:last-child):not([data-ag-cs-bleed="1"]){content-visibility:auto;contain-intrinsic-size:auto 180px`),
-    'flattened CSS must scope markdown pre content-visibility:auto inside >16-from-bottom turns'
+    flat.includes(`html[data-ag-cs-style] ${turnCvAnchor} :is([data-testid="tool-group-collapsible"],[data-testid="worked-for-collapsible"])[aria-expanded="true"]+div:not([data-ag-cs-bleed="1"]) .flex.flex-col>div.flex.flex-row:not(:last-child):not([data-ag-cs-bleed="1"]){content-visibility:auto;contain-intrinsic-size:auto 26px`),
+    'flattened CSS must scope expanded tool-group step rows content-visibility:auto inside >16-from-bottom turns'
   );
 
   // 2) Eliminate double-counted native 48px spacer and recalibrate native 75cqh turn min-height under 76px crab clearance
