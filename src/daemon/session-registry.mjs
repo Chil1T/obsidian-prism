@@ -305,6 +305,8 @@ export class SessionRegistry {
         entry._rendererRpcInstalledDocGen = -1;
         entry.inlineDiffSkipped = false;
         entry.wallpaperSkipped = false;
+        entry.suggesterSkipped = false;
+        entry.projectPartitionsSkipped = false;
         resetEntryForNewDocument(entry);
       };
 

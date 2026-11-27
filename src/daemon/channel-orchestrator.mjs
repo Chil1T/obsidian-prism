@@ -1,4 +1,4 @@
-// Obsidian Prism 通道编排子系统（ChannelOrchestrator：唯一消费 CHANNEL_REGISTRY，封装 16 通道编译态、盘缓存、配置广播、自愈与后端服务）
+// Obsidian Prism 通道编排子系统（ChannelOrchestrator：唯一消费 CHANNEL_REGISTRY，封装 17 通道编译态、盘缓存、配置广播、自愈与后端服务）
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -432,8 +432,9 @@ export class ChannelOrchestrator {
     if (typeof cdpBuildFn !== 'function') {
       return this.setChannelExpr(id, '');
     }
-    const needFileGuard = !spec.tracksSkippedNonHost && id !== 'thought';
-    if ((!spec.tracksSkippedNonHost && !this.isChannelEnabled(spec, cfg)) || (needFileGuard && !this.hasChannelFile(spec))) {
+    const isAlwaysOnTrackable = Boolean(spec.tracksSkippedNonHost && !spec.fields?.cdpShouldFn);
+    const needFileGuard = !isAlwaysOnTrackable && id !== 'thought';
+    if ((!isAlwaysOnTrackable && !this.isChannelEnabled(spec, cfg)) || (needFileGuard && !this.hasChannelFile(spec))) {
       return this.setChannelExpr(id, '');
     }
 

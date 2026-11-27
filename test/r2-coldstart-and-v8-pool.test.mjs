@@ -701,6 +701,39 @@ test('Wave P3-D: compile-cache governance gates short-lived CLI/tests, prunes ol
       assert.equal(escapedRes.reason, 'realpath-invalid-parent');
     }
 
+    // P2-3 hardening: symlinked parent pointing to an EXTERNAL directory ALSO named "obsidian-prism" must still be rejected via lstatSync
+    const extSameNameParent = path.join(tmpBase, 'external-vault', 'obsidian-prism');
+    fs.mkdirSync(path.join(extSameNameParent, 'compile-cache'), { recursive: true });
+    const symlinkSameNameParent = path.join(tmpBase, 'link-same-name', 'obsidian-prism');
+    fs.mkdirSync(path.dirname(symlinkSameNameParent), { recursive: true });
+    let sameNameLinkCreated = false;
+    try {
+      fs.symlinkSync(extSameNameParent, symlinkSameNameParent, process.platform === 'win32' ? 'junction' : 'dir');
+      sameNameLinkCreated = true;
+    } catch {}
+    if (sameNameLinkCreated) {
+      const sameNameRes = await validateCompileCacheDir(path.join(symlinkSameNameParent, 'compile-cache'), {
+        allowedBaseDir: symlinkSameNameParent,
+      });
+      assert.equal(sameNameRes.ok, false, 'symlinked obsidian-prism parent pointing to external obsidian-prism must fail-closed');
+      assert.equal(sameNameRes.reason, 'symlink-parent');
+    }
+
+    // P2-3 hardening: symlinked allowedBaseDir (ancestor of real parent) must be rejected via lstatSync
+    const symlinkAllowedBase = path.join(tmpBase, 'link-sidecar-base');
+    let baseLinkCreated = false;
+    try {
+      fs.symlinkSync(path.join(tmpBase, 'sidecar_data'), symlinkAllowedBase, process.platform === 'win32' ? 'junction' : 'dir');
+      baseLinkCreated = true;
+    } catch {}
+    if (baseLinkCreated) {
+      const symlinkBaseRes = await validateCompileCacheDir(path.join(symlinkAllowedBase, 'obsidian-prism', 'compile-cache'), {
+        allowedBaseDir: symlinkAllowedBase,
+      });
+      assert.equal(symlinkBaseRes.ok, false, 'symlinked allowedBaseDir must fail-closed');
+      assert.equal(symlinkBaseRes.reason, 'symlink-allowed-base');
+    }
+
     assert.equal((await validateCompileCacheDir(cacheDir, { allowedBaseDir: allowedParent })).ok, true);
 
     // Seed 10 cache files with staggered mtimes (0 = oldest, 9 = newest)

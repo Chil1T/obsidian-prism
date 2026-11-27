@@ -120,11 +120,12 @@ export function planChannelsForHeal(orch, entry, cfg, probe, now) {
     }
 
     // 通用表驱动通道：Ch5 thought / Ch6 inlineDiff / Ch7 wallpaper / Ch8 periodicPicker /
-    // Ch10 mascot / Ch11 suggester / Ch12 homeStudio / Ch13~Ch16 runtime
+    // Ch10 mascot / Ch11 suggester / Ch12 homeStudio / Ch13~Ch17 runtime & addons
     const cfgEnabled = orch.isChannelEnabled(spec, cfg);
     const hasFile = orch.hasChannelFile(spec);
     const exprNow = orch.getChannelExpr(id);
-    const available = spec.tracksSkippedNonHost
+    const isAlwaysOnTrackable = Boolean(spec.tracksSkippedNonHost && !f.cdpShouldFn);
+    const available = isAlwaysOnTrackable
       ? Boolean(exprNow || hasFile)
       : cfgEnabled && (id === 'thought' ? true : hasFile);
     const skipped = Boolean(spec.tracksSkippedNonHost && f.skippedField && entry[f.skippedField]);
@@ -146,7 +147,7 @@ export function planChannelsForHeal(orch, entry, cfg, probe, now) {
 
     const scriptStale = Boolean(
       !entry[f.scriptField] ||
-        (expectedSig && !spec.tracksSkippedNonHost && id !== 'thought' && f.scriptSigField && entry[f.scriptSigField] !== expectedSig)
+        (expectedSig && !isAlwaysOnTrackable && id !== 'thought' && f.scriptSigField && entry[f.scriptSigField] !== expectedSig)
     );
     const missingMount = !isProbeChannelHealthy(spec, probe) || (spec.tracksSkippedNonHost || id === 'thought' ? !entry[f.mountedField] : false);
     const extraNeed = id === 'homeStudio' && Boolean(probe.needsHomeStudioChannel);

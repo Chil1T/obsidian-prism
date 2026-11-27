@@ -22,6 +22,12 @@
   } = UI;
   const { normalizeUriKey, parseTsMs, normalizePartitionsState, buildPartitionsRenderSig, createHostBridge } = HOST;
   const makeId = () => 'part-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
+  const hasOwn = Object.prototype.hasOwnProperty;
+  const FORBIDDEN_MAP_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+  const normKey = (k) => {
+    const s = typeof k === 'string' ? k.trim().slice(0, 128) : '';
+    return s && !FORBIDDEN_MAP_KEYS.has(s) ? s : '';
+  };
 
   function createProjectPartitionsController(opts = {}) {
     const win = opts.root || opts.win || G.window || G;
@@ -34,7 +40,15 @@
 
     let enabled = opts.enabled !== false && opts.mode !== 'off' && opts.config?.projectPartitions !== 'off';
     let destroyed = false;
-    let state = { version: 1, partitions: [], projectToPartition: {}, expandedProjects: {} };
+    let state = { version: 1, partitions: [], projectToPartition: Object.create(null), expandedProjects: Object.create(null) };
+    const getPartId = (pid) => {
+      const k = normKey(pid);
+      return k && hasOwn.call(state.projectToPartition, k) ? state.projectToPartition[k] : '';
+    };
+    const isProjExpanded = (pid) => {
+      const k = normKey(pid);
+      return Boolean(k && hasOwn.call(state.expandedProjects, k) && state.expandedProjects[k]);
+    };
     const showAllConvsFor = new Set();
     const knownProjectIds = new Set();
     const host = createHostBridge({ win, doc, hostStore: opts.hostStore || null, hostServices: opts.hostServices || null, hostRouter: opts.hostRouter || null, onHostChange: () => scheduleRender() });
@@ -66,7 +80,9 @@
       if (!doc) return;
       const head = doc.head || doc.documentElement;
       if (!head) return;
-      const assignedIds = enabled ? Object.keys(state.projectToPartition).filter(Boolean).sort() : [];
+      const assignedIds = enabled
+        ? Object.keys(state.projectToPartition).filter((k) => Boolean(normKey(k) && hasOwn.call(state.projectToPartition, k) && state.projectToPartition[k])).sort()
+        : [];
       const hideSig = assignedIds.join('\x1f');
       let styleEl = doc.getElementById?.(HIDE_STYLE_ID);
       if (hideSig === lastHideSig && ((assignedIds.length === 0 && !styleEl) || (assignedIds.length > 0 && styleEl?.isConnected))) {
@@ -180,8 +196,9 @@
       if (state.partitions.some((p) => p.name.toLowerCase() === name.toLowerCase())) return { ok: false, error: L().duplicateName };
       const part = { id: makeId(), name, collapsed: false };
       state.partitions.push(part);
-      if (assignProjectId) state.projectToPartition[assignProjectId] = part.id;
-      commitState(true, assignProjectId ? fmt(L().movedTo, name) : fmt(L().createdToast, name));
+      const assignKey = normKey(assignProjectId);
+      if (assignKey) state.projectToPartition[assignKey] = part.id;
+      commitState(true, assignKey ? fmt(L().movedTo, name) : fmt(L().createdToast, name));
       return { ok: true, partition: part };
     }
 
@@ -200,8 +217,10 @@
       const idx = state.partitions.findIndex((p) => p.id === partId);
       if (idx < 0) return;
       state.partitions.splice(idx, 1);
-      for (const [projId, pid] of Object.entries(state.projectToPartition)) {
-        if (pid === partId) delete state.projectToPartition[projId];
+      for (const projId of Object.keys(state.projectToPartition)) {
+        if (hasOwn.call(state.projectToPartition, projId) && state.projectToPartition[projId] === partId) {
+          delete state.projectToPartition[projId];
+        }
       }
       commitState(true, L().deletedToast);
     }
@@ -216,19 +235,20 @@
     }
 
     function assignProjectToPartition(projectId, partId) {
-      if (!projectId) return;
+      const pid = normKey(projectId);
+      if (!pid) return;
       if (!partId) {
-        if (state.projectToPartition[projectId]) {
-          delete state.projectToPartition[projectId];
+        if (hasOwn.call(state.projectToPartition, pid) && state.projectToPartition[pid]) {
+          delete state.projectToPartition[pid];
           commitState(true, L().removedToast);
         }
         return;
       }
       const part = state.partitions.find((p) => p.id === partId);
       if (!part) return;
-      const nativeHdr = doc?.querySelector?.(`[data-sidebar-section-drop-id="${cssEsc(projectId)}"] [data-testid="project-header"]`);
-      if (nativeHdr?.getAttribute?.('aria-expanded') === 'true') state.expandedProjects[projectId] = true;
-      state.projectToPartition[projectId] = partId;
+      const nativeHdr = doc?.querySelector?.(`[data-sidebar-section-drop-id="${cssEsc(pid)}"] [data-testid="project-header"]`);
+      if (nativeHdr?.getAttribute?.('aria-expanded') === 'true') state.expandedProjects[pid] = true;
+      state.projectToPartition[pid] = partId;
       part.collapsed = false;
       commitState(true, fmt(L().movedTo, part.name));
     }
@@ -241,10 +261,11 @@
     }
 
     function toggleProjectExpanded(projectId, force) {
-      if (!projectId) return;
-      const next = typeof force === 'boolean' ? force : !state.expandedProjects[projectId];
-      if (next) state.expandedProjects[projectId] = true;
-      else delete state.expandedProjects[projectId];
+      const pid = normKey(projectId);
+      if (!pid) return;
+      const next = typeof force === 'boolean' ? force : !isProjExpanded(pid);
+      if (next) state.expandedProjects[pid] = true;
+      else delete state.expandedProjects[pid];
       commitState(false);
     }
 
@@ -284,7 +305,7 @@
       cancelCloseSubmenu();
       closeSubmenu();
       const anchorRect = anchorEl.getBoundingClientRect ? anchorEl.getBoundingClientRect() : { left: 100, right: 260, top: 100, bottom: 130 };
-      const curPartId = state.projectToPartition[projectId] || '';
+      const curPartId = getPartId(projectId);
       const items = state.partitions.length === 0
         ? [{ empty: L().noPartitions }]
         : state.partitions.map((p) => ({
@@ -317,7 +338,7 @@
     }
 
     function createPartitionMenuTriggerRow(projectId, nativeStyle) {
-      const curPartId = state.projectToPartition[projectId] || '';
+      const curPartId = getPartId(projectId);
       const curPart = curPartId ? state.partitions.find((p) => p.id === curPartId) : null;
       const item = markOwned(el(
         doc,
@@ -469,7 +490,7 @@
       const activeCid = host.getActiveCascadeId();
       const projectsByPart = new Map(state.partitions.map((p) => [p.id, []]));
       for (const p of projects) {
-        const partId = state.projectToPartition[p.id];
+        const partId = getPartId(p.id);
         if (partId && projectsByPart.has(partId)) projectsByPart.get(partId).push(p);
       }
 
@@ -510,7 +531,7 @@
             bodyInner.appendChild(buildProjectBranch(doc, {
               proj,
               convs: convsByProject.get(proj.id) || [],
-              expanded: Boolean(state.expandedProjects[proj.id]),
+              expanded: isProjExpanded(proj.id),
               activeCid,
               showAll: showAllConvsFor.has(proj.id),
               labels,
@@ -540,10 +561,20 @@
       syncHideStyleSheet();
     }
 
+    function cancelPendingRaf() {
+      if (!renderRaf) return;
+      const id = renderRaf;
+      renderRaf = 0;
+      safe(() => {
+        if (typeof win?.cancelAnimationFrame === 'function') win.cancelAnimationFrame(id);
+        else if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(id);
+      });
+    }
+
     function scheduleRender(immediate = false) {
       if (destroyed) return;
       if (immediate) {
-        if (renderRaf && typeof cancelAnimationFrame === 'function') { safe(() => cancelAnimationFrame(renderRaf)); renderRaf = 0; }
+        cancelPendingRaf();
         safe(renderPartitions);
         return;
       }
@@ -678,7 +709,7 @@
       lastRenderSig = '';
       lastHideSig = '';
       knownProjectIds.clear();
-      if (renderRaf && typeof cancelAnimationFrame === 'function') { safe(() => cancelAnimationFrame(renderRaf)); renderRaf = 0; }
+      cancelPendingRaf();
       if (pollTimer) { clearInterval(pollTimer); pollTimer = 0; }
       if (toastTimer) { clearTimeout(toastTimer); toastTimer = 0; }
       if (diskLoadTimer) { clearTimeout(diskLoadTimer); diskLoadTimer = 0; }

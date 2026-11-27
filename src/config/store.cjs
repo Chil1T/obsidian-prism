@@ -70,8 +70,12 @@ function createConfigStore({ rootDir = path.resolve(__dirname, '..', '..'), conf
     return { ...normalized };
   }
 
+  const FORBIDDEN_PARTITION_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+  const hasOwn = Object.prototype.hasOwnProperty;
+
   function normalizeProjectPartitionsData(raw) {
-    const def = { version: 1, partitions: [], projectToPartition: {}, expandedProjects: {} };
+    const emptyMap = () => Object.create(null);
+    const def = { version: 1, partitions: [], projectToPartition: emptyMap(), expandedProjects: emptyMap() };
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return def;
     const partitions = [];
     const seenIds = new Set();
@@ -86,27 +90,30 @@ function createConfigStore({ rootDir = path.resolve(__dirname, '..', '..'), conf
         partitions.push({ id, name, collapsed: Boolean(p.collapsed) });
       }
     }
-    const projectToPartition = {};
+    const projectToPartition = emptyMap();
     if (raw.projectToPartition && typeof raw.projectToPartition === 'object' && !Array.isArray(raw.projectToPartition)) {
       let count = 0;
-      for (const [k, v] of Object.entries(raw.projectToPartition)) {
+      for (const k of Object.keys(raw.projectToPartition)) {
         if (count >= 500) break;
+        if (!hasOwn.call(raw.projectToPartition, k)) continue;
         const pid = typeof k === 'string' ? k.trim().slice(0, 128) : '';
+        const v = raw.projectToPartition[k];
         const partId = typeof v === 'string' ? v.trim().slice(0, 80) : '';
-        if (!pid || !seenIds.has(partId)) continue;
+        if (!pid || FORBIDDEN_PARTITION_KEYS.has(pid) || !seenIds.has(partId)) continue;
+        if (!hasOwn.call(projectToPartition, pid)) count += 1;
         projectToPartition[pid] = partId;
-        count += 1;
       }
     }
-    const expandedProjects = {};
+    const expandedProjects = emptyMap();
     if (raw.expandedProjects && typeof raw.expandedProjects === 'object' && !Array.isArray(raw.expandedProjects)) {
       let count = 0;
-      for (const [k, v] of Object.entries(raw.expandedProjects)) {
+      for (const k of Object.keys(raw.expandedProjects)) {
         if (count >= 500) break;
+        if (!hasOwn.call(raw.expandedProjects, k)) continue;
         const pid = typeof k === 'string' ? k.trim().slice(0, 128) : '';
-        if (!pid || !v) continue;
+        if (!pid || FORBIDDEN_PARTITION_KEYS.has(pid) || !raw.expandedProjects[k]) continue;
+        if (!hasOwn.call(expandedProjects, pid)) count += 1;
         expandedProjects[pid] = true;
-        count += 1;
       }
     }
     return { version: 1, partitions, projectToPartition, expandedProjects };

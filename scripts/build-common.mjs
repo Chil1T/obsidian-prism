@@ -52,6 +52,7 @@ function createManifest() {
     inlineDiffBinding: cdp.INLINE_DIFF_BINDING,
     wallpaperBinding: cdp.WALLPAPER_BINDING,
     suggesterBinding: cdp.SUGGESTER_BINDING,
+    partitionsBinding: cdp.PARTITIONS_BINDING,
     parts: [...cdp.RUNTIME_PARTS],
     defaultConfig: cdp.DEFAULT_CONFIG,
     validators: VALIDATORS,

@@ -269,7 +269,7 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
     });
   }
 
-  // 第九通道：设置面板 + 全量 8 语言词典 + 3D 视差黑曜石星辰酒馆 WebGL2 选角舞台按需独立注入
+  // 第九通道：设置面板 + 全量 9 语言词典 + 3D 视差黑曜石星辰酒馆 WebGL2 选角舞台按需独立注入
   function buildSettingsChannelExpression(config = null, opts = null) {
     let resolvedOpts = opts;
     if (config && typeof config === 'object' && ('cachePath' in config || 'noDiskCache' in config || 'deferCacheWrite' in config) && !resolvedOpts) {

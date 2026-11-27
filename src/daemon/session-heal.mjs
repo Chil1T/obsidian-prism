@@ -30,7 +30,8 @@ function anyChannelNeedsEarlySync(orch, entry, cfg, now, force = false) {
     if (isChannelInCooldown(entry, spec.id, now)) continue;
     const f = spec.fields;
     const exprNow = orch.getChannelExpr(spec.id);
-    const available = spec.tracksSkippedNonHost
+    const isAlwaysOnTrackable = Boolean(spec.tracksSkippedNonHost && !f.cdpShouldFn);
+    const available = isAlwaysOnTrackable
       ? Boolean(exprNow || orch.hasChannelFile(spec, { bypassCache: force }))
       : orch.isChannelEnabled(spec, cfg) && (spec.id === 'thought' ? true : Boolean(exprNow || orch.hasChannelFile(spec, { bypassCache: force })));
     if (!available) {
@@ -39,7 +40,7 @@ function anyChannelNeedsEarlySync(orch, entry, cfg, now, force = false) {
     }
     if (spec.tracksSkippedNonHost && f.skippedField && entry[f.skippedField]) continue;
     if (!entry[f.scriptField] || !entry[f.mountedField]) return true;
-    if (spec.id !== 'thought' && !spec.tracksSkippedNonHost && exprNow && f.sigField && f.scriptSigField) {
+    if (spec.id !== 'thought' && !isAlwaysOnTrackable && exprNow && f.sigField && f.scriptSigField) {
       const expSig = orch.getChannelCfgSig(spec, cfg, exprNow);
       if (expSig && (entry[f.sigField] !== expSig || entry[f.scriptSigField] !== expSig)) {
         return true;

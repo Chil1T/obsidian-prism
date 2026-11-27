@@ -1,4 +1,4 @@
-// 声明式多通道微内核注册表（全仓 16 通道唯一真相源：CHANNEL_REGISTRY / 磁盘缓存格式 / 探针片段 / 打包清单 / 预算报表）
+// 声明式多通道微内核注册表（全仓 17 通道唯一真相源：CHANNEL_REGISTRY / 磁盘缓存格式 / 探针片段 / 打包清单 / 预算报表）
 'use strict';
 
 const { reconcileConfigAliases } = require('../config/schema.cjs');
@@ -75,7 +75,7 @@ function defineSpec(cfg) {
   });
 }
 
-// 静态元数据清单（全部 16 条延迟/按需通道 Ch2~Ch16 唯一真相源）
+// 静态元数据清单（全部 17 条延迟/按需通道 Ch2~Ch17 唯一真相源）
 const CHANNEL_STATIC_SPECS = Object.freeze([
   defineSpec({
     id: 'omni', cacheFormat: 'minCode', channelNumber: 2, order: 20, tier: 'core', topLevelPack: true,
@@ -378,12 +378,13 @@ const CHANNEL_STATIC_SPECS = Object.freeze([
     id: 'projectPartitions', channelNumber: 17, order: 170, tier: 'addon', topLevelPack: true,
     label: 'Project Partitions 3-Level Hierarchy', configKeys: ['projectPartitions', 'language'],
     files: ['vendor/project-partitions/partitions-ui.js', 'vendor/project-partitions/partitions-host.js', 'vendor/project-partitions/partitions-client.js'],
-    mountGlobal: '__agPrismProjectPartitions', respectSkippedByLiveCfg: true, budgetBytes: 64 * 1024,
+    mountGlobal: '__agPrismProjectPartitions', respectSkippedByLiveCfg: true, tracksSkippedNonHost: true, budgetBytes: 64 * 1024,
     probeLines: [
       "hasProjectPartitions: Boolean((window.__agPrismProjectPartitions || globalThis.__agPrismProjectPartitions) && (window.__agPrismProjectPartitions || globalThis.__agPrismProjectPartitions).getStatus?.()?.status !== 'destroyed')",
       "projectPartitionsCodeHash: String((window.__agPrismProjectPartitions || globalThis.__agPrismProjectPartitions)?.__prismCodeHash || '')",
     ],
     fieldOverrides: {
+      skippedField: 'projectPartitionsSkipped',
       bindingAddedField: 'projectPartitionsBindingAdded',
       cdpShouldFn: 'shouldEnableProjectPartitions',
       cdpBuildFn: 'buildProjectPartitionsExpression',

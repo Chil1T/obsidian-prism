@@ -644,7 +644,9 @@ test('persistence: project-partitions.json atomic store, PROTECTED_USER_PATHS, a
   try {
     const emptyRes = cdp.readProjectPartitionsData(filePath);
     assert.equal(emptyRes.exists, false);
-    assert.deepEqual(emptyRes.data, { version: 1, partitions: [], projectToPartition: {}, expandedProjects: {} });
+    assert.equal(Object.getPrototypeOf(emptyRes.data.projectToPartition), null);
+    assert.equal(Object.getPrototypeOf(emptyRes.data.expandedProjects), null);
+    assert.deepEqual(JSON.parse(JSON.stringify(emptyRes.data)), { version: 1, partitions: [], projectToPartition: {}, expandedProjects: {} });
 
     const written = cdp.writeProjectPartitionsData(
       {
@@ -658,7 +660,9 @@ test('persistence: project-partitions.json atomic store, PROTECTED_USER_PATHS, a
       },
       filePath
     );
-    assert.deepEqual(written, {
+    assert.equal(Object.getPrototypeOf(written.projectToPartition), null);
+    assert.equal(Object.getPrototypeOf(written.expandedProjects), null);
+    assert.deepEqual(JSON.parse(JSON.stringify(written)), {
       version: 1,
       partitions: [{ id: 'part-1', name: 'Develop', collapsed: true }],
       projectToPartition: { 'proj-alpha': 'part-1' },
@@ -893,5 +897,184 @@ test('inject.js P0-3 partitions-binding helper: enforces sidebarHostVerified, do
     assert.equal(callsBad.length, 0, 'peer with mismatched docGen must be skipped fail-closed');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('hardening: prototype-key injection (__proto__/constructor/prototype/valueOf), 500/128 caps, and win.cancelAnimationFrame', () => {
+  const maliciousPayload = JSON.parse(
+    '{"partitions":[{"id":"p1","name":"Core","collapsed":false}],"projectToPartition":{"__proto__":"p1","constructor":"p1","prototype":"p1","valueOf":"p1","safe-proj":"p1"},"expandedProjects":{"__proto__":true,"constructor":true,"prototype":true,"toString":true}}'
+  );
+
+  // 1) Backend store normalizer: null-prototype maps + forbidden keys stripped
+  const storeNorm = cdp.normalizeProjectPartitionsData(maliciousPayload);
+  assert.equal(Object.getPrototypeOf(storeNorm.projectToPartition), null, 'store projectToPartition must use null prototype');
+  assert.equal(Object.getPrototypeOf(storeNorm.expandedProjects), null, 'store expandedProjects must use null prototype');
+  assert.equal(Object.prototype.hasOwnProperty.call(storeNorm.projectToPartition, '__proto__'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(storeNorm.projectToPartition, 'constructor'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(storeNorm.projectToPartition, 'prototype'), false);
+  assert.equal(storeNorm.projectToPartition['toString'], undefined, 'unassigned Object.prototype key must not collide');
+  assert.equal(storeNorm.projectToPartition['valueOf'], 'p1');
+  assert.equal(storeNorm.projectToPartition['safe-proj'], 'p1');
+  assert.equal(Object.prototype.hasOwnProperty.call(storeNorm.expandedProjects, '__proto__'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(storeNorm.expandedProjects, 'constructor'), false);
+  assert.equal(storeNorm.expandedProjects['valueOf'], undefined);
+  assert.equal(storeNorm.expandedProjects['toString'], true);
+
+  // 2) Host normalizer: null-prototype maps + forbidden keys stripped + 500 entries / 128-char key cap aligned with store
+  const hostNorm = partitionsHost.normalizePartitionsState(maliciousPayload);
+  assert.equal(Object.getPrototypeOf(hostNorm.projectToPartition), null, 'host projectToPartition must use null prototype');
+  assert.equal(Object.getPrototypeOf(hostNorm.expandedProjects), null, 'host expandedProjects must use null prototype');
+  assert.equal(Object.prototype.hasOwnProperty.call(hostNorm.projectToPartition, '__proto__'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(hostNorm.projectToPartition, 'constructor'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(hostNorm.projectToPartition, 'prototype'), false);
+  assert.equal(hostNorm.projectToPartition['toString'], undefined);
+  assert.equal(hostNorm.projectToPartition['valueOf'], 'p1');
+
+  const bigP2p = {};
+  const bigExp = {};
+  for (let i = 0; i < 620; i++) {
+    const k = `proj-${i}-${'a'.repeat(140)}`;
+    bigP2p[k] = 'p1';
+    bigExp[k] = true;
+  }
+  const capped = partitionsHost.normalizePartitionsState({
+    partitions: [{ id: 'p1', name: 'Cap' }],
+    projectToPartition: bigP2p,
+    expandedProjects: bigExp,
+  });
+  const cappedP2pKeys = Object.keys(capped.projectToPartition);
+  const cappedExpKeys = Object.keys(capped.expandedProjects);
+  assert.equal(cappedP2pKeys.length, 500, 'host projectToPartition must cap at 500 entries');
+  assert.equal(cappedExpKeys.length, 500, 'host expandedProjects must cap at 500 entries');
+  assert.ok(cappedP2pKeys.every((k) => k.length <= 128), 'host projectToPartition keys must cap at 128 chars');
+  assert.ok(cappedExpKeys.every((k) => k.length <= 128), 'host expandedProjects keys must cap at 128 chars');
+
+  // 3) Controller: blocks __proto__/constructor/prototype mutations, safely handles valueOf/toString project IDs, and uses win.cancelAnimationFrame
+  const projects = [
+    { id: 'valueOf', name: 'ValueOfRepo', projectResources: { resources: [] } },
+    { id: 'toString', name: 'ToStringRepo', projectResources: { resources: [] } },
+  ];
+  const dom = createPartitionsMiniDom({ projects, summaries: {} });
+  let cancelledRafIds = [];
+  let rafSeq = 100;
+  dom.win.requestAnimationFrame = () => ++rafSeq;
+  dom.win.cancelAnimationFrame = function cancelSpy(id) {
+    assert.equal(this, dom.win, 'win.cancelAnimationFrame must preserve win receiver binding');
+    cancelledRafIds.push(id);
+  };
+  const origW = globalThis.window;
+  const origD = globalThis.document;
+  globalThis.window = dom.win;
+  globalThis.document = dom.doc;
+  try {
+    const ctrl = partitionsFactory.mountProjectPartitions({
+      root: dom.win,
+      doc: dom.doc,
+      config: { projectPartitions: 'on', language: 'en' },
+    });
+    const part = ctrl.createPartition('SafeGroup').partition;
+    ctrl.assignProjectToPartition('__proto__', part.id);
+    ctrl.assignProjectToPartition('constructor', part.id);
+    ctrl.assignProjectToPartition('prototype', part.id);
+    ctrl.toggleProjectExpanded('__proto__', true);
+    ctrl.toggleProjectExpanded('constructor', true);
+    const st1 = ctrl.getState();
+    assert.deepEqual(Object.keys(st1.projectToPartition), [], 'dangerous prototype keys must never be assigned');
+    assert.deepEqual(Object.keys(st1.expandedProjects), [], 'dangerous prototype keys must never be expanded');
+
+    // Unassigned valueOf/toString must NOT appear assigned/expanded; explicit assign works safely
+    ctrl.renderPartitions();
+    assert.equal(dom.sidebar.querySelectorAll('.ag-prism-part-project').length, 0);
+    ctrl.assignProjectToPartition('valueOf', part.id);
+    ctrl.renderPartitions();
+    const rows = dom.sidebar.querySelectorAll('.ag-prism-part-project');
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].getAttribute('data-project-id'), 'valueOf');
+
+    // Toggle schedules deferred rAF, then destroy cancels it via win.cancelAnimationFrame
+    ctrl.toggleProjectExpanded('valueOf', true);
+    ctrl.destroy();
+    assert.ok(cancelledRafIds.length >= 1, 'destroy() must cancel pending rAF via win.cancelAnimationFrame');
+  } finally {
+    globalThis.window = origW;
+    globalThis.document = origD;
+  }
+});
+
+test('hardening: Ch17 tracksSkippedNonHost removes PARTITIONS_BINDING on skipped-non-host, keeps off=0B/0-binding, and exposes manifest partitionsBinding', async () => {
+  const { recordTrackableSkipOutcome, applyAllChannelsToEntry } = await import('../src/daemon/channel-sync-engine.mjs');
+  const { createManifest } = await import('../scripts/build-common.mjs');
+  const { PrismDaemon } = await import('../sidecars/daemon/main.mjs');
+
+  // 1) Registry metadata + manifest symmetry
+  const spec = cdp.findChannel('projectPartitions');
+  assert.equal(spec.tracksSkippedNonHost, true, 'projectPartitions must declare tracksSkippedNonHost=true');
+  assert.equal(spec.fields.skippedField, 'projectPartitionsSkipped', 'projectPartitions must declare skippedField');
+  const manifest = createManifest();
+  assert.equal(manifest.partitionsBinding, cdp.PARTITIONS_BINDING, 'createManifest() must expose partitionsBinding');
+
+  // 2) skipped-non-host marks projectPartitionsSkipped=true and immediately calls Runtime.removeBinding
+  const sent = [];
+  const entry = {
+    projectPartitionsMounted: false,
+    projectPartitionsSkipped: false,
+    projectPartitionsBindingAdded: true,
+    projectPartitionsScriptId: 'scr-17',
+    lastProjectPartitionsSig: '',
+    session: {
+      closed: false,
+      async send(method, params) {
+        sent.push([method, params]);
+        return {};
+      },
+    },
+  };
+  await recordTrackableSkipOutcome({ getCdp: () => cdp }, entry, spec, { ok: false, status: 'skipped-non-host' }, 'hash17');
+  assert.equal(entry.projectPartitionsMounted, false);
+  assert.equal(entry.projectPartitionsSkipped, true, 'skipped-non-host must mark projectPartitionsSkipped=true');
+  assert.equal(entry.projectPartitionsBindingAdded, false, 'skipped-non-host must clear projectPartitionsBindingAdded');
+  assert.equal(
+    sent.some(([m, p]) => m === 'Runtime.removeBinding' && p?.name === cdp.PARTITIONS_BINDING),
+    true,
+    'skipped-non-host must immediately revoke PARTITIONS_BINDING'
+  );
+
+  // 3) Default off config must still perform 0 compile and 0 Runtime.addBinding for projectPartitions
+  const daemon = new PrismDaemon({
+    rootDir: ROOT,
+    bundleCachePath: false,
+    silent: true,
+    enableAutoUpdateTimer: false,
+    enableStorageGuardTimer: false,
+  });
+  try {
+    daemon._cdp = { ...cdp, readConfig: () => ({ ...cdp.DEFAULT_CONFIG, projectPartitions: 'off' }) };
+    daemon.channelOrchestrator.ensureOmniServer = async () => null;
+    daemon.rebuildBundle();
+    assert.equal(daemon.channelOrchestrator.getChannelExpr('projectPartitions'), '', 'projectPartitions=off must compile to empty string');
+    const applySends = [];
+    const offEntry = {
+      sidebarDocument: 0,
+      contextFrames: new Map(),
+      session: {
+        closed: false,
+        async send(method, params) {
+          applySends.push([method, params]);
+          return method === 'Page.addScriptToEvaluateOnNewDocument' ? { identifier: 'id-1' } : {};
+        },
+        async evaluate() {
+          return { status: 'ok', ok: true };
+        },
+      },
+    };
+    await applyAllChannelsToEntry(daemon.channelOrchestrator, offEntry);
+    assert.equal(offEntry.projectPartitionsSkipped, false);
+    assert.equal(
+      applySends.some(([m, p]) => m === 'Runtime.addBinding' && p?.name === cdp.PARTITIONS_BINDING),
+      false,
+      'projectPartitions=off must never call Runtime.addBinding for PARTITIONS_BINDING'
+    );
+  } finally {
+    await daemon.stop(false, { skipAutoArchive: true });
   }
 });

@@ -372,8 +372,12 @@
     };
   }
 
+  const FORBIDDEN_PARTITION_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+  const hasOwn = Object.prototype.hasOwnProperty;
+  const isSafeMapKey = (k) => typeof k === 'string' && k.length > 0 && !FORBIDDEN_PARTITION_KEYS.has(k);
+
   function normalizePartitionsState(parsed) {
-    const def = { version: 1, partitions: [], projectToPartition: {}, expandedProjects: {} };
+    const def = { version: 1, partitions: [], projectToPartition: Object.create(null), expandedProjects: Object.create(null) };
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return def;
     const partitions = [];
     const validIds = new Set();
@@ -388,13 +392,31 @@
         partitions.push({ id, name, collapsed: Boolean(p.collapsed) });
       }
     }
-    const p2p = {};
+    const p2p = Object.create(null);
     if (parsed.projectToPartition && typeof parsed.projectToPartition === 'object' && !Array.isArray(parsed.projectToPartition)) {
-      for (const [k, v] of Object.entries(parsed.projectToPartition)) if (k && validIds.has(v)) p2p[k] = v;
+      let count = 0;
+      for (const k of Object.keys(parsed.projectToPartition)) {
+        if (count >= 500) break;
+        if (!hasOwn.call(parsed.projectToPartition, k)) continue;
+        const pid = typeof k === 'string' ? k.trim().slice(0, 128) : '';
+        const v = parsed.projectToPartition[k];
+        const partId = typeof v === 'string' ? v.trim().slice(0, 80) : '';
+        if (!isSafeMapKey(pid) || !validIds.has(partId)) continue;
+        if (!hasOwn.call(p2p, pid)) count += 1;
+        p2p[pid] = partId;
+      }
     }
-    const exp = {};
+    const exp = Object.create(null);
     if (parsed.expandedProjects && typeof parsed.expandedProjects === 'object' && !Array.isArray(parsed.expandedProjects)) {
-      for (const [k, v] of Object.entries(parsed.expandedProjects)) if (k && v) exp[k] = true;
+      let count = 0;
+      for (const k of Object.keys(parsed.expandedProjects)) {
+        if (count >= 500) break;
+        if (!hasOwn.call(parsed.expandedProjects, k)) continue;
+        const pid = typeof k === 'string' ? k.trim().slice(0, 128) : '';
+        if (!isSafeMapKey(pid) || !parsed.expandedProjects[k]) continue;
+        if (!hasOwn.call(exp, pid)) count += 1;
+        exp[pid] = true;
+      }
     }
     return { version: 1, partitions, projectToPartition: p2p, expandedProjects: exp };
   }
@@ -405,7 +427,7 @@
       parts.push(`P:${p.id}:${p.name}:${p.collapsed ? 1 : 0}`);
       if (p.collapsed) continue;
       for (const proj of projectsByPart.get(p.id) || []) {
-        const exp = Boolean(state.expandedProjects[proj.id]);
+        const exp = Boolean(state.expandedProjects && hasOwn.call(state.expandedProjects, proj.id) && state.expandedProjects[proj.id]);
         const sa = showAllConvsFor.has(proj.id);
         parts.push(`J:${proj.id}:${proj.name}:${exp ? 1 : 0}:${sa ? 1 : 0}`);
         if (!exp) continue;

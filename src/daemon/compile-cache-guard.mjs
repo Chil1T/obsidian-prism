@@ -121,6 +121,27 @@ export async function validateCompileCacheDir(dirPath, { allowedBaseDir = '' } =
       return { ok: false, reason: 'realpath-outside-base' };
     }
   }
+  const parentDir = path.dirname(absDir);
+  let parentLst;
+  try {
+    parentLst = fs.lstatSync(parentDir);
+  } catch {
+    return { ok: false, reason: 'lstat-parent-failed' };
+  }
+  if (parentLst.isSymbolicLink() || !parentLst.isDirectory()) {
+    return { ok: false, reason: parentLst.isSymbolicLink() ? 'symlink-parent' : 'parent-not-directory' };
+  }
+  if (allowedBaseDir) {
+    let baseLst;
+    try {
+      baseLst = fs.lstatSync(path.resolve(allowedBaseDir));
+    } catch {
+      return { ok: false, reason: 'invalid-allowed-base' };
+    }
+    if (baseLst.isSymbolicLink() || !baseLst.isDirectory()) {
+      return { ok: false, reason: baseLst.isSymbolicLink() ? 'symlink-allowed-base' : 'invalid-allowed-base' };
+    }
+  }
   return { ok: true, absDir, realDir };
 }
 
