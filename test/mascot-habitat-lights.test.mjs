@@ -334,14 +334,28 @@ test('4) pointer-events: none, 3-layer GPU CSS hygiene (0 filter:blur, 0 :has(, 
     assert.ok(/^[\x00-\x7F]*$/.test(css), 'CSS must be 100% ASCII');
     assert.ok(css.includes('.ag-v2-habitat-prop{') && css.includes('pointer-events:none!important'));
 
-    // Layer 1 radial halo & Layer 2 composer top-edge pool
-    assert.ok(css.includes('.ag-v2-habitat-prop[data-habitat-light]::before{') && css.includes('radial-gradient(circle at 50% 50%'));
-    assert.ok(css.includes('.ag-v2-habitat-prop[data-habitat-light]::after{') && css.includes('radial-gradient(ellipse at 50% 100%'));
+    // Layer 1 compact radial halo & Layer 2 all-around feathered top-edge glow (no hard box cutoff, stays within composer right edge)
+    const rightInset = parseFloat(habEl.style.right);
+    const propW = parseFloat(habEl.style.width);
+    const propCenterFromRight = rightInset + propW / 2;
+    assert.ok(rightInset >= 24, `habitatEl right inset (${rightInset}px) must sit well inside composer right border-radius (>=24px)`);
+    const beforeRule = css.match(/\}\.ag-v2-habitat-prop\[data-habitat-light\]::before\{([^}]+)\}/);
+    const afterRule = css.match(/\}\.ag-v2-habitat-prop\[data-habitat-light\]::after\{([^}]+)\}/);
+    assert.ok(beforeRule && afterRule, 'Must define ::before halo and ::after top-edge glow rules');
+    const beforeW = parseFloat(beforeRule[1].match(/width:(\d+)px/)?.[1]);
+    const afterW = parseFloat(afterRule[1].match(/width:(\d+)px/)?.[1]);
+    assert.ok(beforeW > 0 && beforeW <= 50, `::before halo width (${beforeW}px) must stay compact (<=50px)`);
+    assert.ok(afterW > 0 && afterW <= 60, `::after pool width (${afterW}px) must stay compact (<=60px)`);
+    assert.ok(propCenterFromRight - beforeW / 2 >= 10, `::before halo must stay inside right corner radius (margin=${propCenterFromRight - beforeW / 2}px)`);
+    assert.ok(propCenterFromRight - afterW / 2 >= 10, `::after glow must stay inside right corner radius (margin=${propCenterFromRight - afterW / 2}px)`);
+    assert.ok(beforeRule[1].includes('radial-gradient(circle closest-side at 50% 50%') && beforeRule[1].includes(',0)'));
+    assert.ok(afterRule[1].includes('radial-gradient(ellipse closest-side at 50% 50%') && afterRule[1].includes(',0)'));
+    assert.equal(afterRule[1].includes('50% 100%'), false, '::after must NOT anchor gradient center at 50% 100% (prevents flat bottom cutoff line)');
     assert.ok(css.includes('@keyframes ag-prism-hab-breath{0%,100%{opacity:.78}50%{opacity:1}}'));
     assert.ok(css.includes('ease-in-out infinite'));
 
     // Light theme dimming & accent/palette prism tracking
-    assert.ok(css.includes('html[data-ag-cs-theme="light"] .ag-v2-habitat-prop[data-habitat-light]{--ag-prism-ha0:.16;--ag-prism-ha1:.06}'));
+    assert.ok(css.includes('html[data-ag-cs-theme="light"] .ag-v2-habitat-prop[data-habitat-light]{--ag-prism-ha0:.16;--ag-prism-ha1:.065;--ag-prism-ha2:.02;--ag-prism-ga0:.12;--ag-prism-ga1:.04}'));
     assert.ok(css.includes('html[data-ag-cs-accent="cobalt"]'));
     assert.ok(css.includes('html[data-ag-cs-accent="iris"]'));
     assert.ok(css.includes('data-ag-cs-palette="warm"') && css.includes('data-ag-cs-palette="claude"'));
@@ -384,7 +398,7 @@ test('4) pointer-events: none, 3-layer GPU CSS hygiene (0 filter:blur, 0 :has(, 
 });
 
 test('5) Layer 3 Clawd proximity pixel lighting scales with distance, dims in light theme, adapts to prism accent, and preserves rc static cache (0 redraws when idle)', () => {
-  // Narrow stage (300px -> habX=278): Clawd starts close to right side (strong light); wide stage (1200px -> habX=1178) or moved left: weak/zero
+  // Narrow stage (320px -> habX=280): Clawd starts close to right side (strong light); wide stage (1200px -> habX=1160) or moved left: weak/zero
   const envNear = createHabitatMockEnv({ width: 320, theme: 'dark', accent: 'follow', palette: 'obsidian' });
   const stageNear = rig.mountDualMascotStage(envNear.hostEl, {
     camp: 'claude',
@@ -395,7 +409,7 @@ test('5) Layer 3 Clawd proximity pixel lighting scales with distance, dims in li
   });
 
   try {
-    // Switch to warm lamp -> Clawd is close to right-side lamp (stage width 320, habX=298)
+    // Switch to warm lamp -> Clawd is close to right-side lamp (stage width 320, habX=280)
     stageNear.setHabitatPreview('lamp');
     const snapLamp = stageNear.getDebugState();
     const clawdNear = snapLamp.actors.find((a) => a.id === 'clawd');
@@ -455,7 +469,7 @@ test('5) Layer 3 Clawd proximity pixel lighting scales with distance, dims in li
     // Force Clawd near far-left edge via drag or wider layout: compare near (320px) vs far (1200px)
     const snapFar = stageFar.getDebugState();
     const clawdFar = snapFar.actors.find((a) => a.id === 'clawd');
-    const distToHab = (1200 - 22) - clawdFar.worldCx;
+    const distToHab = (1200 - 40) - clawdFar.worldCx;
     if (distToHab >= 240) {
       assert.equal(snapFar.habitat.clawdLightStrength, 0, 'Clawd >240px away from lamp must decay to 0');
       assert.equal(clawdFar.renderCache.tintState.includes(':h'), false);

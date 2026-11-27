@@ -86,17 +86,18 @@
     const H = '.ag-v2-habitat-prop', L = H + '[data-habitat-light]', W = H + '[data-habitat-light="warm"]', P = H + '[data-habitat-light="prism"]';
     const LT = 'html[data-ag-cs-theme="light"]', Z = 'html:is([data-ag-cs-perf-mode="performance"],[data-ag-cs-perf-mode="eco"],[data-ag-cs-motion="off"],[data-ag-cs-win-blur="1"],[data-ag-pp-open="1"])';
     const cv = (k, o = 0) => '--ag-prism-hc0:' + RIM_PALS[k][o] + ';--ag-prism-hc1:' + RIM_PALS[k][o + 1];
+    const rg = (c, a) => 'rgba(var(--ag-prism-hc' + c + '),' + (a === 0 ? '0' : 'var(--ag-prism-' + a + ')') + ')';
     return (
       H + '{position:absolute;overflow:visible;pointer-events:none!important}' +
-      L + '{--ag-prism-ha0:.34;--ag-prism-ha1:.14;--ag-prism-hd:4.8s}' +
+      L + '{--ag-prism-ha0:.32;--ag-prism-ha1:.15;--ag-prism-ha2:.048;--ag-prism-ga0:.26;--ag-prism-ga1:.1;--ag-prism-hd:4.8s}' +
       L + '::before,' + L + '::after{content:"";position:absolute;left:50%;pointer-events:none!important;z-index:-1;will-change:opacity;animation:ag-prism-hab-breath var(--ag-prism-hd) ease-in-out infinite}' +
-      L + '::before{top:36%;width:76px;height:76px;transform:translate(-50%,-50%);border-radius:50%;background:radial-gradient(circle at 50% 50%,rgba(var(--ag-prism-hc0),var(--ag-prism-ha0)) 0%,rgba(var(--ag-prism-hc1),var(--ag-prism-ha1)) 42%,transparent 74%)}' +
-      L + '::after{bottom:-3px;width:116px;height:14px;transform:translateX(-50%);background:radial-gradient(ellipse at 50% 100%,rgba(var(--ag-prism-hc0),var(--ag-prism-ha0)) 0%,rgba(var(--ag-prism-hc1),var(--ag-prism-ha1)) 48%,transparent 78%)}' +
+      L + '::before{top:38%;width:48px;height:46px;transform:translate(-50%,-50%);border-radius:50%;background:radial-gradient(circle closest-side at 50% 50%,' + rg(0, 'ha0') + ' 0%,' + rg(0, 'ha1') + ' 34%,' + rg(1, 'ha2') + ' 62%,' + rg(1, 0) + ' 90%)}' +
+      L + '::after{bottom:3px;width:58px;height:8px;transform:translateX(-50%);background:radial-gradient(ellipse closest-side at 50% 50%,' + rg(0, 'ga0') + ' 0%,' + rg(1, 'ga1') + ' 44%,' + rg(1, 0) + ' 82%)}' +
       W + '{' + cv('amber') + '}' + H + ':is([data-habitat-mode="candle"],[data-habitat-mode="campfire"]){--ag-prism-hd:4.3s}' +
       P + '{' + cv('default') + ';--ag-prism-hd:5.2s}' +
       'cobalt,iris,amber,mono'.split(',').map((k) => 'html[data-ag-cs-accent="' + k + '"] ' + P + '{' + cv(k) + '}' + LT + '[data-ag-cs-accent="' + k + '"] ' + P + '{' + cv(k, 2) + '}').join('') +
       'html:is([data-ag-cs-palette="warm"],[data-ag-cs-palette="claude"]):not([data-ag-cs-accent="cobalt"],[data-ag-cs-accent="iris"],[data-ag-cs-accent="amber"],[data-ag-cs-accent="mono"]) ' + P + '{' + cv('warm') + '}' +
-      LT + ' ' + L + '{--ag-prism-ha0:.16;--ag-prism-ha1:.06}' + LT + ' ' + W + '{' + cv('amber', 2) + '}' + LT + ' ' + P + '{' + cv('default', 2) + '}' +
+      LT + ' ' + L + '{--ag-prism-ha0:.16;--ag-prism-ha1:.065;--ag-prism-ha2:.02;--ag-prism-ga0:.12;--ag-prism-ga1:.04}' + LT + ' ' + W + '{' + cv('amber', 2) + '}' + LT + ' ' + P + '{' + cv('default', 2) + '}' +
       '@keyframes ag-prism-hab-breath{0%,100%{opacity:.78}50%{opacity:1}}' +
       Z + ' ' + L + '::before,' + Z + ' ' + L + '::after{animation:none!important;opacity:.86}' +
       '@media (prefers-reduced-motion:reduce){html:not([data-ag-cs-ignore-rm="1"]) ' + L + '::before,html:not([data-ag-cs-ignore-rm="1"]) ' + L + '::after{animation:none!important;opacity:.86}}'
@@ -1669,7 +1670,7 @@
     const habitatEl = markNoTrOwned(doc.createElement('div'));
     habitatEl.className = 'ag-v2-habitat-prop';
     habitatEl.setAttribute('aria-hidden', 'true');
-    if (habitatEl.style) Object.assign(habitatEl.style, { position: 'absolute', right: '10px', bottom: '2px', width: '24px', height: '30px', pointerEvents: 'none', overflow: 'visible', zIndex: '14', imageRendering: 'pixelated', backgroundRepeat: 'no-repeat', backgroundSize: '24px 30px' });
+    if (habitatEl.style) Object.assign(habitatEl.style, { position: 'absolute', right: '28px', bottom: '2px', width: '24px', height: '30px', pointerEvents: 'none', overflow: 'visible', zIndex: '14', imageRendering: 'pixelated', backgroundRepeat: 'no-repeat', backgroundSize: '24px 30px' });
     hostEl.appendChild(habitatEl);
     let habitatPreview = 'auto', scheduleWatchUntil = 0, lastHabitatKey = '';
     const habitatSeed = isFin(options.habitatSeed) ? floor(Number(options.habitatSeed)) : floor(random() * 60);
@@ -1687,7 +1688,7 @@
     const evalActorHabLight = (a, mode = resolveHabitatMode()) => {
       const lightKind = HABITAT_LIGHT_KIND[mode] || null;
       if (!a || !lightKind) return { lv: 0, dir: 0, tone: 'amber', dark: true, strength: 0 };
-      const habX = max(24, readStageWidth() - 22), dxH = getEntWorldCx(a) - habX;
+      const habX = max(24, readStageWidth() - 40), dxH = getEntWorldCx(a) - habX;
       const fy = a.stackedOn ? computeWorldFootY(a) : (a.y || 0);
       const dist = max(0, 1 - abs(dxH) / 240), vert = max(0, 1 - abs(fy) / 56), dark = !isLightTheme();
       const strength = dist * (0.45 + 0.55 * dist) * vert * (dark ? 1 : 0.55);
