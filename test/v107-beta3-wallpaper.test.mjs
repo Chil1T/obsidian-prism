@@ -1602,15 +1602,33 @@ test('red-team #229 [P1-3]: pick-media single-flight mutex, dispose() kills orph
   assert.equal(svcSrc.slice(blobFnIdx).includes('readFileSync'), false, 'getMediaBlob must be fully async without readFileSync');
 
   try {
+    const createSpawnGate = (label, timeoutMs = 5000) => {
+      let resolveGate;
+      let timer;
+      const promise = new Promise((resolve, reject) => {
+        resolveGate = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+        timer = setTimeout(
+          () => reject(new Error(`${label}: execFileImpl was not invoked within ${timeoutMs}ms`)),
+          timeoutMs
+        );
+      });
+      return { promise, notify: resolveGate, cancel: () => clearTimeout(timer) };
+    };
+
     // 1) Concurrent pick-media calls share single-flight promise (only 1 child spawned)
     let spawnCount = 0;
     let releasePicker = null;
+    const sfSpawnGate = createSpawnGate('pick-media single-flight');
     const sfSvc = createWallpaperService({
       configPath: path.join(tmpDir, 'sf-pick.json'),
       platform: 'win32',
       execFileImpl(_file, _args, _opts, cb) {
         spawnCount += 1;
         releasePicker = () => cb(null, `${pngA}\r\n`, '');
+        sfSpawnGate.notify();
         return { killed: false, kill() { this.killed = true; } };
       },
     });
@@ -1621,26 +1639,30 @@ test('red-team #229 [P1-3]: pick-media single-flight mutex, dispose() kills orph
         sfSvc.handleAction('pick-media'),
         sfSvc.handleAction('pick-media'),
       ];
-      await new Promise((r) => setTimeout(r, 10));
+      await sfSpawnGate.promise;
       assert.equal(spawnCount, 1, 'Concurrent pick-media must spawn only 1 OS picker child');
       releasePicker();
       const results = await Promise.all(calls);
+      assert.equal(spawnCount, 1, 'Concurrent pick-media must still have spawned only 1 OS picker child after settling');
       for (const r of results) {
         assert.equal(r.ok, true);
         assert.equal(r.config.enabled, true);
       }
     } finally {
+      sfSpawnGate.cancel();
       await sfSvc.dispose();
     }
 
     // 2) dispose() immediately kills in-flight picker child
     let killCalls = 0;
     let pendingCb = null;
+    const killSpawnGate = createSpawnGate('pick-media dispose kill');
     const killSvc = createWallpaperService({
       configPath: path.join(tmpDir, 'kill-pick.json'),
       platform: 'win32',
       execFileImpl(_file, _args, _opts, cb) {
         pendingCb = cb;
+        killSpawnGate.notify();
         return {
           killed: false,
           kill() {
@@ -1652,13 +1674,18 @@ test('red-team #229 [P1-3]: pick-media single-flight mutex, dispose() kills orph
         };
       },
     });
-    const inFlightPick = killSvc.handleAction('pick-media');
-    await new Promise((r) => setTimeout(r, 10));
-    await killSvc.dispose();
-    assert.equal(killCalls, 1, 'dispose() must kill active picker child process');
-    const killedRes = await inFlightPick;
-    assert.equal(killedRes.ok, false);
-    assert.equal(killedRes.code, 'service-disposed');
+    try {
+      const inFlightPick = killSvc.handleAction('pick-media');
+      await killSpawnGate.promise;
+      await killSvc.dispose();
+      assert.equal(killCalls, 1, 'dispose() must kill active picker child process');
+      const killedRes = await inFlightPick;
+      assert.equal(killedRes.ok, false);
+      assert.equal(killedRes.code, 'service-disposed');
+    } finally {
+      killSpawnGate.cancel();
+      await killSvc.dispose();
+    }
 
     // 3) get-media-blob: same-rev single-flight (1 open for 5 concurrent calls) + cross-rev concurrency <= 1
     let openCalls = 0;

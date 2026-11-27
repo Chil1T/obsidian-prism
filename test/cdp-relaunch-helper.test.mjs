@@ -22,7 +22,7 @@ const LNK_CLSID = Buffer.from([
 ]);
 
 function mkTempDir(prefix) {
-  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
 }
 
 function encodeCountedString(str, isUnicode) {

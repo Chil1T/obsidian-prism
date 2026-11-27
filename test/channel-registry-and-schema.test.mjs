@@ -325,7 +325,7 @@ test('Packaging collectNativePluginEntries & install-manifest.json include 100% 
 });
 
 test('Bundle source hash and channel cache automatically invalidate on 1-byte edits in src/compiler/ or src/channels/', () => {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-prism-src-hash-'));
+  const tmpDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ag-prism-src-hash-')));
   const isoCdpPath = path.join(tmpDir, 'cdp.js');
   const cachePath = path.join(tmpDir, '.bundle-cache.json');
 

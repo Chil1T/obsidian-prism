@@ -27,7 +27,7 @@ const cdpMod = require(path.join(ROOT_DIR, 'cdp.js'));
 const installPluginTool = require(path.join(ROOT_DIR, 'tools', 'install-plugin.cjs'));
 
 function makeTempDir(prefix) {
-  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
 }
 
 test('security-daemon 1: isLanguageServerRunning detects platform-suffixed Windows/POSIX host processes, excludes self, and fails closed on query errors', () => {

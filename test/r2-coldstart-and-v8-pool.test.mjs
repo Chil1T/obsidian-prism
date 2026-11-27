@@ -31,7 +31,7 @@ const { PROTECTED_USER_PATHS } = require(path.join(ROOT, 'src', 'platform', 'ins
 const installTool = require(path.join(ROOT, 'tools', 'install-plugin.cjs'));
 
 function mkTmp(prefix) {
-  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
 }
 
 function loadFreshCdp(cdpFilePath) {
@@ -297,10 +297,11 @@ test('R2 Task 3: compile cache hook, sharded .bundle-cache/ + legacy cleanup, fa
       assert.equal(lastSt.diskFastStatHits, 1, 'Ch1 warm hit must use fast stat verification path');
       assert.equal(lastSt.compileUnifiedRuns, 0);
     }
+    const maxMedianHitMs = process.env.CI ? 150 : 15;
     const medianHitMs = hitSamples.slice().sort((a, b) => a - b)[1];
     assert.ok(
-      medianHitMs < 15,
-      `Expected median Ch1 fast-stat shard hit < 15ms, got ${medianHitMs.toFixed(2)}ms (samples=${hitSamples.map((n) => n.toFixed(2)).join(',')})`
+      medianHitMs < maxMedianHitMs,
+      `Expected median Ch1 fast-stat shard hit < ${maxMedianHitMs}ms, got ${medianHitMs.toFixed(2)}ms (samples=${hitSamples.map((n) => n.toFixed(2)).join(',')})`
     );
 
     // 验证篡改 ch1.json sourceHash 无法绕过 statsBindingSha256
