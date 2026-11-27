@@ -26,6 +26,7 @@
   let triggerTiming = 'preload';
   let currentViewMode = 'immersive';
   let currentLang = '';
+  let currentProxyMode = '';
   let translateToolSummaries = false;
   let translateTitles = false;
   let hasExplicitToolSummaries = false;
@@ -78,17 +79,17 @@
   const SAFE_TRUNCATE_BUDGET = 46000;
   const INFLIGHT_TTL_MS = 185000;
 
-  const ZH_TW_PACK = '原文|收起原文|機翻降級|AI 未就緒，已降級機翻|重新轉譯|轉譯未完成|↻ 重試|機翻中…|AI 轉譯中…|思考輸出中…|收束中…|代理或網路不可達|請求限流冷卻中|金鑰或權限異常|轉譯逾時|後台服務未連線|代理失敗 · 重試|限流冷卻 · 重試|驗證失敗 · 重試|逾時 · 重試|服務離線 · 重試|轉譯失敗 · 重試|已安全分段譯前 {0}k 字（共 {1}k）'.split('|');
+  const ZH_TW_PACK = '原文|收起原文|機翻降級|AI 未就緒，已降級機翻|重新轉譯|轉譯未完成|↻ 重試|機翻中…|AI 轉譯中…|思考輸出中…|收束中…|代理或網路不可達|請求限流冷卻中|金鑰或權限異常|轉譯逾時|後台服務未連線|代理失敗 · 重試|限流冷卻 · 重試|驗證失敗 · 重試|逾時 · 重試|服務離線 · 重試|轉譯失敗 · 重試|已安全分段譯前 {0}k 字（共 {1}k）|免費機翻出口限流（可換節點或切直連）|機翻限流 · 重試'.split('|');
   const CLIENT_I18N = {
-    'zh-CN': '原文|收起原文|机翻降级|AI 未就绪，已降级机翻|重新转译|转译未完成|↻ 重试|机翻中…|AI 转译中…|思考输出中…|收束中…|代理或网络不可达|请求限流冷却中|密钥或权限异常|转译超时|后台服务未连接|代理失败 · 重试|限流冷却 · 重试|鉴权失败 · 重试|超时 · 重试|服务离线 · 重试|转译失败 · 重试|已安全分段译前 {0}k 字（共 {1}k）'.split('|'),
+    'zh-CN': '原文|收起原文|机翻降级|AI 未就绪，已降级机翻|重新转译|转译未完成|↻ 重试|机翻中…|AI 转译中…|思考输出中…|收束中…|代理或网络不可达|请求限流冷却中|密钥或权限异常|转译超时|后台服务未连接|代理失败 · 重试|限流冷却 · 重试|鉴权失败 · 重试|超时 · 重试|服务离线 · 重试|转译失败 · 重试|已安全分段译前 {0}k 字（共 {1}k）|免费机翻出口限流（可换节点或切直连）|机翻限流 · 重试'.split('|'),
     'zh-TW': ZH_TW_PACK,
-    en: 'Raw|Hide Raw|Fallback|AI unavailable; machine fallback|Retranslate|Translation incomplete|↻ Retry|Translating…|AI polishing…|Streaming…|Settling…|Proxy or network unreachable|Rate-limited (cooling down)|API key or auth error|Translation timed out|Daemon service offline|Proxy error · Retry|Rate limit · Retry|Auth error · Retry|Timed out · Retry|Offline · Retry|Failed · Retry|Translated first {0}k / {1}k chars'.split('|'),
-    ja: '原文|原文を隠す|機械翻訳代替|AI未設定・機械翻訳代替|再翻訳|翻訳未完了|↻ 再試行|翻訳中…|AI翻訳中…|出力中…|整理中…|プロキシまたは接続不可|レート制限クールダウン中|APIキーまたは認証エラー|翻訳タイムアウト|バックグラウンド未接続|プロキシ失敗 · 再試行|制限中 · 再試行|認証エラー · 再試行|タイムアウト · 再試行|オフライン · 再試行|失敗 · 再試行|先頭 {0}k 字を翻訳済（全 {1}k 字）'.split('|'),
-    ko: '원문|원문 숨기기|기계 번역 대체|AI 미준비로 기계 번역 사용|재번역|번역 미완료|↻ 재시도|번역 중…|AI 다듬는 중…|출력 중…|정리 중…|프록시 또는 네트워크 연결 불가|요청 제한 대기 중|API 키 또는 인증 오류|번역 시간 초과|백그라운드 서비스 오프라인|프록시 오류 · 재시도|요청 제한 · 재시도|인증 실패 · 재시도|시간 초과 · 재시도|오프라인 · 재시도|번역 실패 · 재시도|앞부분 {0}k / 전체 {1}k자 번역 완료'.split('|'),
-    es: 'Original|Ocultar original|Respaldo MT|IA no disponible; traducción automática|Retraducir|Traducción incompleta|↻ Reintentar|Traduciendo…|Puliendo con IA…|Transmitiendo…|Finalizando…|Proxy o red inaccesible|Límite de tasa (en espera)|Error de clave API o autenticación|Tiempo de espera agotado|Servicio en segundo plano desconectado|Error de proxy · Reintentar|Límite · Reintentar|Error auth · Reintentar|Tiempo agotado · Reintentar|Sin conexión · Reintentar|Error · Reintentar|Primeros {0}k / {1}k caracteres traducidos'.split('|'),
-    fr: 'Original|Masquer l’original|Secours MT|IA indisponible ; traduction auto|Retraduire|Traduction incomplète|↻ Réessayer|Traduction…|Affinage IA…|Diffusion…|Finalisation…|Proxy ou réseau inaccessible|Limite atteinte (refroidissement)|Erreur de clé API ou d’authentification|Délai dépassé|Service d’arrière-plan hors ligne|Erreur proxy · Réessayer|Limite · Réessayer|Erreur auth · Réessayer|Délai · Réessayer|Hors ligne · Réessayer|Échec · Réessayer|Premiers {0}k / {1}k caractères traduits'.split('|'),
-    de: 'Original|Original ausblenden|MT-Fallback|KI nicht verfügbar; maschineller Fallback|Neu übersetzen|Übersetzung unvollständig|↻ Erneut|Übersetze…|KI-Feinschliff…|Streaming…|Abschluss…|Proxy oder Netzwerk nicht erreichbar|Rate-Limit (Abkühlung)|API-Schlüssel- oder Auth-Fehler|Zeitüberschreitung|Hintergrunddienst offline|Proxy-Fehler · Erneut|Rate-Limit · Erneut|Auth-Fehler · Erneut|Zeitlimit · Erneut|Offline · Erneut|Fehlgeschlagen · Erneut|Erste {0}k / {1}k Zeichen übersetzt'.split('|'),
-    tr: 'Ham|Ham Gizle|Yedek|YZ kullanılamıyor; makine yedeği|Yeniden çevir|Çeviri tamamlanmadı|↻ Tekrar|Çevriliyor…|YZ iyileştiriyor…|Akışta…|Sonlanıyor…|Proxy veya ağ erişilemiyor|Hız sınırı (beklemede)|API anahtarı veya kimlik hatası|Çeviri zaman aşımına uğradı|Arka plan servisi çevrimdışı|Proxy hatası · Tekrar|Hız sınırı · Tekrar|Kimlik hatası · Tekrar|Zaman aşımı · Tekrar|Çevrimdışı · Tekrar|Başarısız · Tekrar|İlk {0}k / {1}k karakter çevrildi'.split('|'),
+    en: 'Raw|Hide Raw|Fallback|AI unavailable; machine fallback|Retranslate|Translation incomplete|↻ Retry|Translating…|AI polishing…|Streaming…|Settling…|Proxy or network unreachable|Rate-limited (cooling down)|API key or auth error|Translation timed out|Daemon service offline|Proxy error · Retry|Rate limit · Retry|Auth error · Retry|Timed out · Retry|Offline · Retry|Failed · Retry|Translated first {0}k / {1}k chars|Free MT exit rate-limited (switch proxy or use direct)|MT limit · Retry'.split('|'),
+    ja: '原文|原文を隠す|機械翻訳代替|AI未設定・機械翻訳代替|再翻訳|翻訳未完了|↻ 再試行|翻訳中…|AI翻訳中…|出力中…|整理中…|プロキシまたは接続不可|レート制限クールダウン中|APIキーまたは認証エラー|翻訳タイムアウト|バックグラウンド未接続|プロキシ失敗 · 再試行|制限中 · 再試行|認証エラー · 再試行|タイムアウト · 再試行|オフライン · 再試行|失敗 · 再試行|先頭 {0}k 字を翻訳済（全 {1}k 字）|無料機械翻訳が制限中（ノード変更か直結へ切替）|機翻制限 · 再試行'.split('|'),
+    ko: '원문|원문 숨기기|기계 번역 대체|AI 미준비로 기계 번역 사용|재번역|번역 미완료|↻ 재시도|번역 중…|AI 다듬는 중…|출력 중…|정리 중…|프록시 또는 네트워크 연결 불가|요청 제한 대기 중|API 키 또는 인증 오류|번역 시간 초과|백그라운드 서비스 오프라인|프록시 오류 · 재시도|요청 제한 · 재시도|인증 실패 · 재시도|시간 초과 · 재시도|오프라인 · 재시도|번역 실패 · 재시도|앞부분 {0}k / 전체 {1}k자 번역 완료|무료 기계 번역 속도 제한(노드 변경 또는 직접 연결)|기계 번역 제한 · 재시도'.split('|'),
+    es: 'Original|Ocultar original|Respaldo MT|IA no disponible; traducción automática|Retraducir|Traducción incompleta|↻ Reintentar|Traduciendo…|Puliendo con IA…|Transmitiendo…|Finalizando…|Proxy o red inaccesible|Límite de tasa (en espera)|Error de clave API o autenticación|Tiempo de espera agotado|Servicio en segundo plano desconectado|Error de proxy · Reintentar|Límite · Reintentar|Error auth · Reintentar|Tiempo agotado · Reintentar|Sin conexión · Reintentar|Error · Reintentar|Primeros {0}k / {1}k caracteres traducidos|Límite en MT gratuita (cambia de nodo o usa conexión directa)|Límite MT · Reintentar'.split('|'),
+    fr: 'Original|Masquer l’original|Secours MT|IA indisponible ; traduction auto|Retraduire|Traduction incomplète|↻ Réessayer|Traduction…|Affinage IA…|Diffusion…|Finalisation…|Proxy ou réseau inaccessible|Limite atteinte (refroidissement)|Erreur de clé API ou d’authentification|Délai dépassé|Service d’arrière-plan hors ligne|Erreur proxy · Réessayer|Limite · Réessayer|Erreur auth · Réessayer|Délai · Réessayer|Hors ligne · Réessayer|Échec · Réessayer|Premiers {0}k / {1}k caractères traduits|Limite sur la MT gratuite (changez de nœud ou passez en direct)|Limite MT · Réessayer'.split('|'),
+    de: 'Original|Original ausblenden|MT-Fallback|KI nicht verfügbar; maschineller Fallback|Neu übersetzen|Übersetzung unvollständig|↻ Erneut|Übersetze…|KI-Feinschliff…|Streaming…|Abschluss…|Proxy oder Netzwerk nicht erreichbar|Rate-Limit (Abkühlung)|API-Schlüssel- oder Auth-Fehler|Zeitüberschreitung|Hintergrunddienst offline|Proxy-Fehler · Erneut|Rate-Limit · Erneut|Auth-Fehler · Erneut|Zeitlimit · Erneut|Offline · Erneut|Fehlgeschlagen · Erneut|Erste {0}k / {1}k Zeichen übersetzt|Gratis-MT-Limit erreicht (Proxy wechseln oder Direktverbindung)|MT-Limit · Erneut'.split('|'),
+    tr: 'Ham|Ham Gizle|Yedek|YZ kullanılamıyor; makine yedeği|Yeniden çevir|Çeviri tamamlanmadı|↻ Tekrar|Çevriliyor…|YZ iyileştiriyor…|Akışta…|Sonlanıyor…|Proxy veya ağ erişilemiyor|Hız sınırı (beklemede)|API anahtarı veya kimlik hatası|Çeviri zaman aşımına uğradı|Arka plan servisi çevrimdışı|Proxy hatası · Tekrar|Hız sınırı · Tekrar|Kimlik hatası · Tekrar|Zaman aşımı · Tekrar|Çevrimdışı · Tekrar|Başarısız · Tekrar|İlk {0}k / {1}k karakter çevrildi|Ücretsiz MT hız sınırı (düğümü değiştirin veya doğrudan bağlanın)|MT sınırı · Tekrar'.split('|'),
   };
 
   const memCache = new Map();
@@ -852,17 +853,12 @@ trackedWaitPanels.delete(panel);
     return { ok: true, memEntries: memCache.size, storageEntries: storedCount };
   }
 
+  const clearAllFailCooldowns = () => { failedSigs.clear(); toolSummaryFailedUntil.clear(); titleFailedUntil.clear(); };
   function clearLocalCache() {
     cancelPersistHandles();
-    cacheDirty = false;
-    storedCount = 0;
+    cacheDirty = false; storedCount = 0;
     const cleared = memCache.size;
-    memCache.clear();
-    toolSummaryCache.clear();
-    titleCache.clear();
-    failedSigs.clear();
-    toolSummaryFailedUntil.clear();
-    titleFailedUntil.clear();
+    memCache.clear(); toolSummaryCache.clear(); titleCache.clear(); clearAllFailCooldowns();
     try { getStore()?.removeItem?.(LOCAL_CACHE_KEY); } catch (_) {}
     return { ok: true, cleared, memEntries: 0, storageEntries: 0 };
   }
@@ -878,9 +874,12 @@ trackedWaitPanels.delete(panel);
     if (resOrErr && typeof resOrErr === 'object') {
       if (resOrErr.offline) return 'offline';
       if (resOrErr.timeout) return 'timeout';
+      if (resOrErr.code === 'MT_RATE_LIMITED' || resOrErr.reason === 'mt_ratelimit') return 'mt_ratelimit';
     }
     const msg = String((resOrErr && (resOrErr.error || resOrErr.message)) || resOrErr || '');
-    if (/429|rate.?limit|quota|too many requests/i.test(msg)) return 'ratelimit';
+    const isRate = /429|rate.?limit|too many requests/i.test(msg);
+    if (isRate && (/machine\s*translate|free\s*mt|translate\.googleapis\.com|microsofttranslator|mt_ratelimit|\bgtx\b/i.test(msg) || (currentMode === 'machine' && !/\bAI\s+HTTP\b/i.test(msg)))) return 'mt_ratelimit';
+    if (isRate || /quota/i.test(msg)) return 'ratelimit';
     if (/401|403|api.?key|unauthorized|forbidden|invalid.?key/i.test(msg)) return 'auth';
     if (/timed?\s*out|timeout/i.test(msg)) return 'timeout';
     if (/offline|disconnected/i.test(msg)) return 'offline';
@@ -888,66 +887,34 @@ trackedWaitPanels.delete(panel);
     return 'generic';
   }
 
-  const ERR_REASON_IDX = { proxy: 11, ratelimit: 12, auth: 13, timeout: 14, offline: 15, generic: 5 };
-  const BADGE_REASON_IDX = { proxy: 16, ratelimit: 17, auth: 18, timeout: 19, offline: 20, generic: 21 };
-
-  function getFailureErrorText(reason, pack = getClientPack()) {
-    return pack[ERR_REASON_IDX[reason] || 5] || pack[5];
-  }
-
-  function getTriggerBadgeText(reason, pack = getClientPack()) {
-    return pack[BADGE_REASON_IDX[reason] || 21] || pack[21];
-  }
-
-  function isSigInCooldown(sig) {
-    const rec = failedSigs.get(sig);
-    if (!rec) return false;
-    if (nowMs() >= rec.u) {
-      failedSigs.delete(sig);
-      return false;
-    }
-    return true;
-  }
+  const ERR_REASON_IDX = { proxy: 11, ratelimit: 12, mt_ratelimit: 23, auth: 13, timeout: 14, offline: 15, generic: 5 };
+  const BADGE_REASON_IDX = { proxy: 16, ratelimit: 17, mt_ratelimit: 24, auth: 18, timeout: 19, offline: 20, generic: 21 };
+  const getFailureErrorText = (reason, pack = getClientPack()) => pack[ERR_REASON_IDX[reason] || 5] || pack[5];
+  const getTriggerBadgeText = (reason, pack = getClientPack()) => pack[BADGE_REASON_IDX[reason] || 21] || pack[21];
 
   function getSigFailureMeta(sig) {
     const rec = failedSigs.get(sig);
     if (!rec) return null;
-    if (nowMs() >= rec.u) {
-      failedSigs.delete(sig);
-      return null;
-    }
+    if (nowMs() >= rec.u) { failedSigs.delete(sig); return null; }
     return rec;
   }
+  const isSigInCooldown = (sig) => Boolean(getSigFailureMeta(sig));
 
   function recordSigFailure(sig, errInfo = null) {
     if (!sig) return null;
-    const prev = failedSigs.get(sig);
-    const c = prev ? prev.c + 1 : 1;
+    const prev = failedSigs.get(sig), c = prev ? prev.c + 1 : 1;
     const reason = (errInfo && errInfo.reason) || classifyFailureReason(errInfo);
     const detail = sanitizeClientErrorText((errInfo && (errInfo.detail || errInfo.error || errInfo.message)) || '');
-    const ttl = c === 1 ? 15000 : c === 2 ? 45000 : 120000;
-    const rec = { c, u: nowMs() + ttl, r: reason, d: detail };
-    failedSigs.delete(sig);
-    failedSigs.set(sig, rec);
-    if (failedSigs.size > 512) {
-      const oldest = failedSigs.keys().next().value;
-      if (oldest !== undefined) failedSigs.delete(oldest);
-    }
+    const rec = { c, u: nowMs() + (c === 1 ? 15000 : c === 2 ? 45000 : 120000), r: reason, d: detail };
+    failedSigs.delete(sig); failedSigs.set(sig, rec);
+    if (failedSigs.size > 512) { const oldest = failedSigs.keys().next().value; if (oldest !== undefined) failedSigs.delete(oldest); }
     return rec;
   }
-
-  function clearSigCooldown(sig) {
-    if (sig) failedSigs.delete(sig);
-    else failedSigs.clear();
-  }
+  const clearSigCooldown = (sig) => { if (sig) failedSigs.delete(sig); else failedSigs.clear(); };
 
   function clearTriggerStatusBadge(btnOrPanel) {
-    const btn =
-      btnOrPanel && ga(btnOrPanel, 'data-testid') === 'thinking-collapsible-trigger'
-        ? btnOrPanel
-        : findTriggerForPanel(btnOrPanel);
-    if (!btn) return;
-    const old = findChildByClass(btn, C_TRG);
+    const btn = btnOrPanel && ga(btnOrPanel, 'data-testid') === 'thinking-collapsible-trigger' ? btnOrPanel : findTriggerForPanel(btnOrPanel);
+    const old = btn && findChildByClass(btn, C_TRG);
     if (old) old.remove();
   }
 
@@ -955,48 +922,23 @@ trackedWaitPanels.delete(panel);
     if (!panel) return;
     const btn = findTriggerForPanel(panel);
     if (!btn || !isConn(btn)) return;
-    const doc = docOf(btn);
-    const t = getClientPack();
-    const r = reason || 'generic';
+    const doc = docOf(btn), t = getClientPack(), r = reason || 'generic';
     let badge = findChildByClass(btn, C_TRG);
     if (!badge) {
       badge = markNoTr(ce(doc, 'span', C_TRG));
-      sa(badge, 'role', 'button');
-      sa(badge, 'tabindex', '0');
-      sa(badge, 'data-testid', 'thought-trigger-status-badge');
-      sa(badge, 'data-op-thought', '1');
-      sa(badge, 'data-prism-ignore', '1');
-      sa(badge, 'data-ag-no-i18n', '');
-      sa(badge, 'data-no-press-spring', '1');
-      if (badge[K_ST]) {
-        badge[K_ST].display = 'inline-flex';
-        badge[K_ST].alignItems = 'center';
-        badge[K_ST].padding = '0 6px';
-        badge[K_ST].marginLeft = '4px';
-        badge[K_ST].borderRadius = '999px';
-        badge[K_ST].fontSize = '10.5px';
-        badge[K_ST].lineHeight = '16px';
-        badge[K_ST].fontWeight = '500';
-        badge[K_ST].cursor = 'pointer';
-        badge[K_ST].border = '1px solid color-mix(in srgb,var(--warning,#E5A93B) 36%,var(--ag-cs-border-1,rgba(128,128,128,.28)))';
-        badge[K_ST].background = 'color-mix(in srgb,var(--warning,#E5A93B) 12%,var(--ag-cs-pill-bg,rgba(128,128,128,.1)))';
-        badge[K_ST].color = 'var(--warning,#D97706)';
-      }
-      const doRetry = (ev) => {
-        stopEv(ev);
-        retryPanelNow(panel, rawText, mode, sig);
-      };
+      for (const [k, v] of [['role', 'button'], ['tabindex', '0'], ['data-testid', 'thought-trigger-status-badge'], ['data-op-thought', '1'], ['data-prism-ignore', '1'], ['data-ag-no-i18n', ''], ['data-no-press-spring', '1']]) sa(badge, k, v);
+      if (badge[K_ST]) Object.assign(badge[K_ST], {
+        display: 'inline-flex', alignItems: 'center', padding: '0 6px', marginLeft: '4px', borderRadius: '999px', fontSize: '10.5px', lineHeight: '16px', fontWeight: '500', cursor: 'pointer',
+        border: '1px solid color-mix(in srgb,var(--warning,#E5A93B) 36%,var(--ag-cs-border-1,rgba(128,128,128,.28)))',
+        background: 'color-mix(in srgb,var(--warning,#E5A93B) 12%,var(--ag-cs-pill-bg,rgba(128,128,128,.1)))', color: 'var(--warning,#D97706)',
+      });
+      const doRetry = (ev) => { stopEv(ev); retryPanelNow(panel, rawText, mode, sig); };
       onClk(badge, doRetry);
-      if (typeof badge.addEventListener === 'function') {
-        badge.addEventListener('keydown', (ev) => {
-          if (ev && (ev.key === 'Enter' || ev.key === ' ')) doRetry(ev);
-        });
-      }
+      badge.addEventListener?.('keydown', (ev) => { if (ev && (ev.key === 'Enter' || ev.key === ' ')) doRetry(ev); });
       ap(btn, badge);
     }
     sa(badge, 'data-fail-reason', r);
-    const label = getTriggerBadgeText(r, t);
-    stc(badge, label);
+    stc(badge, getTriggerBadgeText(r, t));
     badge.title = detail ? `${getFailureErrorText(r, t)}: ${detail}` : getFailureErrorText(r, t);
   }
 
@@ -2151,6 +2093,14 @@ trackedWaitPanels.delete(panel);
 
   const findDirectOverlay = (panel) => findChildByClass(panel, C_OV);
 
+  function resetPanelRetryState(panel, sig) {
+    failedSigs.delete(sig);
+    const pm = panelMeta.get(panel);
+    if (pm && pm.skippedSig) { delete pm.skippedSig; panelMeta.set(panel, pm); }
+    const existing = inflightBySig.get(sig);
+    if (existing) { cancelTranslateRequest(existing); inflightBySig.delete(sig); }
+  }
+
   function retryPanelNow(panel, fallbackRawText = '', fallbackMode = '', oldSig = '') {
     if (!panel) return false;
     const activeMode = currentMode === 'off' ? fallbackMode : currentMode;
@@ -2159,31 +2109,13 @@ trackedWaitPanels.delete(panel);
     clearTriggerStatusBadge(panel);
     const ov = findDirectOverlay(panel);
     if (ov) ra(ov, 'data-failed');
-    ra(panel, A_FLD);
-    applyPanelViewMode(panel);
-    const inf = extractPanelInfo(panel);
-    const curRaw = inf.t || fallbackRawText;
+    ra(panel, A_FLD); applyPanelViewMode(panel);
+    const inf = extractPanelInfo(panel), curRaw = inf.t || fallbackRawText;
     if (!curRaw) return false;
-    const activeLang = resolveActiveLang();
-    const kb = inf.t ? inf.k : computeSkelBody(normalizeTextKey(curRaw));
+    const activeLang = resolveActiveLang(), kb = inf.t ? inf.k : computeSkelBody(normalizeTextKey(curRaw));
     const nextSig = sigFromBody(kb, activeMode, activeLang);
-    failedSigs.delete(nextSig);
-    const pm = panelMeta.get(panel);
-    if (pm && pm.skippedSig) {
-      delete pm.skippedSig;
-      panelMeta.set(panel, pm);
-    }
-    const existing = inflightBySig.get(nextSig);
-    if (existing) {
-      cancelTranslateRequest(existing);
-      inflightBySig.delete(nextSig);
-    }
-    const exp = isPanelCurrentlyExpanded(panel);
-    startOrJoinTranslation(panel, curRaw, activeMode, nextSig, `sig${kb}`, exp, {
-      force: true,
-      bypassCache: true,
-      priority: 30000,
-    });
+    resetPanelRetryState(panel, nextSig);
+    startOrJoinTranslation(panel, curRaw, activeMode, nextSig, `sig${kb}`, isPanelCurrentlyExpanded(panel), { force: true, bypassCache: true, priority: 30000 });
     return true;
   }
 
@@ -2191,143 +2123,64 @@ trackedWaitPanels.delete(panel);
     if (!panel || currentMode === 'off') return;
     const inf = extractPanelInfo(panel);
     if (!inf.t) return;
-    const activeLang = resolveActiveLang();
-    const sig = sigFromBody(inf.k, currentMode, activeLang);
-    failedSigs.delete(sig);
+    const activeLang = resolveActiveLang(), sig = sigFromBody(inf.k, currentMode, activeLang);
     clearTriggerStatusBadge(panel);
     memCache.delete(`${withLangSuffix('mt', activeLang)}${inf.k}`);
     memCache.delete(`${withLangSuffix(activeStyleTag || 'ai_technical', activeLang)}${inf.k}`);
-    const pm = panelMeta.get(panel);
-    if (pm && pm.skippedSig) {
-      delete pm.skippedSig;
-      panelMeta.set(panel, pm);
-    }
-    persistLocalStorageCache();
-
-    const existing = inflightBySig.get(sig);
-    if (existing) {
-      cancelTranslateRequest(existing);
-      inflightBySig.delete(sig);
-    }
-    startOrJoinTranslation(panel, inf.t, currentMode, sig, `sig${inf.k}`, true, {
-      force: true,
-      bypassCache: true,
-      priority: 30000,
-    });
+    resetPanelRetryState(panel, sig); persistLocalStorageCache();
+    startOrJoinTranslation(panel, inf.t, currentMode, sig, `sig${inf.k}`, true, { force: true, bypassCache: true, priority: 30000 });
   }
 
   function ensureOverlayShell(panel) {
     const doc = docOf(panel);
     let ov = findDirectOverlay(panel);
     if (ov) return ov;
-
-    const t = getClientPack();
+    const t = getClientPack(), setAttrs = (el, pairs) => { for (const [k, v] of pairs) sa(el, k, v); };
     ov = markNoTr(ce(doc, 'div', C_OV));
-    sa(ov, 'data-op-thought', '1');
-    sa(ov, 'data-prism-ignore', '1');
-    sa(ov, 'data-ag-no-i18n', '');
-
+    setAttrs(ov, [['data-op-thought', '1'], ['data-prism-ignore', '1'], ['data-ag-no-i18n', '']]);
     const body = markNoTr(ce(doc, 'span', C_BD));
-    sa(body, 'data-ag-no-i18n', '');
-    ap(ov, body);
-
+    sa(body, 'data-ag-no-i18n', ''); ap(ov, body);
     const fb = markNoTr(ce(doc, 'span', C_FB));
-    sa(fb, 'data-testid', 'thought-fallback-badge');
-    fb.hidden = true;
-    stc(fb, t[2]);
-    fb.title = t[3];
-    if (fb[K_ST]) fb[K_ST].display = 'none';
-    ap(ov, fb);
-
+    sa(fb, 'data-testid', 'thought-fallback-badge'); fb.hidden = true; stc(fb, t[2]); fb.title = t[3];
+    if (fb[K_ST]) fb[K_ST].display = 'none'; ap(ov, fb);
     const trc = markNoTr(ce(doc, 'span', C_TRC));
-    sa(trc, 'data-testid', 'thought-truncated-badge');
-    sa(trc, 'data-op-thought', '1');
-    sa(trc, 'data-prism-ignore', '1');
-    sa(trc, 'data-ag-no-i18n', '');
+    setAttrs(trc, [['data-testid', 'thought-truncated-badge'], ['data-op-thought', '1'], ['data-prism-ignore', '1'], ['data-ag-no-i18n', '']]);
     trc.hidden = true;
-    if (trc[K_ST]) {
-      trc[K_ST].display = 'none';
-      trc[K_ST].marginLeft = '6px';
-      trc[K_ST].padding = '1px 7px';
-      trc[K_ST].borderRadius = '999px';
-      trc[K_ST].fontSize = '10.5px';
-      trc[K_ST].lineHeight = '16px';
-      trc[K_ST].border = '1px solid var(--ag-cs-border-1,rgba(128,128,128,.28))';
-      trc[K_ST].background = 'var(--ag-cs-pill-bg,rgba(128,128,128,.1))';
-      trc[K_ST].color = 'var(--muted-foreground)';
-    }
+    if (trc[K_ST]) Object.assign(trc[K_ST], {
+      display: 'none', marginLeft: '6px', padding: '1px 7px', borderRadius: '999px', fontSize: '10.5px', lineHeight: '16px',
+      border: '1px solid var(--ag-cs-border-1,rgba(128,128,128,.28))', background: 'var(--ag-cs-pill-bg,rgba(128,128,128,.1))', color: 'var(--muted-foreground)',
+    });
     ap(ov, trc);
-
     const rb = markNoTr(ce(doc, 'button', C_RB));
-    rb.type = 'button';
-    sa(rb, 'data-no-press-spring', '1');
-    sa(rb, 'data-testid', 'thought-retranslate-btn');
-    rb.hidden = true;
-    stc(rb, '↻');
-    rb.title = t[4];
-    sa(rb, 'aria-label', t[4]);
+    rb.type = 'button'; rb.hidden = true; stc(rb, '↻'); rb.title = t[4];
+    setAttrs(rb, [['data-no-press-spring', '1'], ['data-testid', 'thought-retranslate-btn'], ['aria-label', t[4]]]);
     if (rb[K_ST]) rb[K_ST].display = 'none';
-    onClk(rb, (ev) => {
-      stopEv(ev);
-      triggerSingleBlockRetranslate(panel);
-    });
-    ap(ov, rb);
-
-    const tb = markNoTr(ce(doc, 'button', C_TB));
-    tb.type = 'button';
-    sa(tb, 'data-no-press-spring', '1');
-    const showingRaw = ga(panel, A_SRW) === '1';
-    sa(tb, 'aria-pressed', String(showingRaw));
+    onClk(rb, (ev) => { stopEv(ev); triggerSingleBlockRetranslate(panel); }); ap(ov, rb);
+    const tb = markNoTr(ce(doc, 'button', C_TB)), showingRaw = ga(panel, A_SRW) === '1';
+    tb.type = 'button'; setAttrs(tb, [['data-no-press-spring', '1'], ['aria-pressed', String(showingRaw)]]);
     stc(tb, showingRaw ? t[1] : t[0]);
-    onClk(tb, (ev) => {
-      stopEv(ev);
-      sa(panel, A_MRW, ga(panel, A_SRW) === '1' ? '0' : '1');
-      applyPanelViewMode(panel);
-    });
-    ap(ov, tb);
-
-    sa(panel, A_PNL, '1');
-    panel.insertBefore(ov, panel[K_FC]);
+    onClk(tb, (ev) => { stopEv(ev); sa(panel, A_MRW, ga(panel, A_SRW) === '1' ? '0' : '1'); applyPanelViewMode(panel); });
+    ap(ov, tb); sa(panel, A_PNL, '1'); panel.insertBefore(ov, panel[K_FC]);
     return ov;
   }
 
   function syncOverlayBadges(ov, panel, isFallback, isReady, truncInfo = null) {
     if (!ov) return;
-    const t = getClientPack();
-    const fb = findChildByClass(ov, C_FB);
-    if (fb) {
-      fb.hidden = !isFallback;
-      if (fb[K_ST]) fb[K_ST].display = isFallback ? '' : 'none';
-      stc(fb, t[2]);
-      fb.title = t[3];
-    }
-    const trc = findChildByClass(ov, C_TRC);
+    const t = getClientPack(), fb = findChildByClass(ov, C_FB), trc = findChildByClass(ov, C_TRC), rb = findChildByClass(ov, C_RB);
+    if (fb) { fb.hidden = !isFallback; if (fb[K_ST]) fb[K_ST].display = isFallback ? '' : 'none'; stc(fb, t[2]); fb.title = t[3]; }
     if (trc) {
       const showTrc = Boolean(isReady && truncInfo && truncInfo.truncated);
-      trc.hidden = !showTrc;
-      if (trc[K_ST]) trc[K_ST].display = showTrc ? 'inline-flex' : 'none';
+      trc.hidden = !showTrc; if (trc[K_ST]) trc[K_ST].display = showTrc ? 'inline-flex' : 'none';
       if (showTrc) {
         const sK = Math.max(1, Math.round((truncInfo.sentChars || SAFE_TRUNCATE_BUDGET) / 1000));
         const tK = Math.max(sK, Math.round((truncInfo.totalChars || sK * 1000) / 1000));
-        sa(trc, 'data-sent-k', String(sK));
-        sa(trc, 'data-total-k', String(tK));
+        sa(trc, 'data-sent-k', String(sK)); sa(trc, 'data-total-k', String(tK));
         const msg = (t[22] || '').replace('{0}', String(sK)).replace('{1}', String(tK));
-        stc(trc, msg);
-        trc.title = msg;
+        stc(trc, msg); trc.title = msg;
       }
     }
-    if (panel) {
-      if (isFallback) sa(panel, A_FBK, '1');
-      else ra(panel, A_FBK);
-    }
-    const rb = findChildByClass(ov, C_RB);
-    if (rb) {
-      rb.hidden = !isReady;
-      if (rb[K_ST]) rb[K_ST].display = isReady ? '' : 'none';
-      rb.disabled = false;
-      rb.title = t[4];
-      sa(rb, 'aria-label', t[4]);
-    }
+    if (panel) { if (isFallback) sa(panel, A_FBK, '1'); else ra(panel, A_FBK); }
+    if (rb) { rb.hidden = !isReady; if (rb[K_ST]) rb[K_ST].display = isReady ? '' : 'none'; rb.disabled = false; rb.title = t[4]; sa(rb, 'aria-label', t[4]); }
   }
 
   function renderPendingState(panel, message, pendingKind = '') {
@@ -3961,13 +3814,16 @@ const { containers, thoughtPanelSet } = preRead || collectToolSummaryTargets(rea
         hasExplicitHostView = viewModeLoaded = true; viewChanged = currentViewMode !== incomingView; currentViewMode = incomingView;
         if (viewChanged || !syncedOnce) { persistViewModePreference(currentViewMode); syncDocViewAttribute(); refreshAllPanelViewModes(viewChanged); }
       }
-      if (nextMode === 'off') { clrScan(); currentMode = 'off'; syncedOnce = false; releasePrismOverlays(); return; }
+      const nextProxyMode = typeof cfg.proxyMode === 'string' ? cfg.proxyMode.trim().toLowerCase() : '';
+      const proxyModeChanged = Boolean(nextProxyMode && nextProxyMode !== currentProxyMode && syncedOnce);
+      if (nextProxyMode) currentProxyMode = nextProxyMode;
+      if (nextMode === 'off') { clrScan(); clearAllFailCooldowns(); currentMode = 'off'; syncedOnce = false; releasePrismOverlays(); return; }
       if (triggerTiming === 'expand' && prevTrigger !== 'expand') cancelCollapsedInflightRequests();
       else if (triggerTiming === 'expand') clearAllWaitTimers(true);
       const changed = currentMode !== nextMode, hadPrevEngine = currentMode !== 'off';
       currentMode = nextMode; ensureInitialized();
-      if (changed || langChanged) {
-        clearHydrateQueue(); restoreAllToolSummaries(); restoreAllTitles();
+      if (changed || langChanged || proxyModeChanged) {
+        clearAllFailCooldowns(); clearHydrateQueue(); restoreAllToolSummaries(); restoreAllTitles();
         if (hadPrevEngine) { clearAllWaitTimers(false); for (const entry of inflightBySig.values()) cancelTranslateRequest(entry); inflightBySig.clear(); }
         const resetPanelSig = (p) => {
           if (!p) return;
@@ -3978,7 +3834,7 @@ const { containers, thoughtPanelSet } = preRead || collectToolSummaryTargets(rea
         qsa(SEL_TRIGGER).forEach((b) => resetPanelSig(nextSib(b)));
         qsa(SEL_OVERLAY).forEach((ov) => resetPanelSig(parEl(ov)));
       }
-      const needScan = !syncedOnce || changed || langChanged || viewChanged || triggerChanged || toolSummaryChanged || titleChanged;
+      const needScan = !syncedOnce || changed || langChanged || proxyModeChanged || viewChanged || triggerChanged || toolSummaryChanged || titleChanged;
       syncedOnce = true;
       if (needScan) scheduleScan(25);
     },
@@ -4034,7 +3890,7 @@ const { containers, thoughtPanelSet } = preRead || collectToolSummaryTargets(rea
           const p = nextSib(b);
           if (p && (tagChanged || ga(p, A_FBK) === '1' || ga(p, A_FLD) === '1' || findChildByClass(b, C_TRG))) { clearTriggerStatusBadge(b); raList(p, RESET_SIG_ATTRS); panelMeta.delete(p); }
         });
-        failedSigs.clear(); toolSummaryFailedUntil.clear(); titleFailedUntil.clear(); scheduleScan(25);
+        clearAllFailCooldowns(); scheduleScan(25);
         return res;
       });
     },
