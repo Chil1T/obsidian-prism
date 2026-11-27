@@ -15,7 +15,7 @@ import {
   SUGGESTER_MAX_PAYLOAD_BYTES,
   SUGGESTER_ALLOWED_ACTIONS,
 } from './constants.mjs';
-import { serializeJsonForEval } from './fs-atomic.mjs';
+import { serializeJsonForEval, formatJsonArgForEval } from './fs-atomic.mjs';
 import { isAutomatedTestRuntime } from './pid-lock.mjs';
 import { INLINE_DIFF_MAX_PAYLOAD_BYTES, INLINE_DIFF_MAX_URI_LENGTH } from './inline-diff-filter.mjs';
 import { readSafeInlineDiff } from './inline-diff-service.mjs';
@@ -193,12 +193,13 @@ async function handleRepoBinding(rpc, entry, payload, executionContextId) {
   const result = await rpc.invokeExecuteRepoAction({ ...inputPayload, action });
   if (reqId !== null) {
     const safeId = Number(reqId) | 0;
-    const jsonRes = serializeJsonForEval(result);
+    const payloadExpr = formatJsonArgForEval(result);
     const expr = `(() => {
+      const r = ${payloadExpr};
       if (window.__agPrismRepoBridge && typeof window.__agPrismRepoBridge.resolve === 'function') {
-        window.__agPrismRepoBridge.resolve(${safeId}, ${jsonRes});
+        window.__agPrismRepoBridge.resolve(${safeId}, r);
       } else if (typeof window.__agPrismRepoResolve === 'function') {
-        window.__agPrismRepoResolve(${safeId}, ${jsonRes});
+        window.__agPrismRepoResolve(${safeId}, r);
       }
     })()`;
     await sendFireAndForgetEval(entry.session, expr, executionContextId);
@@ -232,7 +233,7 @@ async function handleMetricsBinding(rpc, entry, payload, executionContextId) {
     }
   }
   const safeId = Number(reqId) | 0;
-  const expr = `window.__agPrismMetricsResolve && window.__agPrismMetricsResolve(${safeId}, ${serializeJsonForEval(result)})`;
+  const expr = `window.__agPrismMetricsResolve && window.__agPrismMetricsResolve(${safeId}, ${formatJsonArgForEval(result)})`;
   await sendFireAndForgetEval(entry.session, expr, executionContextId);
 }
 
@@ -323,8 +324,7 @@ async function handleThoughtBinding(rpc, entry, payload, executionContextId) {
 
   if (!entry.session.closed) {
     const safeId = Number(reqId) | 0;
-    const safeJson = serializeJsonForEval(result);
-    const payloadExpr = safeJson.length > 4096 ? `JSON.parse(${serializeJsonForEval(safeJson)})` : safeJson;
+    const payloadExpr = formatJsonArgForEval(result);
     const resolveExpr = `window.__agPrismThoughtResolve && window.__agPrismThoughtResolve(${safeId}, ${payloadExpr})`;
     await sendFireAndForgetEval(entry.session, resolveExpr, executionContextId);
   }
@@ -369,7 +369,7 @@ async function handleUsageBinding(rpc, entry, payload, executionContextId) {
   }
   if (!entry.session.closed) {
     const safeId = Number(reqId) | 0;
-    const resolveExpr = `window.__agPrismUsageResolve && window.__agPrismUsageResolve(${safeId}, ${serializeJsonForEval(result)})`;
+    const resolveExpr = `window.__agPrismUsageResolve && window.__agPrismUsageResolve(${safeId}, ${formatJsonArgForEval(result)})`;
     await sendFireAndForgetEval(entry.session, resolveExpr, executionContextId);
   }
 }
@@ -411,7 +411,7 @@ async function handleInlineDiffBinding(_rpc, entry, payload, executionContextId)
     resp = { ok: false, error: 'internal_error' };
   }
   if (checkCtx()) {
-    const resolveExpr = `window.__agPrismInlineDiffResolve?.(${reqId}, ${serializeJsonForEval(resp)})`;
+    const resolveExpr = `window.__agPrismInlineDiffResolve?.(${reqId}, ${formatJsonArgForEval(resp)})`;
     await sendFireAndForgetEval(entry.session, resolveExpr, executionContextId);
   }
   return resp;
@@ -443,7 +443,7 @@ async function handleOmniBinding(rpc, entry, payload, executionContextId) {
   }
   if (!entry.session.closed) {
     const safeId = Number(reqId) | 0;
-    const jsonRes = serializeJsonForEval(result);
+    const jsonRes = formatJsonArgForEval(result);
     const resolveExpr = `(() => { const r = ${jsonRes}; const b = window.__agPrismOmniBridge; if (b && typeof b.resolve === 'function') b.resolve(${safeId}, r); if (typeof window.__agPrismOmniResolve === 'function' && (!b || window.__agPrismOmniResolve !== b.resolve)) window.__agPrismOmniResolve(${safeId}, r); })()`;
     await sendFireAndForgetEval(entry.session, resolveExpr, executionContextId);
   }
@@ -490,7 +490,7 @@ async function handleSidebarBinding(rpc, entry, payload, executionContextId) {
     }
   } catch {}
   if (checkHost()) {
-    const jsonRes = serializeJsonForEval(result);
+    const jsonRes = formatJsonArgForEval(result);
     const resolveExpr = `(() => { const r = ${jsonRes}; const b = window.__agPrismSidebarBridge; if (b && typeof b.resolve === 'function') b.resolve(${safeId}, r); if (typeof window.__agPrismSidebarResolve === 'function' && (!b || window.__agPrismSidebarResolve !== b.resolve)) window.__agPrismSidebarResolve(${safeId}, r); })()`;
     await sendFireAndForgetEval(entry.session, resolveExpr, executionContextId);
   }
@@ -544,8 +544,7 @@ async function handleWallpaperBinding(rpc, entry, payload, executionContextId) {
 
   if (checkCtx()) {
     const safeId = Number(reqId) | 0;
-    const safeJson = serializeJsonForEval(result);
-    const payloadExpr = safeJson.length > 4096 ? `JSON.parse(${serializeJsonForEval(safeJson)})` : safeJson;
+    const payloadExpr = formatJsonArgForEval(result);
     const resolveExpr = `(() => { const r = ${payloadExpr}; if (typeof window.__agPrismWallpaperResolve === 'function') window.__agPrismWallpaperResolve(${safeId}, r); else if (window.__agPrismWallpaperBridge && typeof window.__agPrismWallpaperBridge.resolve === 'function') window.__agPrismWallpaperBridge.resolve(${safeId}, r); })()`;
     await sendFireAndForgetEval(entry.session, resolveExpr, executionContextId);
   }
@@ -614,8 +613,7 @@ async function handleSuggesterBinding(rpc, entry, payload, executionContextId) {
 
   if (checkCtx()) {
     const safeId = Number(reqId) | 0;
-    const safeJson = serializeJsonForEval(result);
-    const payloadExpr = safeJson.length > 4096 ? `JSON.parse(${serializeJsonForEval(safeJson)})` : safeJson;
+    const payloadExpr = formatJsonArgForEval(result);
     const resolveExpr = `(() => { const r = ${payloadExpr}; if (typeof window.__agPrismSuggesterResolve === 'function') window.__agPrismSuggesterResolve(${safeId}, r); else if (window.__agPrismSuggesterBridge && typeof window.__agPrismSuggesterBridge.resolve === 'function') window.__agPrismSuggesterBridge.resolve(${safeId}, r); })()`;
     await sendFireAndForgetEval(entry.session, resolveExpr, executionContextId);
   }

@@ -22,7 +22,12 @@ import {
   isEligibleTarget,
   isPluginEnabledInHostConfig,
 } from './constants.mjs';
-import { sanitizeGitRemoteUrl, writeFileAtomicSync } from './fs-atomic.mjs';
+import {
+  sanitizeGitRemoteUrl,
+  writeFileAtomicSync,
+  writeFileAtomicAsync,
+  formatJsonArgForEval,
+} from './fs-atomic.mjs';
 import { DaemonLogger, sanitizeSecretText, sanitizeLogLine } from './logger.mjs';
 import {
   PidLockManager,
@@ -44,6 +49,7 @@ import {
   ConfigFingerprintTracker,
   computeConfigFingerprint,
   extractSignificantTargetUrl,
+  isSameSpaDocumentRoute,
   evaluateTargetInfoChange,
 } from './session-fsm.mjs';
 import { isSensitiveInlineDiffPath } from './inline-diff-filter.mjs';
@@ -54,6 +60,7 @@ import {
   extractScopeKeyFromTitle,
   resolveUsageScopeKey,
   hasRealUsageRecord,
+  evalRendererRpcOnEntry,
 } from './telemetry-scope.mjs';
 import { RelaunchGuard } from './relaunch-guard.mjs';
 import { SessionRegistry } from './session-registry.mjs';
@@ -419,10 +426,12 @@ export class PrismDaemon extends PrismDaemonCompatBase {
   _getUsageDiskCacheScope(s, c) { return this._s().telemetrySubsystem.getUsageDiskCacheScope(s, c); }
   _putUsageDiskCache(id, sc, lm, rec, sk, dm) { return this._s().telemetrySubsystem.putUsageDiskCache(id, sc, lm, rec, sk, dm); }
   _flushUsageDiskCache() { return this._s().telemetrySubsystem.flushUsageDiskCache(); }
+  _flushUsageDiskCacheAsync() { return this._s().telemetrySubsystem.flushUsageDiskCacheAsync(); }
   _resolveEntryScopeKey(e) { return this._s().telemetrySubsystem.resolveEntryScopeKey(e); }
   _getRendererRpcCandidates(o) { return this._s().telemetrySubsystem.getRendererRpcCandidates(o); }
   _createScopedRendererClient(e, sk, o) { return this._s().telemetrySubsystem.createScopedRendererClient(e, sk, o); }
   _resolveActiveRpcScope() { return this._s().telemetrySubsystem.resolveActiveRpcScope(); }
+  _evalRendererRpcOnEntry(e, m, b, t, o) { return this._s().telemetrySubsystem.evalRendererRpcOnEntry(e, m, b, t, o); }
   _invokeRendererLsRpc(m, b, o) { return this._s().telemetrySubsystem.invokeRendererLsRpc(m, b, o); }
   _fetchFullGeneratorMetadata(c, id) { return this._s().telemetrySubsystem.fetchFullGeneratorMetadata(c, id); }
   _discoverLocalAppConversations() { return this._s().telemetrySubsystem.discoverLocalAppConversations(); }
@@ -572,6 +581,9 @@ export {
   hasRealUsageRecord,
   sanitizeGitRemoteUrl,
   writeFileAtomicSync,
+  writeFileAtomicAsync,
+  formatJsonArgForEval,
+  evalRendererRpcOnEntry,
   isSensitiveInlineDiffPath,
   readSafeInlineDiff,
   resolvePortFileCandidates,
@@ -595,5 +607,6 @@ export {
   ConfigFingerprintTracker,
   computeConfigFingerprint,
   extractSignificantTargetUrl,
+  isSameSpaDocumentRoute,
   evaluateTargetInfoChange,
 };

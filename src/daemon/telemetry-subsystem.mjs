@@ -6,6 +6,7 @@ import {
   getRendererRpcCandidates,
   createScopedRendererClient,
   resolveActiveRpcScope,
+  evalRendererRpcOnEntry,
   invokeRendererLsRpc,
 } from './telemetry-scope.mjs';
 import {
@@ -21,6 +22,7 @@ import {
   getUsageDiskCacheScope,
   putUsageDiskCache,
   flushUsageDiskCache,
+  flushUsageDiskCacheAsync,
 } from './telemetry-cache.mjs';
 import {
   fetchFullGeneratorMetadata,
@@ -65,6 +67,10 @@ export class TelemetrySubsystem {
     this._usageDiskCache = null;
     this._usageCacheDirty = false;
     this._usageCacheTimer = null;
+    this._usageCacheFlushPromise = null;
+    this._usageCacheFlushEpoch = 0;
+    this._scopedTrajCache = new Map();
+    this._scopedTrajInFlight = new Map();
     this._lastTelemetryActivityAt = 0;
     this._telemetryInFlight = 0;
     this._customMetricsProvider = metricsProvider;
@@ -118,6 +124,12 @@ export class TelemetrySubsystem {
     return putUsageDiskCache(this, id, stepCount, lastModifiedSec, record, scopeKey, diskMeta);
   }
   flushUsageDiskCache() { return flushUsageDiskCache(this); }
+  flushUsageDiskCacheAsync() { return flushUsageDiskCacheAsync(this); }
+  async waitPendingUsageFlush() {
+    while (this._usageCacheFlushPromise) {
+      await this._usageCacheFlushPromise.catch(() => {});
+    }
+  }
 
   resolveEntryScopeKey(entry) { return resolveEntryScopeKey(entry); }
   getRendererRpcCandidates(opts = null) {
@@ -129,6 +141,9 @@ export class TelemetrySubsystem {
   }
   createScopedRendererClient(entry, scopeKey, extraOpts = null) { return createScopedRendererClient(this, entry, scopeKey, extraOpts); }
   resolveActiveRpcScope() { return resolveActiveRpcScope(this); }
+  evalRendererRpcOnEntry(entry, method, body = {}, timeoutMs = 12000, opts = undefined) {
+    return evalRendererRpcOnEntry(entry, method, body, timeoutMs, opts);
+  }
   invokeRendererLsRpc(method, body = {}, opts = null) { return invokeRendererLsRpc(this, method, body, opts); }
 
   fetchFullGeneratorMetadata(client, id) { return fetchFullGeneratorMetadata(client, id); }
@@ -167,6 +182,9 @@ export class TelemetrySubsystem {
     this._lazyLsClient = null;
     this._backendSummariesCache = null;
     this._backendSummariesAt = 0;
+    this._scopedTrajCache?.clear?.();
+    this._scopedTrajInFlight?.clear?.();
+    await this.waitPendingUsageFlush();
     this._usageDiskCache = null;
   }
 }

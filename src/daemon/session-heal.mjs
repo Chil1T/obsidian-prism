@@ -24,15 +24,15 @@ import {
 
 const EARLY_SYNC_EXCLUDED_IDS = new Set(['omni', 'sidebar', 'hostI18n', 'swarmI18n', 'settings']);
 
-function anyChannelNeedsEarlySync(orch, entry, cfg, now) {
+function anyChannelNeedsEarlySync(orch, entry, cfg, now, force = false) {
   for (const spec of CHANNEL_STATIC_SPECS) {
     if (EARLY_SYNC_EXCLUDED_IDS.has(spec.id)) continue;
     if (isChannelInCooldown(entry, spec.id, now)) continue;
     const f = spec.fields;
     const exprNow = orch.getChannelExpr(spec.id);
     const available = spec.tracksSkippedNonHost
-      ? Boolean(exprNow || orch.hasChannelFile(spec))
-      : orch.isChannelEnabled(spec, cfg) && (spec.id === 'thought' ? true : orch.hasChannelFile(spec));
+      ? Boolean(exprNow || orch.hasChannelFile(spec, { bypassCache: force }))
+      : orch.isChannelEnabled(spec, cfg) && (spec.id === 'thought' ? true : Boolean(exprNow || orch.hasChannelFile(spec, { bypassCache: force })));
     if (!available) {
       if (entry[f.scriptField] || entry[f.mountedField]) return true;
       continue;
@@ -59,7 +59,7 @@ export async function verifyAndHealEntryUnlocked(orch, entry, force = false) {
   const hasCtxMap = entry.contextFrames instanceof Map;
   const needsBindingHeal = hasCtxMap && (!entry.mainFrameId || !reg.hasMainDefaultContext(entry));
   const holdingDeferred = shouldHoldAwaitingDomReinject(entry);
-  const channelsNeedSync = anyChannelNeedsEarlySync(orch, entry, cfg, now);
+  const channelsNeedSync = anyChannelNeedsEarlySync(orch, entry, cfg, now, force);
   const hashMatches = !orch.codeHash || entry.lastVerifiedCodeHash === orch.codeHash;
 
   if (

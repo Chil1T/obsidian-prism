@@ -11,7 +11,12 @@ import {
   resolveUsageCachePath,
   discoverActivePort,
 } from './constants.mjs';
-import { assertNotSymlinkSync, writeFileAtomicSync } from './fs-atomic.mjs';
+import {
+  assertNotSymlinkSync,
+  assertNotSymlinkAsync,
+  writeFileAtomicSync,
+  writeFileAtomicAsync,
+} from './fs-atomic.mjs';
 import { normalizeUsageScopeKey, sanitizeUsageRecord, hasRealUsageRecord } from './telemetry-scope.mjs';
 
 export function isTelemetryDisabled(tel, cfgOverride = null) {
@@ -50,6 +55,8 @@ export function releaseIdleTelemetry(tel, force = false) {
   tel._lazyLsClient = null;
   tel._backendSummariesCache = null;
   tel._backendSummariesAt = 0;
+  tel._scopedTrajCache?.clear?.();
+  tel._scopedTrajInFlight?.clear?.();
   flushUsageDiskCache(tel);
   tel._usageDiskCache = null;
   for (const svc of targets) {
@@ -243,7 +250,7 @@ export function loadUsageDiskCache(tel) {
     if (!tel._usageCacheTimer) {
       tel._usageCacheTimer = setTimeout(() => {
         tel._usageCacheTimer = null;
-        flushUsageDiskCache(tel);
+        void flushUsageDiskCacheAsync(tel);
       }, 1500);
       tel._usageCacheTimer.unref?.();
     }
@@ -332,10 +339,88 @@ export function putUsageDiskCache(tel, id, stepCount, lastModifiedSec, record, s
   if (!tel._usageCacheTimer) {
     tel._usageCacheTimer = setTimeout(() => {
       tel._usageCacheTimer = null;
-      flushUsageDiskCache(tel);
+      void flushUsageDiskCacheAsync(tel);
     }, 1500);
     tel._usageCacheTimer.unref?.();
   }
+}
+
+export function buildUsageDiskCacheSerialized(tel) {
+  const normalizedScopes = [];
+  let totalCount = 0;
+  for (const [rawScope, bucket] of tel._usageDiskCache.entries()) {
+    const sc = normalizeUsageScopeKey(rawScope);
+    if (!sc || !(bucket instanceof Map) || bucket.size === 0) continue;
+    let entries = Array.from(bucket.entries());
+    entries.sort((a, b) => (b[1].lastModifiedSec || 0) - (a[1].lastModifiedSec || 0));
+    if (entries.length > USAGE_CACHE_MAX_PER_SCOPE) {
+      entries = entries.slice(0, USAGE_CACHE_MAX_PER_SCOPE);
+      tel._usageDiskCache.set(sc, new Map(entries));
+    }
+    const newestSec = entries[0]?.[1]?.lastModifiedSec || 0;
+    normalizedScopes.push({ scope: sc, entries, newestSec });
+    totalCount += entries.length;
+  }
+  normalizedScopes.sort((a, b) => b.newestSec - a.newestSec);
+  if (normalizedScopes.length > USAGE_CACHE_MAX_SCOPES) {
+    normalizedScopes.length = USAGE_CACHE_MAX_SCOPES;
+  }
+
+  if (totalCount > USAGE_CACHE_MAX_TOTAL_RECORDS) {
+    const allItems = [];
+    for (const s of normalizedScopes) {
+      for (const [k, v] of s.entries) allItems.push({ scope: s.scope, key: k, val: v });
+    }
+    allItems.sort((a, b) => (b.val.lastModifiedSec || 0) - (a.val.lastModifiedSec || 0));
+    const kept = allItems.slice(0, USAGE_CACHE_MAX_TOTAL_RECORDS);
+    const byScope = new Map();
+    for (const it of kept) {
+      let arr = byScope.get(it.scope);
+      if (!arr) {
+        arr = [];
+        byScope.set(it.scope, arr);
+      }
+      arr.push([it.key, it.val]);
+    }
+    normalizedScopes.length = 0;
+    for (const [sc, entries] of byScope.entries()) {
+      normalizedScopes.push({ scope: sc, entries, newestSec: entries[0]?.[1]?.lastModifiedSec || 0 });
+    }
+  }
+
+  normalizedScopes.sort((a, b) => (b.newestSec || 0) - (a.newestSec || 0));
+  const buildPayload = () => {
+    const scopesObj = Object.create(null);
+    for (const s of normalizedScopes) {
+      if (!s.entries.length) continue;
+      const bucketObj = Object.create(null);
+      for (const [k, v] of s.entries) bucketObj[k] = v;
+      scopesObj[s.scope] = bucketObj;
+    }
+    return JSON.stringify({ version: 2, scopes: scopesObj });
+  };
+  let serialized = buildPayload();
+  while (Buffer.byteLength(serialized, 'utf8') > USAGE_CACHE_MAX_BYTES) {
+    let trimmed = false;
+    for (const s of normalizedScopes) {
+      if (s.entries.length > 1) {
+        s.entries = s.entries.slice(0, Math.max(1, Math.floor(s.entries.length * 0.8)));
+        trimmed = true;
+      }
+    }
+    if (!trimmed) {
+      for (let i = normalizedScopes.length - 1; i >= 0; i--) {
+        if (normalizedScopes[i].entries.length > 0) {
+          normalizedScopes[i].entries.pop();
+          trimmed = true;
+          break;
+        }
+      }
+    }
+    if (!trimmed) break;
+    serialized = buildPayload();
+  }
+  return Buffer.byteLength(serialized, 'utf8') <= USAGE_CACHE_MAX_BYTES ? serialized : null;
 }
 
 export function flushUsageDiskCache(tel) {
@@ -343,8 +428,9 @@ export function flushUsageDiskCache(tel) {
     clearTimeout(tel._usageCacheTimer);
     tel._usageCacheTimer = null;
   }
-  if (!tel._usageCacheDirty || !(tel._usageDiskCache instanceof Map)) return;
+  if ((!tel._usageCacheDirty && !tel._usageCacheFlushPromise) || !(tel._usageDiskCache instanceof Map)) return;
   tel._usageCacheDirty = false;
+  tel._usageCacheFlushEpoch = (tel._usageCacheFlushEpoch || 0) + 1;
   try {
     const cacheFile = resolveActiveUsageCachePath(tel);
     const dir = path.dirname(cacheFile);
@@ -353,82 +439,8 @@ export function flushUsageDiskCache(tel) {
       fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     }
     assertNotSymlinkSync(dir, 'usage cache directory');
-
-    const normalizedScopes = [];
-    let totalCount = 0;
-    for (const [rawScope, bucket] of tel._usageDiskCache.entries()) {
-      const sc = normalizeUsageScopeKey(rawScope);
-      if (!sc || !(bucket instanceof Map) || bucket.size === 0) continue;
-      let entries = Array.from(bucket.entries());
-      entries.sort((a, b) => (b[1].lastModifiedSec || 0) - (a[1].lastModifiedSec || 0));
-      if (entries.length > USAGE_CACHE_MAX_PER_SCOPE) {
-        entries = entries.slice(0, USAGE_CACHE_MAX_PER_SCOPE);
-        tel._usageDiskCache.set(sc, new Map(entries));
-      }
-      const newestSec = entries[0]?.[1]?.lastModifiedSec || 0;
-      normalizedScopes.push({ scope: sc, entries, newestSec });
-      totalCount += entries.length;
-    }
-    normalizedScopes.sort((a, b) => b.newestSec - a.newestSec);
-    if (normalizedScopes.length > USAGE_CACHE_MAX_SCOPES) {
-      normalizedScopes.length = USAGE_CACHE_MAX_SCOPES;
-    }
-
-    if (totalCount > USAGE_CACHE_MAX_TOTAL_RECORDS) {
-      const allItems = [];
-      for (const s of normalizedScopes) {
-        for (const [k, v] of s.entries) allItems.push({ scope: s.scope, key: k, val: v });
-      }
-      allItems.sort((a, b) => (b.val.lastModifiedSec || 0) - (a.val.lastModifiedSec || 0));
-      const kept = allItems.slice(0, USAGE_CACHE_MAX_TOTAL_RECORDS);
-      const byScope = new Map();
-      for (const it of kept) {
-        let arr = byScope.get(it.scope);
-        if (!arr) {
-          arr = [];
-          byScope.set(it.scope, arr);
-        }
-        arr.push([it.key, it.val]);
-      }
-      normalizedScopes.length = 0;
-      for (const [sc, entries] of byScope.entries()) {
-        normalizedScopes.push({ scope: sc, entries, newestSec: entries[0]?.[1]?.lastModifiedSec || 0 });
-      }
-    }
-
-    normalizedScopes.sort((a, b) => (b.newestSec || 0) - (a.newestSec || 0));
-    const buildPayload = () => {
-      const scopesObj = Object.create(null);
-      for (const s of normalizedScopes) {
-        if (!s.entries.length) continue;
-        const bucketObj = Object.create(null);
-        for (const [k, v] of s.entries) bucketObj[k] = v;
-        scopesObj[s.scope] = bucketObj;
-      }
-      return JSON.stringify({ version: 2, scopes: scopesObj });
-    };
-    let serialized = buildPayload();
-    while (Buffer.byteLength(serialized, 'utf8') > USAGE_CACHE_MAX_BYTES) {
-      let trimmed = false;
-      for (const s of normalizedScopes) {
-        if (s.entries.length > 1) {
-          s.entries = s.entries.slice(0, Math.max(1, Math.floor(s.entries.length * 0.8)));
-          trimmed = true;
-        }
-      }
-      if (!trimmed) {
-        for (let i = normalizedScopes.length - 1; i >= 0; i--) {
-          if (normalizedScopes[i].entries.length > 0) {
-            normalizedScopes[i].entries.pop();
-            trimmed = true;
-            break;
-          }
-        }
-      }
-      if (!trimmed) break;
-      serialized = buildPayload();
-    }
-    if (Buffer.byteLength(serialized, 'utf8') <= USAGE_CACHE_MAX_BYTES) {
+    const serialized = buildUsageDiskCacheSerialized(tel);
+    if (serialized !== null) {
       if (tel._lastFlushedUsageJson === serialized && fs.existsSync(cacheFile)) {
         return;
       }
@@ -436,4 +448,57 @@ export function flushUsageDiskCache(tel) {
       tel._lastFlushedUsageJson = serialized;
     }
   } catch {}
+}
+
+export function flushUsageDiskCacheAsync(tel) {
+  if (tel._usageCacheTimer) {
+    clearTimeout(tel._usageCacheTimer);
+    tel._usageCacheTimer = null;
+  }
+  if (tel._usageCacheFlushPromise) {
+    return tel._usageCacheFlushPromise;
+  }
+  if (!tel._usageCacheDirty || !(tel._usageDiskCache instanceof Map)) return Promise.resolve();
+  tel._usageCacheDirty = false;
+  const epoch = (tel._usageCacheFlushEpoch = (tel._usageCacheFlushEpoch || 0) + 1);
+  const cacheFile = resolveActiveUsageCachePath(tel);
+  const dir = path.dirname(cacheFile);
+  let serialized = null;
+  try {
+    serialized = buildUsageDiskCacheSerialized(tel);
+  } catch {
+    return Promise.resolve();
+  }
+  if (serialized === null) return Promise.resolve();
+  const task = (async () => {
+    try {
+      await assertNotSymlinkAsync(cacheFile, 'usage cache file');
+      await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
+      await assertNotSymlinkAsync(dir, 'usage cache directory');
+      if (epoch !== tel._usageCacheFlushEpoch) return;
+      if (tel._lastFlushedUsageJson === serialized) {
+        try {
+          await fs.promises.access(cacheFile);
+          return;
+        } catch {}
+      }
+      const wrote = await writeFileAtomicAsync(cacheFile, serialized, {
+        mode: 0o600,
+        shouldAbort: () => epoch !== tel._usageCacheFlushEpoch,
+      });
+      if (wrote && epoch === tel._usageCacheFlushEpoch) {
+        tel._lastFlushedUsageJson = serialized;
+      }
+    } catch {
+    } finally {
+      if (tel._usageCacheFlushPromise === task) {
+        tel._usageCacheFlushPromise = null;
+      }
+      if (tel._usageCacheDirty && tel._usageDiskCache instanceof Map) {
+        void flushUsageDiskCacheAsync(tel);
+      }
+    }
+  })();
+  tel._usageCacheFlushPromise = task;
+  return task;
 }

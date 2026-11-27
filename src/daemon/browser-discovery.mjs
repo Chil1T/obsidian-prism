@@ -1,6 +1,6 @@
 // Obsidian Prism Browser 级 CDP 目标发现与防 25Hz 抖动过滤辅助（Tier 2，无原型 Mixin，由 SessionRegistry 组合调用）
 import { extractScopeKeyFromTitle } from './telemetry-scope.mjs';
-import { evaluateTargetInfoChange } from './session-fsm.mjs';
+import { evaluateTargetInfoChange, isSameSpaDocumentRoute } from './session-fsm.mjs';
 
 export function closeBrowserDiscovery(reg) {
   reg._browserDiscoverySubscribed = false;
@@ -69,6 +69,7 @@ export function handleBrowserTargetEvent(reg, params) {
 
   for (const existing of reg.sessions.values()) {
     if (tid && existing.pageId === tid) {
+      const prevUrl = existing.url;
       const change = evaluateTargetInfoChange(existing, info);
       if (typeof info.title === 'string' && info.title && info.title !== existing.title) {
         existing.title = info.title;
@@ -78,6 +79,14 @@ export function handleBrowserTargetEvent(reg, params) {
           existing._usageScopeVerified = false;
         }
       }
+      const sameSpaRoute = Boolean(
+        !change.stateTransition &&
+          existing.healthyStreak > 0 &&
+          typeof info.url === 'string' &&
+          info.url &&
+          info.url !== prevUrl &&
+          isSameSpaDocumentRoute(prevUrl, info.url)
+      );
       if (typeof info.url === 'string' && info.url) {
         existing.url = info.url;
       }
@@ -87,14 +96,15 @@ export function handleBrowserTargetEvent(reg, params) {
       if (typeof info.type === 'string' && info.type) {
         existing.targetType = info.type;
       }
-      if (change.dirty) {
+      const effectiveDirty = change.dirty && !sameSpaRoute;
+      if (effectiveDirty) {
         existing.detectedScopeKey = '';
         existing._usageScopeVerified = false;
         existing.verifyDirty = true;
         existing.healthyStreak = 0;
         reg._deps.scheduleImmediateTick(45);
       }
-      return { handled: true, dirty: change.dirty, existing: true };
+      return { handled: true, dirty: effectiveDirty, existing: true, ...(sameSpaRoute ? { sameSpaRoute: true } : {}) };
     }
   }
 
