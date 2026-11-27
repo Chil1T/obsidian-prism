@@ -399,15 +399,15 @@ function createTestEnv(initialTime = 1000) {
   };
 }
 
-test('dictionary hygiene: vendor/host-i18n/zh-CN.json has 4763 exact + 405 patterns, zero private terms, compact JSON, and safe regexes', () => {
+test('dictionary hygiene: vendor/host-i18n/zh-CN.json has 4789 exact + 457 patterns, zero private terms, compact JSON, and safe regexes', () => {
   const dictPath = path.join(ROOT, 'vendor', 'host-i18n', 'zh-CN.json');
   const raw = fs.readFileSync(dictPath, 'utf8');
   assert.equal(raw.includes('\n  '), false, 'zh-CN.json must be compact JSON without pretty-print indentation');
 
   const dict = JSON.parse(raw);
   const exactKeys = Object.keys(dict.exact || {});
-  assert.equal(exactKeys.length, 4763);
-  assert.equal((dict.patterns || []).length, 405);
+  assert.equal(exactKeys.length, 4789);
+  assert.equal((dict.patterns || []).length, 457);
   assert.equal(dict.exact['Unlock the power of agent swarms.'], '解锁智能体 Swarm 协作的强大能力。');
   assert.ok(
     dict.exact["Live view of the native swarm board, roster and @mention graph for the current conversation's swarm."]?.includes('Swarm'),
@@ -1524,17 +1524,26 @@ test('[P1-A] Layer 3 handles childList (textContent) ping-pong and ignores singl
   inst.destroy();
 });
 
-test('[P1-B] expanded safety boundaries block pills, thinking trigger, orchestrator selector, ces-/ag-anim-, and deep >128 trees', () => {
+test('[P1-B] expanded safety boundaries block pills, thinking body panel, orchestrator selector, ces-/ag-anim-, and deep >128 trees while allowing thinking trigger title', () => {
   const env = createTestEnv();
-  const dict = { exact: { Settings: '设置', Save: '保存', Copy: '复制', Auto: '自动' }, patterns: [] };
+  const dict = {
+    exact: { Settings: '设置', Save: '保存', Copy: '复制', Auto: '自动' },
+    patterns: [{ regex: '^Thought\\s+for\\s+(\\d+(?:\\.\\d+)?)\\s*s$', replacement: '已思考 $1 秒' }],
+  };
 
   const convView = env.makeEl('div', { attrs: { 'data-testid': 'conversation-view' } });
   const pillBtn = env.makeEl('button', { attrs: { 'data-testid': 'entity-pill' }, text: 'Settings' });
-  const thinkTrigger = env.makeEl('button', { attrs: { 'data-testid': 'thinking-collapsible-trigger' }, text: 'Save' });
+  const thinkWrap = env.makeEl('div');
+  const thinkTrigger = env.makeEl('button', { attrs: { 'data-testid': 'thinking-collapsible-trigger' }, text: 'Thought for 23s' });
+  const thinkBody = env.makeEl('div');
+  const thinkBodyPara = env.makeEl('p', { text: 'Save' });
+  const thinkOverlay = env.makeEl('div', { className: 'ag-prism-thought-overlay', attrs: { 'data-op-thought': '1' }, text: 'Settings' });
+  thinkBody.append(thinkBodyPara, thinkOverlay);
+  thinkWrap.append(thinkTrigger, thinkBody);
   const msgBubble = env.makeEl('div', { attrs: { 'data-testid': 'user-message-bubble' } });
   msgBubble.append(env.makeEl('button', { text: 'Settings' }));
   const realChromeBtn = env.makeEl('button', { text: 'Copy' });
-  convView.append(pillBtn, thinkTrigger, msgBubble, realChromeBtn);
+  convView.append(pillBtn, thinkWrap, msgBubble, realChromeBtn);
 
   const orchSel = env.makeEl('button', { attrs: { 'data-testid': 'model-selector-orchestrator' }, text: 'Auto' });
   const cesBox = env.makeEl('div', { className: 'ces-panel' });
@@ -1557,7 +1566,9 @@ test('[P1-B] expanded safety boundaries block pills, thinking trigger, orchestra
 
   const inst = runtime.mountHostI18n({ root: env.win, doc: env.doc, dict, mode: 'on' });
   assert.equal(pillBtn.textContent, 'Settings');
-  assert.equal(thinkTrigger.textContent, 'Save');
+  assert.equal(thinkTrigger.textContent, '已思考 23 秒');
+  assert.equal(thinkBodyPara.textContent, 'Save', 'Expanded thinking body panel must stay strictly protected');
+  assert.equal(thinkOverlay.textContent, 'Settings', 'Thought translator overlay must stay strictly protected');
   assert.equal(msgBubble.textContent, 'Settings');
   assert.equal(orchSel.textContent, 'Auto');
   assert.equal(cesBox.textContent, 'Settings');
@@ -2805,11 +2816,12 @@ test('Issue #80: host-i18n exempts orchestrator-picker-row/effort and data-ag-cs
   inst.destroy();
 });
 
-test('Issue #99: Antigravity v2.35 agent-response turn chrome (worked-for-collapsible, changed-files-card-header/review) translates while data-markdown-root, bare prose & thinking-collapsible-trigger stay strictly protected', () => {
+test('Issue #99: Antigravity v2.35 agent-response turn chrome (worked-for-collapsible, thinking trigger title, changed-files-card-header/review) translates while data-markdown-root, bare prose & thinking body panel stay strictly protected', () => {
   const env = createTestEnv();
   const dict = {
     exact: { Review: '审查', Settings: '设置', Save: '保存' },
     patterns: [
+      { regex: '^Thought\\s+for\\s+(\\d+(?:\\.\\d+)?)\\s*s$', replacement: '已思考 $1 秒' },
       { regex: '^Worked\\s+for\\s+(\\d+(?:\\.\\d+)?)\\s*s$', replacement: '已运行 $1 秒' },
       { regex: '^Worked\\s+for\\s+(\\d+)\\s*m$', replacement: '已运行 $1 分钟' },
       { regex: '^(\\d+) files? changed$', replacement: '$1 个文件已修改' },
@@ -2825,8 +2837,14 @@ test('Issue #99: Antigravity v2.35 agent-response turn chrome (worked-for-collap
   const workedSpan = env.makeEl('span', { text: 'Worked for 54s' });
   workedBtn.append(workedSpan);
 
-  // Thinking collapsible trigger MUST remain protected (owned by thought-translator)
-  const thinkBtn = env.makeEl('button', { attrs: { 'data-testid': 'thinking-collapsible-trigger' }, text: 'Save' });
+  // Thinking collapsible trigger title translates cleanly while its expanded body panel & overlay stay strictly protected
+  const thinkSection = env.makeEl('div');
+  const thinkBtn = env.makeEl('button', { attrs: { 'data-testid': 'thinking-collapsible-trigger' }, text: 'Thought for 23s' });
+  const thinkPanel = env.makeEl('div');
+  const thinkRawP = env.makeEl('p', { text: 'Save' });
+  const thinkOverlay = env.makeEl('div', { className: 'ag-prism-thought-overlay', attrs: { 'data-op-thought': '1' }, text: 'Settings' });
+  thinkPanel.append(thinkRawP, thinkOverlay);
+  thinkSection.append(thinkBtn, thinkPanel);
 
   // Bare prose directly inside agent-response (legacy layout without data-markdown-root) -> MUST stay untouched
   const bareProse = env.makeEl('p', { text: 'Settings' });
@@ -2837,7 +2855,7 @@ test('Issue #99: Antigravity v2.35 agent-response turn chrome (worked-for-collap
   const mdBtn = env.makeEl('button', { text: 'Save' });
   mdRoot.append(mdPara, mdBtn);
 
-  stepList.append(workedBtn, thinkBtn, bareProse, mdRoot);
+  stepList.append(workedBtn, thinkSection, bareProse, mdRoot);
 
   // 2) Changed files card header + review button -> MUST translate, while file list row outside header stays untouched
   const turnCards = env.makeEl('div', { attrs: { 'data-testid': 'turn-cards-container' } });
@@ -2870,11 +2888,13 @@ test('Issue #99: Antigravity v2.35 agent-response turn chrome (worked-for-collap
 
   // Turn chrome translated cleanly
   assert.equal(workedSpan.textContent, '已运行 54 秒');
+  assert.equal(thinkBtn.textContent, '已思考 23 秒');
   assert.equal(cfCount.textContent, '3 个文件已修改');
   assert.equal(cfReviewSpan.textContent, '审查');
 
-  // Prose, bare text, file rows & thinking trigger remain 100% protected
-  assert.equal(thinkBtn.textContent, 'Save');
+  // Prose, bare text, file rows & thinking body/overlay remain 100% protected
+  assert.equal(thinkRawP.textContent, 'Save');
+  assert.equal(thinkOverlay.textContent, 'Settings');
   assert.equal(bareProse.textContent, 'Settings');
   assert.equal(mdPara.textContent, 'Review');
   assert.equal(mdBtn.textContent, 'Save');
@@ -2888,6 +2908,247 @@ test('Issue #99: Antigravity v2.35 agent-response turn chrome (worked-for-collap
   // Lossless destroy() restores all turn chrome cleanly
   inst.destroy();
   assert.equal(workedSpan.textContent, 'Worked for 2m');
+  assert.equal(thinkBtn.textContent, 'Thought for 23s');
   assert.equal(cfCount.textContent, '3 files changed');
   assert.equal(cfReviewSpan.textContent, 'Review');
+});
+
+test('v2.35.2 pure-local 0ms tool-step i18n: non-button step-rows/step-index, combo phrases (0 half-ZH/EN), thinking trigger title vs protected body, and strict code/file/diff/terminal isolation', () => {
+  const env = createTestEnv();
+  const dict = JSON.parse(fs.readFileSync(path.join(ROOT, 'vendor', 'host-i18n', 'zh-CN.json'), 'utf8'));
+
+  const conv = env.makeEl('div', { attrs: { 'data-testid': 'conversation-view' } });
+  const agentResp = env.makeEl('div', { attrs: { 'data-testid': 'agent-response' } });
+
+  // Non-button header triggers & step-plan-chip
+  const workedDiv = env.makeEl('div', { attrs: { 'data-testid': 'worked-for-collapsible' }, text: 'Worked for 54s' });
+  const planChip = env.makeEl('div', { attrs: { 'data-testid': 'step-plan-chip' }, text: '4/4 steps' });
+  const groupDiv = env.makeEl('div', { attrs: { 'data-testid': 'tool-group-collapsible' } });
+  const combo1 = env.makeEl('span', { text: 'Explored, ran commands, edited files' });
+  const combo2 = env.makeEl('span', { text: 'Explored files, ran commands' });
+  const combo3 = env.makeEl('span', { text: 'Explored, edited file' });
+  const combo4 = env.makeEl('span', { text: 'Ran commands, edited files' });
+  const combo5 = env.makeEl('span', { text: 'Explored 3 files, ran 2 commands, edited 1 file' });
+  groupDiv.append(combo1, combo2, combo3, combo4, combo5);
+
+  // Non-button [data-step-rows="true"] & [data-step-index] tool step titles
+  const stepRows = env.makeEl('div', { attrs: { 'data-step-rows': 'true' } });
+  const rowAsk = env.makeEl('div', { attrs: { 'data-step-index': '0' } });
+  const rowAskText = env.makeEl('span', { text: 'Asking 4 questions' });
+  rowAsk.append(rowAskText);
+
+  const rowWait = env.makeEl('div', { attrs: { 'data-step-index': '1' } });
+  const rowWaitText = env.makeEl('span', { text: 'Waiting for user input' });
+  rowWait.append(rowWaitText);
+
+  const rowBoard1 = env.makeEl('div', { attrs: { 'data-step-index': '2' } });
+  const rowBoard1Text = env.makeEl('span', { text: 'Read 1 message from board' });
+  rowBoard1.append(rowBoard1Text);
+
+  const rowBoardN = env.makeEl('div', { attrs: { 'data-step-index': '3' } });
+  const rowBoardNText = env.makeEl('span', { text: 'Read 5 messages from board' });
+  rowBoardN.append(rowBoardNText);
+
+  const rowPosted = env.makeEl('div', { attrs: { 'data-step-index': '4' } });
+  const rowPostedText = env.makeEl('span', { text: 'Posted #12 to board' });
+  rowPosted.append(rowPostedText);
+
+  const rowKilled = env.makeEl('div', { attrs: { 'data-step-index': '5' } });
+  const rowKilledText = env.makeEl('span', { text: 'Killed worker w1-fix' });
+  rowKilled.append(rowKilledText);
+
+  const rowRan = env.makeEl('div', { attrs: { 'data-step-index': '6' } });
+  const rowRanText = env.makeEl('span', { text: 'Ran npm test' });
+  const rowRanCmd = env.makeEl('code', { text: 'Ran npm test' });
+  const rowTermOut = env.makeEl('div', { attrs: { 'data-testid': 'terminal-output' }, text: 'Waiting for user input' });
+  const rowBgCmd = env.makeEl('div', { attrs: { 'data-testid': 'background-task-command' }, text: 'Settings' });
+  rowRan.append(rowRanText, rowRanCmd, rowTermOut, rowBgCmd);
+
+  // Split <span> verb + protected file entity chip + inline diff + markdown + pre inside [data-step-index]
+  const rowSplit = env.makeEl('div', { attrs: { 'data-step-index': '7' } });
+  const verbRead = env.makeEl('span', { text: 'Read' });
+  const filePathChip = env.makeEl('span', { attrs: { 'data-file-path': 'vendor/host-i18n/zh-CN.json' }, text: 'Settings' });
+  const fileHrefChip = env.makeEl('span', { attrs: { 'data-file-href': 'file:///a/b.js' }, text: 'Edited' });
+  const omniPathChip = env.makeEl('span', { attrs: { 'data-omni-path': 'src/index.js' }, text: 'Read' });
+  const entityPill = env.makeEl('span', { attrs: { 'data-testid': 'entity-pill' }, text: 'Ran' });
+  const inlineDiff = env.makeEl('div', { attrs: { 'data-ag-cs-inline-diff': '1' }, text: 'Asking 4 questions' });
+  const preBlock = env.makeEl('pre', { text: 'Posted #12 to board' });
+  const mdInsideStep = env.makeEl('div', { attrs: { 'data-markdown-root': 'true' } });
+  const mdInsideText = env.makeEl('span', { text: 'Explored files, ran commands' });
+  mdInsideStep.append(mdInsideText);
+  rowSplit.append(verbRead, filePathChip, fileHrefChip, omniPathChip, entityPill, inlineDiff, preBlock, mdInsideStep);
+
+  // Thinking collapsible trigger + expanded panel inside [data-step-index]
+  const rowThink = env.makeEl('div', { attrs: { 'data-step-index': '8' } });
+  const thinkTrig = env.makeEl('div', { attrs: { 'data-testid': 'thinking-collapsible-trigger' }, text: 'Thought for 23s' });
+  const thinkPanel = env.makeEl('div');
+  const thinkProse = env.makeEl('span', { text: 'Waiting for user input' });
+  const thinkOverlay = env.makeEl('div', { className: 'ag-prism-thought-overlay', attrs: { 'data-op-thought': '1' }, text: 'Asking 4 questions' });
+  thinkPanel.append(thinkProse, thinkOverlay);
+  rowThink.append(thinkTrig, thinkPanel);
+
+  stepRows.append(rowAsk, rowWait, rowBoard1, rowBoardN, rowPosted, rowKilled, rowRan, rowSplit, rowThink);
+  agentResp.append(workedDiv, planChip, groupDiv, stepRows);
+  conv.append(agentResp);
+  env.doc.body.append(conv);
+
+  const inst = runtime.mountHostI18n({
+    root: env.win,
+    doc: env.doc,
+    dict,
+    mode: 'on',
+    nowFn: env.nowFn,
+    setTimeoutFn: env.setTimeoutFn,
+    clearTimeoutFn: env.clearTimeoutFn,
+    rafFn: env.rafFn,
+    cancelRafFn: env.cancelRafFn,
+  });
+
+  // All v2.35.2 tool-step chrome & combo phrases translate cleanly with zero half-ZH/half-EN
+  assert.equal(workedDiv.textContent, '已运行 54 秒');
+  assert.equal(planChip.textContent, '4 / 4 步');
+  assert.equal(combo1.textContent, '已探索文件、运行命令、编辑文件');
+  assert.equal(combo2.textContent, '已探索文件、运行命令');
+  assert.equal(combo3.textContent, '已探索、编辑文件');
+  assert.equal(combo4.textContent, '已运行命令、编辑文件');
+  assert.equal(combo5.textContent, '已探索 3 个文件、运行 2 个命令、编辑 1 个文件');
+  assert.equal(rowAskText.textContent, '正在询问 4 个问题');
+  assert.equal(rowWaitText.textContent, '正在等待用户输入');
+  assert.equal(rowBoard1Text.textContent, '已从消息板读取 1 条消息');
+  assert.equal(rowBoardNText.textContent, '已从消息板读取 5 条消息');
+  assert.equal(rowPostedText.textContent, '已发布 #12 到消息板');
+  assert.equal(rowKilledText.textContent, '已终止成员 w1-fix');
+  assert.equal(rowRanText.textContent, '已运行 npm test');
+  assert.equal(verbRead.textContent, '已读取');
+  assert.equal(thinkTrig.textContent, '已思考 23 秒');
+
+  // Protected regions inside [data-step-rows]/[data-step-index] remain 100% untouched
+  assert.equal(rowRanCmd.textContent, 'Ran npm test', '<code> inside step must stay untouched');
+  assert.equal(rowTermOut.textContent, 'Waiting for user input', 'terminal-output inside step must stay untouched');
+  assert.equal(rowBgCmd.textContent, 'Settings', 'background-task-command inside step must stay untouched');
+  assert.equal(filePathChip.textContent, 'Settings', '[data-file-path] must stay untouched');
+  assert.equal(fileHrefChip.textContent, 'Edited', '[data-file-href] must stay untouched');
+  assert.equal(omniPathChip.textContent, 'Read', '[data-omni-path] must stay untouched');
+  assert.equal(entityPill.textContent, 'Ran', 'entity-pill must stay untouched');
+  assert.equal(inlineDiff.textContent, 'Asking 4 questions', '[data-ag-cs-inline-diff] must stay untouched');
+  assert.equal(preBlock.textContent, 'Posted #12 to board', '<pre> inside step must stay untouched');
+  assert.equal(mdInsideText.textContent, 'Explored files, ran commands', '[data-markdown-root] inside step must stay untouched');
+  assert.equal(thinkProse.textContent, 'Waiting for user input', 'Expanded thinking body must stay untouched');
+  assert.equal(thinkOverlay.textContent, 'Asking 4 questions', 'Thought overlay must stay untouched');
+
+  // Lossless restore on destroy()
+  inst.destroy();
+  assert.equal(combo1.textContent, 'Explored, ran commands, edited files');
+  assert.equal(rowAskText.textContent, 'Asking 4 questions');
+  assert.equal(rowBoard1Text.textContent, 'Read 1 message from board');
+  assert.equal(rowRanText.textContent, 'Ran npm test');
+  assert.equal(verbRead.textContent, 'Read');
+  assert.equal(thinkTrig.textContent, 'Thought for 23s');
+});
+
+test('content-visibility: auto offscreen reveal (domBus.isSkipped + contentvisibilityautostatechange) incrementally translates historical turns with zero leak, and PR #120 skips Prism overlays on contextmenu', () => {
+  const domBusMod = require(path.join(ROOT, 'src', 'runtime', 'dom-bus.js'));
+  const dict = JSON.parse(fs.readFileSync(path.join(ROOT, 'vendor', 'host-i18n', 'zh-CN.json'), 'utf8'));
+
+  // Part 1: domBus.isSkipped skips offscreen historical turn, then contentvisibilityautostatechange (!skipped) reveals & translates it incrementally
+  const env = createTestEnv(1000);
+  const elListeners = new WeakMap();
+  const patchElEvents = (el) => {
+    el.addEventListener = (ev, fn) => {
+      let m = elListeners.get(el);
+      if (!m) { m = new Map(); elListeners.set(el, m); }
+      if (!m.has(ev)) m.set(ev, new Set());
+      m.get(ev).add(fn);
+    };
+    el.removeEventListener = (ev, fn) => { elListeners.get(el)?.get(ev)?.delete(fn); };
+    el.dispatchEvent = (e) => {
+      for (const fn of [...(elListeners.get(el)?.get(e.type) || [])]) fn(e);
+      env.doc.dispatchEvent(e);
+    };
+    return el;
+  };
+
+  const bus = domBusMod.createInstance(env.doc, env.win);
+  env.win.__agDomBus = bus;
+  env.win.__agPrismDomBus = bus;
+
+  const conv = env.makeEl('div', { attrs: { 'data-testid': 'conversation-view' } });
+  const histTurn = patchElEvents(env.makeEl('div', { attrs: { 'data-step-rows': 'true' } }));
+  const histStep = env.makeEl('div', { attrs: { 'data-step-index': '0' } });
+  const histAsk = env.makeEl('span', { text: 'Asking 4 questions' });
+  const histThink = env.makeEl('button', { attrs: { 'data-testid': 'thinking-collapsible-trigger' }, text: 'Thought for 23s' });
+  const histMd = env.makeEl('div', { attrs: { 'data-markdown-root': '' } });
+  const histMdSpan = env.makeEl('span', { text: 'Asking 4 questions' });
+  histMd.append(histMdSpan);
+  histStep.append(histAsk, histThink, histMd);
+  histTurn.append(histStep);
+  conv.append(histTurn);
+
+  // Prism overlay portal & attribute should be skipped on both scan and contextmenu (PR #120)
+  const portal = env.makeEl('div', { id: 'ag-prism-overlay-portal' });
+  const portalBtn = env.makeEl('button', { text: 'Settings' });
+  portal.append(portalBtn);
+  const overlayAttrEl = env.makeEl('div', { attrs: { 'data-ag-prism-overlay': '1' } });
+  const overlayAttrBtn = env.makeEl('button', { text: 'Save' });
+  overlayAttrEl.append(overlayAttrBtn);
+  env.doc.body.append(conv, portal, overlayAttrEl);
+
+  // Mark histTurn as offscreen skipped before mount
+  const unsubSeed = bus.observeVisibility(histTurn, () => {}, { doc: env.doc, io: false });
+  histTurn.dispatchEvent({ type: 'contentvisibilityautostatechange', skipped: true, target: histTurn });
+  assert.equal(bus.isSkipped(histTurn), true);
+  assert.equal(bus.isSkipped(histAsk), true);
+
+  const inst = runtime.mountHostI18n({
+    root: env.win,
+    doc: env.doc,
+    dict,
+    mode: 'on',
+    nowFn: env.nowFn,
+    setTimeoutFn: env.setTimeoutFn,
+    clearTimeoutFn: env.clearTimeoutFn,
+    rafFn: env.rafFn,
+    cancelRafFn: env.cancelRafFn,
+  });
+
+  // While offscreen skipped, histTurn is untouched; Prism overlays are strictly untouched
+  assert.equal(histAsk.textContent, 'Asking 4 questions');
+  assert.equal(histThink.textContent, 'Thought for 23s');
+  assert.equal(portalBtn.textContent, 'Settings', '#ag-prism-overlay-portal must be ignored');
+  assert.equal(overlayAttrBtn.textContent, 'Save', '[data-ag-prism-overlay] must be ignored');
+
+  // Scroll back into viewport -> skipped:false triggers incremental catch-up scan
+  histTurn.dispatchEvent({ type: 'contentvisibilityautostatechange', skipped: false, target: histTurn });
+  env.advanceTime(50);
+  assert.equal(bus.isSkipped(histTurn), false);
+  assert.equal(histAsk.textContent, '正在询问 4 个问题', 'Revealed historical step must translate on scroll-back');
+  assert.equal(histThink.textContent, '已思考 23 秒', 'Revealed thinking trigger title must translate on scroll-back');
+  assert.equal(histMdSpan.textContent, 'Asking 4 questions', 'Markdown prose inside revealed turn must remain untouched');
+
+  // PR #120: contextmenu inside #ag-prism-overlay-portal, [data-ag-prism-overlay], or defaultPrevented must early-return with 0 timers
+  env.timers.clear();
+  env.doc.dispatchEvent({ type: 'contextmenu', target: portalBtn, defaultPrevented: false });
+  env.doc.dispatchEvent({ type: 'contextmenu', target: overlayAttrBtn, defaultPrevented: false });
+  env.doc.dispatchEvent({ type: 'contextmenu', target: histAsk, defaultPrevented: true });
+  assert.equal(env.timers.size, 0, 'Prism overlay / defaultPrevented contextmenu must not schedule float scan');
+
+  // destroy() releases document contentvisibilityautostatechange listener & domBus visibility hooks cleanly
+  const cvCountBeforeDestroy = env.docListeners.get('contentvisibilityautostatechange:true')?.size || 0;
+  assert.equal(cvCountBeforeDestroy, 2, 'Both domBus and host-i18n register capture contentvisibilityautostatechange');
+  inst.destroy();
+  unsubSeed();
+  assert.equal(env.docListeners.get('contentvisibilityautostatechange:true')?.size || 0, 1, 'host-i18n must detach its own capture listener on destroy()');
+  assert.equal(bus.getDebugState().visibilityObservedCount, 0);
+  bus.destroy(env.doc, env.win);
+  assert.equal(env.docListeners.get('contentvisibilityautostatechange:true')?.size || 0, 0, 'domBus destroy() detaches remaining capture listener');
+
+  // Verify vendor/host-i18n/tr.json has 0 CJK characters in all translated outputs
+  const trDict = JSON.parse(fs.readFileSync(path.join(ROOT, 'vendor', 'host-i18n', 'tr.json'), 'utf8'));
+  const cjkRe = /[\u3400-\u9FFF\uF900-\uFAFF]/;
+  for (const [k, v] of Object.entries(trDict.exact || {})) {
+    assert.equal(cjkRe.test(String(v)), false, `tr.json exact value must contain 0 CJK: ${k} => ${v}`);
+  }
+  for (const p of trDict.patterns || []) {
+    assert.equal(cjkRe.test(String(p.replacement)), false, `tr.json pattern replacement must contain 0 CJK: ${p.regex} => ${p.replacement}`);
+  }
 });
