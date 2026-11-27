@@ -1592,8 +1592,10 @@ test('red-team #229 [P1-3]: pick-media single-flight mutex, dispose() kills orph
   const tmpDir = mkTempDir('prism-wp-rt-p13-');
   const pngA = path.join(tmpDir, 'a.png');
   const pngB = path.join(tmpDir, 'b.png');
+  const fakeWatcherExe = path.join(tmpDir, 'obsidian-prism-watcher.exe');
   fs.writeFileSync(pngA, makeValidPngBuffer(48));
   fs.writeFileSync(pngB, makeValidPngBuffer(64));
+  fs.writeFileSync(fakeWatcherExe, 'stub');
 
   // Verify getMediaBlob no longer uses synchronous fs.readFileSync
   const svcSrc = fs.readFileSync(path.join(ROOT, 'vendor', 'wallpaper', 'wallpaper-service.mjs'), 'utf8');
@@ -1625,6 +1627,7 @@ test('red-team #229 [P1-3]: pick-media single-flight mutex, dispose() kills orph
     const sfSvc = createWallpaperService({
       configPath: path.join(tmpDir, 'sf-pick.json'),
       platform: 'win32',
+      watcherExePath: fakeWatcherExe,
       execFileImpl(_file, _args, _opts, cb) {
         spawnCount += 1;
         releasePicker = () => cb(null, `${pngA}\r\n`, '');
@@ -1660,6 +1663,7 @@ test('red-team #229 [P1-3]: pick-media single-flight mutex, dispose() kills orph
     const killSvc = createWallpaperService({
       configPath: path.join(tmpDir, 'kill-pick.json'),
       platform: 'win32',
+      watcherExePath: fakeWatcherExe,
       execFileImpl(_file, _args, _opts, cb) {
         pendingCb = cb;
         killSpawnGate.notify();
