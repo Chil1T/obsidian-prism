@@ -671,9 +671,9 @@ test('W6-Footer-UX: decoupled footerTier/barTier 6-tier layout, compact vs both 
     }
   }
 
-  // 2) Decoupled footerTier (>=440 => '0', 360-439 => '1', <360 => '1 2') vs barTier (880/660/530/440/360)
+  // 2) Decoupled footerTier (>=440 => '0', 360-439 => '1', <360 => '1 2') vs calibrated barTier (compact 680/620/530/440/360, both 720/650/560/440/360)
   const env = createSwitchMockEnv({ initialCid: CID_A });
-  let footerW = 900;
+  let footerW = 750;
   env.footer.getBoundingClientRect = () => ({ left: 0, top: 0, width: footerW, height: 32, right: footerW, bottom: 32 });
   env.win.__agPrismMetricsCall = (payloadStr) => {
     const req = JSON.parse(payloadStr);
@@ -698,22 +698,27 @@ test('W6-Footer-UX: decoupled footerTier/barTier 6-tier layout, compact vs both 
       ro.cb([{ borderBoxSize: [{ inlineSize: w }] }]);
     };
 
-    // 900px: full bar, model name intact
+    // 750px (desktop standard composer max width): full bar with tok/s visible, model name intact
     assert.equal(env.footer.getAttribute('data-t'), '0');
-    assert.equal(bar.getAttribute('data-t'), '0');
+    assert.equal(bar.getAttribute('data-t'), '0', '750px standard desktop footer must keep tier 0 so tok/s stays visible');
     assert.equal(bar.getAttribute('data-wide'), null);
 
     // 1120px: ultra-wide allows sub-badge
     resizeTo(1120);
     assert.equal(bar.getAttribute('data-wide'), '1');
 
-    // 720px (primary width 660-879px): outer stays '0' (model name intact!), bar enters tier '1' (hides speed & sub-badge)
+    // 720px (>=680px in compact mode): outer stays '0', bar stays '0' (tok/s still visible, sub-badge hidden)
     resizeTo(720);
     assert.equal(env.footer.getAttribute('data-t'), '0', '720px outer footer must stay data-t="0" so model name never truncates');
-    assert.equal(bar.getAttribute('data-t'), '1', '720px bar must enter tier 1 to hide tok/s and sub-badge');
+    assert.equal(bar.getAttribute('data-t'), '0', '720px compact bar must stay tier 0 to show tok/s');
     assert.equal(bar.getAttribute('data-wide'), null);
 
-    // 600px (530-659px): outer still '0', bar enters '1 2' (also hides cache)
+    // 650px (620-679px): outer stays '0', bar enters tier '1' (hides tok/s first)
+    resizeTo(650);
+    assert.equal(env.footer.getAttribute('data-t'), '0', '650px outer footer must stay data-t="0"');
+    assert.equal(bar.getAttribute('data-t'), '1', '650px compact bar must enter tier 1 to hide tok/s');
+
+    // 600px (530-619px): outer still '0', bar enters '1 2' (also hides cache)
     resizeTo(600);
     assert.equal(env.footer.getAttribute('data-t'), '0');
     assert.equal(bar.getAttribute('data-t'), '1 2');

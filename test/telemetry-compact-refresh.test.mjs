@@ -840,3 +840,184 @@ test('Scoped renderer trajectory cache guards freshContext & older-first complet
   assert.equal(await joined, fresh2);
   assert.equal(await client.trajectory(CID_2), fresh2);
 });
+
+test('Telemetry footer bar tier cuts (Issue #146): 750px/768px show tok/s in compact & both modes, narrow widths fold cleanly with 0-reflow mode switch', async () => {
+  const env = createCompactMockEnv({ cid: CID_1 });
+  let rectCalls = 0;
+  let curW = 750;
+  const ros = [];
+  env.footer.getBoundingClientRect = () => {
+    rectCalls += 1;
+    return { left: 0, top: 0, width: curW, height: 32, right: curW, bottom: 32 };
+  };
+  env.window.ResizeObserver = class {
+    constructor(cb) { this.cb = cb; ros.push(this); }
+    observe() {}
+    disconnect() {}
+  };
+  env.window.__agPrismMetricsCall = (raw) => {
+    const { id } = JSON.parse(raw);
+    const snap = makeSnap(102400, { sampledAt: '2026-11-27T12:00:00.000Z' });
+    snap.groups[0].windows.weekly = { available: true, remaining: 0.61 };
+    queueMicrotask(() => env.window.__agPrismMetricsResolve(id, snap));
+  };
+
+  const ctl = inlineMod.createTelemetryController({ window: env.window, document: env.document });
+  try {
+    ctl.sync({ telemetryModule: 'on', telemetryQuotaMode: 'compact', language: 'zh-CN' });
+    await sleep(20);
+    const bar = ctl.getPrimaryBar();
+    const ro = ros[0];
+    assert.ok(bar && ro, 'bar and ResizeObserver must be mounted');
+
+    const resizeTo = (w) => {
+      curW = w;
+      ro.cb([{ borderBoxSize: [{ inlineSize: w }] }]);
+    };
+
+    // Standard desktop composer widths (750px footer / 768px composer) must show tok/s (tier 0)
+    assert.equal(env.footer.getAttribute('data-t'), '0');
+    assert.equal(bar.getAttribute('data-t'), '0', '750px desktop footer must render tier 0 (tok/s visible)');
+    assert.equal(bar.shadowRoot.getElementById('tps').textContent, '55.2');
+
+    resizeTo(768);
+    assert.equal(bar.getAttribute('data-t'), '0', '768px desktop width must render tier 0 (tok/s visible)');
+
+    // Compact mode graceful multi-tier collapse: 700 -> 0, 650 -> 1, 600 -> 1 2, 480 -> 1 2 3, 400 -> 1 2 3 4, 340 -> 1 2 3 4 5
+    resizeTo(700);
+    assert.equal(bar.getAttribute('data-t'), '0', '700px compact must keep tok/s visible');
+    resizeTo(650);
+    assert.equal(env.footer.getAttribute('data-t'), '0');
+    assert.equal(bar.getAttribute('data-t'), '1', '650px compact folds tok/s first');
+    resizeTo(600);
+    assert.equal(env.footer.getAttribute('data-t'), '0');
+    assert.equal(bar.getAttribute('data-t'), '1 2', '600px compact folds cache next');
+    resizeTo(480);
+    assert.equal(env.footer.getAttribute('data-t'), '0');
+    assert.equal(bar.getAttribute('data-t'), '1 2 3', '480px compact folds quota while keeping model intact');
+    resizeTo(400);
+    assert.equal(env.footer.getAttribute('data-t'), '1');
+    assert.equal(bar.getAttribute('data-t'), '1 2 3 4');
+    resizeTo(340);
+    assert.equal(env.footer.getAttribute('data-t'), '1 2');
+    assert.equal(bar.getAttribute('data-t'), '1 2 3 4 5');
+
+    // Rebounding from 340px back to 750px must clear +12px hysteresis and restore tok/s
+    resizeTo(750);
+    assert.equal(env.footer.getAttribute('data-t'), '0');
+    assert.equal(bar.getAttribute('data-t'), '0', 'Rebounding from narrow to 750px must restore tier 0 (tok/s)');
+
+    // Both-quota mode: 750px/768px still show tok/s (even after narrow rebound to 744px), while 700px folds tok/s with 0 sync rect reads
+    const readsBeforeModeSwitch = rectCalls;
+    ctl.sync({ telemetryModule: 'on', telemetryQuotaMode: 'both', language: 'zh-CN' });
+    assert.equal(rectCalls, readsBeforeModeSwitch, 'Switching quota mode on observed footer must perform 0 getBoundingClientRect reads');
+    assert.equal(bar.getAttribute('data-t'), '0', '750px both-quota mode must still show tok/s');
+
+    resizeTo(700);
+    assert.equal(bar.getAttribute('data-t'), '1', '700px both-quota mode folds tok/s earlier to protect composer controls');
+    resizeTo(620);
+    assert.equal(bar.getAttribute('data-t'), '1 2');
+    resizeTo(540);
+    assert.equal(bar.getAttribute('data-t'), '1 2 3');
+    resizeTo(340);
+    assert.equal(bar.getAttribute('data-t'), '1 2 3 4 5');
+    resizeTo(744);
+    assert.equal(bar.getAttribute('data-t'), '0', 'Both-quota rebound to 744px standard footer must clear +12px hysteresis and restore tok/s');
+
+    // Live switch back to compact at 700px immediately restores tier 0 without needing another resize
+    resizeTo(700);
+    assert.equal(bar.getAttribute('data-t'), '1');
+    ctl.sync({ telemetryModule: 'on', telemetryQuotaMode: 'compact', language: 'zh-CN' });
+    assert.equal(bar.getAttribute('data-t'), '0', 'Switching both -> compact at 700px must immediately restore tok/s');
+    assert.equal(rectCalls, readsBeforeModeSwitch, 'All RO resizes & mode toggles must trigger 0 sync getBoundingClientRect calls');
+  } finally {
+    ctl.destroy();
+  }
+});
+
+test('Telemetry { unchanged: true } broadcasts shared __agPrismMetricsLast snapshot to sibling instances with 0 extra RPCs (P2-4)', async () => {
+  const env = createCompactMockEnv({ cid: CID_1 });
+
+  // Add a second split-pane composer sharing CID_1, and a third pane on CID_2 (must stay isolated)
+  const addPane = (cid) => {
+    const cv = env.mkEl('div');
+    cv.setAttribute('data-testid', 'conversation-view');
+    cv.setAttribute('data-cascade-id', cid);
+    const box = env.mkEl('div');
+    box.setAttribute('data-testid', 'agent-input-box');
+    const ft = env.mkEl('div');
+    ft.className = 'agy-composer-footer';
+    const send = env.mkEl('button');
+    send.setAttribute('data-testid', 'input-send-button');
+    ft.appendChild(send);
+    box.appendChild(ft);
+    cv.appendChild(box);
+    env.body.appendChild(cv);
+    return { cv, ft };
+  };
+  const pane2 = addPane(CID_1);
+  const pane3 = addPane(CID_2);
+
+  let rpcCalls = 0;
+  let replyUnchanged = false;
+  const snap1 = makeSnap(102400, { sampledAt: '2026-11-27T12:00:00.000Z' });
+  snap1.sig = 'sig-v1-000000001';
+  const snap2 = makeSnap(204800, { sampledAt: '2026-11-27T12:00:05.000Z' });
+  snap2.sig = 'sig-v2-000000002';
+  snap2.speed.tps = 77.7;
+  const snapOther = makeSnap(51200, { sampledAt: '2026-11-27T12:00:00.000Z' });
+  snapOther.sig = 'sig-c2-000000001';
+
+  const renderEvents = [];
+  env.window.__agPulseExternalBridge = (ev) => {
+    if (ev?.event === 'render') renderEvents.push(ev);
+  };
+  env.window.__agPrismMetricsCall = (raw) => {
+    rpcCalls += 1;
+    const { id, input } = JSON.parse(raw);
+    if (replyUnchanged && input.conversationId === CID_1) {
+      queueMicrotask(() => env.window.__agPrismMetricsResolve(id, { unchanged: true, sig: snap2.sig, transport: 'renderer-proxy' }));
+      return;
+    }
+    const payload = input.conversationId === CID_2 ? snapOther : snap1;
+    queueMicrotask(() => env.window.__agPrismMetricsResolve(id, payload));
+  };
+
+  const ctl = inlineMod.createTelemetryController({ window: env.window, document: env.document });
+  try {
+    ctl.sync({ telemetryModule: 'on', language: 'zh-CN' });
+    await sleep(30);
+
+    const bar1 = ctl.getBarForView(env.footer);
+    const bar2 = ctl.getBarForView(pane2.ft);
+    const bar3 = ctl.getBarForView(pane3.ft);
+    assert.ok(bar1 && bar2 && bar3, 'All 3 panes must mount telemetry bars');
+    assert.equal(bar1.shadowRoot.getElementById('context-percent').textContent, '20%');
+    assert.equal(bar2.shadowRoot.getElementById('context-percent').textContent, '20%');
+    assert.equal(bar3.shadowRoot.getElementById('context-percent').textContent, '10%');
+
+    // Simulate shared __agPrismMetricsLast already holding newer snap2 (e.g. written by bridge/sibling),
+    // then next bridge call receives { unchanged: true } -> both CID_1 sibling bars sync to snap2 with 0 extra RPCs!
+    env.window.__agPrismMetricsLast.set(CID_1, { at: Date.now(), snap: snap2, inc: true, sig: snap2.sig, tr: 'renderer-proxy' });
+    replyUnchanged = true;
+    renderEvents.length = 0;
+    const callsBefore = rpcCalls;
+
+    const got = await env.window.__agPrismMetricsBridge.getMetrics({ conversationId: CID_1, includeConversations: true });
+    assert.equal(got, snap2);
+    assert.equal(rpcCalls, callsBefore + 1, 'Unchanged response must issue exactly 1 RPC and 0 follow-up RPCs');
+    assert.equal(bar1.shadowRoot.getElementById('context-percent').textContent, '40%', 'Pane 1 must refresh from shared snapshot on unchanged');
+    assert.equal(bar2.shadowRoot.getElementById('context-percent').textContent, '40%', 'Sibling Pane 2 must refresh from shared snapshot on unchanged');
+    assert.equal(bar2.shadowRoot.getElementById('tps').textContent, '77.7');
+    assert.equal(bar3.shadowRoot.getElementById('context-percent').textContent, '10%', 'Unrelated CID_2 pane must NOT be polluted');
+
+    // Subsequent { unchanged: true } when siblings already hold snap2 must perform 0 redundant DOM renders
+    renderEvents.length = 0;
+    const callsBefore2 = rpcCalls;
+    await env.window.__agPrismMetricsBridge.getMetrics({ conversationId: CID_1, includeConversations: true });
+    assert.equal(rpcCalls, callsBefore2 + 1);
+    assert.equal(renderEvents.length, 0, 'Siblings already rendering snap2 must skip redundant DOM updates');
+  } finally {
+    ctl.destroy();
+  }
+});

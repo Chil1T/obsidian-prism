@@ -10,7 +10,7 @@ const isFn=v=>typeof v==='function',isStr=v=>typeof v==='string',isFin=v=>typeof
 const gA=(e,k)=>e?.getAttribute?.(k),sA=(e,k,v)=>e?.setAttribute?.(k,v),rA=(e,k)=>e?.removeAttribute?.(k);
 const qS=(e,s)=>e?.querySelector?.(s),qA=(e,s)=>e?.querySelectorAll?.(s);
 const emitB=(w,p)=>{try{w?.__agPulseExternalBridge?.(p);}catch{}};
-const TI=s=>`[data-testid="${s}"]`,TIs=s=>s.split('|').map(TI).join(','),cT=t=>(t!==null&&clearTimeout(t),null),stTm=(fn,ms)=>{const t=setTimeout(fn,ms);t?.unref?.();return t;},on=(e,t,f,c)=>(e?.addEventListener?.(t,f,c),()=>e?.removeEventListener?.(t,f,c)),setIf=(e,k,v)=>{if(gA(e,k)!==v)sA(e,k,v);},qAll=(d,s)=>{let r=isFn(d?.querySelectorAll)?Array.from(d.querySelectorAll(s)):[];if(!r.length&&isFn(d?.querySelector)){const o=d.querySelector(s);if(o)r=[o];}return r;},mkTier=(anc,host)=>({anc,host,ro:null,raf:0,curFtTier:0,curBarTier:0,pendW:0,hasPendW:false,lastFtTv:'',lastBarTv:'',lastWide:false});
+const TI=s=>`[data-testid="${s}"]`,TIs=s=>s.split('|').map(TI).join(','),cT=t=>(t!==null&&clearTimeout(t),null),stTm=(fn,ms)=>{const t=setTimeout(fn,ms);t?.unref?.();return t;},on=(e,t,f,c)=>(e?.addEventListener?.(t,f,c),()=>e?.removeEventListener?.(t,f,c)),setIf=(e,k,v)=>{if(gA(e,k)!==v)sA(e,k,v);},qAll=(d,s)=>{let r=isFn(d?.querySelectorAll)?Array.from(d.querySelectorAll(s)):[];if(!r.length&&isFn(d?.querySelector)){const o=d.querySelector(s);if(o)r=[o];}return r;},mkTier=(anc,host)=>({anc,host,ro:null,raf:0,curFtTier:0,curBarTier:0,pendW:0,hasPendW:false,lastW:0,lastFtTv:'',lastBarTv:'',lastWide:false});
 
 const BI='ag-pulse-status-bar',PI='ag-prism-pulse-bar',PA='data-ag-prism-pulse-bar',FA='data-ag-prism-fallback',HA='data-ag-prism-hidden',MB='__agPrismMetricsCall';
 const WM=1500,GM=3500,SWM=30,HOM=180,HCM=220,LMX=32,GRE=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,URE=/\/c\/([0-9a-f-]{36})/i;
@@ -119,7 +119,7 @@ return el;
 
 const HOST_ATTRS=Object.freeze({[FA]:'1',[PA]:'true','data-ag-owned':'1','data-ag-no-i18n':'',translate:'no','data-no-translate':'true','data-ag-localization-skip':'true','data-agy-no-translate':'true','data-antigravity-zh-skip':'1'});
 const HIDE_PROPS='position:fixed|left:-9999px|top:-9999px|width:1px|height:1px|opacity:0|pointer-events:none|visibility:hidden|overflow:hidden'.split('|').map(s=>s.split(':'));
-const FTC=[440,360],BRC=[880,660,530,440,360],WDC=1080,FT_S='.agy-composer-footer,'+TI('input-box-bottom-toolbar'),HC_A='data-hover-card-popup',QMA='data-ag-cs-telemetry-quota';
+const FTC=[440,360],BRC=[680,620,530,440,360],BRB=[720,650,560,440,360],WDC=1080,FT_S='.agy-composer-footer,'+TI('input-box-bottom-toolbar'),HC_A='data-hover-card-popup',QMA='data-ag-cs-telemetry-quota';
 const stpT=(c,w,cs)=>{let t=c;while(t<cs.length&&w<cs[t])t++;while(t>0&&w>=cs[t-1]+12)t--;return t;};
 const SB_S='aside,'+TI('sidebar-split')+'>div:first-child,'+TIs('conversation-row-sidebar|project-header')+',['+HC_A+']';
 const IGN_S=TIs('autoscroll-viewport|planner-response-text|agent-response|background-task-command|running-items-card')+',[data-markdown-root],'+SB_S+',[data-op-thought="1"],.ag-prism-thought-overlay,.ag-cs-conv-aura-host,.ag-cs-crab,.ag-cs-prism-rim-cv,.ag-anim-icon,.ag-cs-thinking-spark,[data-agy-hans-ui],#agy-theme-switcher,#agy-theme-menu,#antigravity-quota-widget,#antigravity-translation-audit';
@@ -187,7 +187,8 @@ rec.raf=0;
 const d=gD(),ft=md!=='off'&&rec.anc&&iC(d,rec.anc)?rec.anc:null,w=rec.hasPendW?rec.pendW:ft?.getBoundingClientRect?.().width;
 rec.pendW=0;rec.hasPendW=false;
 if(!ft||!isFin(w)||w<=0)return;
-const pB=rec.lastBarTv,fT=FVS[(rec.curFtTier=stpT(rec.curFtTier,w,FTC))]||'0',bT=TVS[(rec.curBarTier=stpT(rec.curBarTier,w,BRC))]||'0',iW=w>=WDC;
+rec.lastW=w;
+const pB=rec.lastBarTv,fT=FVS[(rec.curFtTier=stpT(rec.curFtTier,w,FTC))]||'0',bT=TVS[(rec.curBarTier=stpT(rec.curBarTier,w,qm==='both'?BRB:BRC))]||'0',iW=w>=WDC;
 if(!force&&fT===rec.lastFtTv&&gA(ft,TA)===fT&&bT===rec.lastBarTv&&iW===rec.lastWide)return;
 rec.lastFtTv=fT;rec.lastBarTv=bT;rec.lastWide=iW;setIf(ft,TA,fT);
 if(rec.host){
@@ -229,8 +230,9 @@ eWR();if(!rec.lastBarTv||!rec.ro)apT(rec,true);
 const dtT=rec=>{
 if(!rec)return;
 try{if(rec.raf)gW()?.cancelAnimationFrame?.(rec.raf);rec.ringTm=cT(rec.ringTm);rec.ro?.disconnect?.();rA(rec.anc,TA);if(rec.host)rA(rec.host,'data-wide');}catch{}
-Object.assign(rec,{raf:0,ro:null,curFtTier:0,curBarTier:0,pendW:0,hasPendW:false,lastFtTv:'',lastBarTv:'',lastWide:false});
+Object.assign(rec,{raf:0,ro:null,curFtTier:0,curBarTier:0,pendW:0,hasPendW:false,lastW:0,lastFtTv:'',lastBarTv:'',lastWide:false});
 };
+const reT=()=>{for(const r of[...IS.values(),...ET.values()]){r.curBarTier=0;if(r.lastW>0){r.pendW=r.lastW;r.hasPendW=true;}apT(r,true);}};
 const cET=()=>{for(const et of ET.values())dtT(et);ET.clear();};
 const cTr=()=>{
 for(const it of IS.values())dtT(it);
@@ -260,30 +262,33 @@ if(!mRes){
 mRes=(id,pl)=>{
 const it=PD.get(id);if(!it)return;
 cT(it.timer);PD.delete(id);
+let sy=pl,uc=false;
 if(pl&&pl.unchanged===true){
 if(pl.transport===RP)pxM=true;
 const lm=gLm(),ck=it.cid||'',rc=lm.get(ck),pv=rc?.snap||(it.cid&&SC.get(it.cid))||(!it.cid?lS:null);
 if(pv){
+uc=true;sy=pv;
 if(rc){rc.at=N0();if(isStr(pl.sig)&&pl.sig)rc.sig=pl.sig;}else pLm(it.cid,pv,it.inc,pl.sig,pl.transport);
-it.onSettle?.();it.resolve(pv);return;
+if(it.cid)pCS(it.cid,sy);
+if(!lS||!it.cid||actIn()?.cid===it.cid)lS=sy;
+}else sy=gFb(it.cid,null);
 }
-pl=gFb(it.cid,null);
-}
-let sy=pl;
-if(pl&&pl.connection!==LE&&pl.groups?.length>0){
+if(!uc){
+if(sy&&sy.connection!==LE&&sy.groups?.length>0){
 const pv=(it.cid&&SC.get(it.cid))||(!it.cid?lS:null);
-const ks=!pl.speed&&pv?.speed,kc=!pl.conversations?.length&&pv?.conversations?.length;
-sy=ks||kc?{...pl,...(ks?{speed:pv.speed}:{}),...(kc?{conversations:pv.conversations}:{})}:pl;
+const ks=!sy.speed&&pv?.speed,kc=!sy.conversations?.length&&pv?.conversations?.length;
+sy=ks||kc?{...sy,...(ks?{speed:pv.speed}:{}),...(kc?{conversations:pv.conversations}:{})}:sy;
 if(it.cid)pCS(it.cid,sy);
 if(!lS||!it.cid||actIn()?.cid===it.cid)lS=sy;
 }
 if(sy&&sy.connection!==LE)pLm(it.cid,sy,it.inc,pl?.sig,pl?.transport);
-if(it.syncUi&&sy&&sy.connection!==LE&&sy.speed?.context&&IS.size>0){
+}
+if((it.syncUi||uc)&&sy&&sy.connection!==LE&&sy.speed?.context&&IS.size>0){
 const d=gD(),ml=IS.size>1,nAt=String(sy.speed.context.sampledAt||'');
 for(const ins of IS.values()){
 if(!iC(d,ins.host))continue;
 const lc=dCd(ins.host,ml),oAt=String(ins.snap?.speed?.context?.sampledAt||'');
-if((it.cid?(ins.cid===it.cid&&(!lc||lc===it.cid)):(!ml&&!ins.cid))&&ins.snap!==sy&&(!oAt||!nAt||nAt>=oAt))apSn(ins,sy);
+if((it.cid?(ins.cid===it.cid&&(!lc||lc===it.cid)):(!ml&&!ins.cid))&&ins.snap!==sy&&(ins.snap?.connection===LE||!oAt||!nAt||nAt>=oAt))apSn(ins,sy);
 }
 }
 it.onSettle?.();it.resolve(sy);
@@ -317,7 +322,7 @@ if(!bOff&&isFn(w.addEventListener)){
 const u=[on(w,'blur',()=>{wBl=true;syBl(false);}),on(w,'focus',()=>{wBl=false;syBl(true);}),on(d,'visibilitychange',()=>{if(!gD()?.hidden)wBl=false;syBl(!gD()?.hidden);})];
 bOff=()=>{for(const f of u)f();};
 }
-if(!bObs&&d.documentElement)try{bObs=subMo('pulse-blur',d.documentElement,{childList:false,subtree:false,attributes:true,attributeFilter:[AG+'win-blur',QMA,AG+'theme',AG+'resizing',AG+'ignore-rm']},()=>{const b=gA(gD()?.documentElement,AG+'win-blur')==='1';if(!b)wBl=false;syBl(!b);syAH();const q=rdQm();if(q&&q!==qm){qm=q;for(const it of IS.values())if(it.snap||lS)apSn(it,it.snap||lS);}},'high');}catch{}
+if(!bObs&&d.documentElement)try{bObs=subMo('pulse-blur',d.documentElement,{childList:false,subtree:false,attributes:true,attributeFilter:[AG+'win-blur',QMA,AG+'theme',AG+'resizing',AG+'ignore-rm']},()=>{const b=gA(gD()?.documentElement,AG+'win-blur')==='1';if(!b)wBl=false;syBl(!b);syAH();const q=rdQm();if(q&&q!==qm){qm=q;for(const it of IS.values())if(it.snap||lS)apSn(it,it.snap||lS);reT();}},'high');}catch{}
 };
 const cSt=()=>{cSw();hTm=cT(hTm);try{sObs?.disconnect?.();pOff?.();}catch{}sObs=pOff=null;cTr();};
 const isConv=(d,w,anc)=>{
@@ -801,10 +806,12 @@ return{mode:md,quotaMode:qm,mountedFallback:m,mountedCount:n,waitingForExternal:
 
 function sync(cfg){
 if(cfg&&isStr(cfg.language)&&cfg.language)eLng=cfg.language.trim().toLowerCase()==='auto'?'':normFbLang(cfg.language,gW());
+const pQm=qm;
 if(cfg&&Object.hasOwn(cfg,'telemetryQuotaMode'))qm=cfg.telemetryQuotaMode==='both'?'both':'compact';
 else{const a=rdQm();if(a)qm=a;}
 const raw=cfg?.telemetryModule;md=raw==='on'||raw==='off'?raw:'auto';
 if(IS.size&&md!=='off')for(const it of IS.values()){sLb(it.sr);if(it.snap||lS)apSn(it,it.snap||lS);}
+if(qm!==pQm&&md!=='off'&&(IS.size||ET.size))reT();
 if(md==='off'){yld=false;uFb();hdEx();return getState();}
 eBr();eSO();
 const d=gD(),w=gW();
