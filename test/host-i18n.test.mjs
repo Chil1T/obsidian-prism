@@ -399,15 +399,15 @@ function createTestEnv(initialTime = 1000) {
   };
 }
 
-test('dictionary hygiene: vendor/host-i18n/zh-CN.json has 4789 exact + 459 patterns, zero private terms, compact JSON, and safe regexes', () => {
+test('dictionary hygiene: vendor/host-i18n/zh-CN.json has 4804 exact + 466 patterns, zero private terms, compact JSON, and safe regexes', () => {
   const dictPath = path.join(ROOT, 'vendor', 'host-i18n', 'zh-CN.json');
   const raw = fs.readFileSync(dictPath, 'utf8');
   assert.equal(raw.includes('\n  '), false, 'zh-CN.json must be compact JSON without pretty-print indentation');
 
   const dict = JSON.parse(raw);
   const exactKeys = Object.keys(dict.exact || {});
-  assert.equal(exactKeys.length, 4789);
-  assert.equal((dict.patterns || []).length, 459);
+  assert.equal(exactKeys.length, 4804);
+  assert.equal((dict.patterns || []).length, 466);
   assert.equal(dict.exact['Unlock the power of agent swarms.'], '解锁智能体 Swarm 协作的强大能力。');
   assert.ok(
     dict.exact["Live view of the native swarm board, roster and @mention graph for the current conversation's swarm."]?.includes('Swarm'),
@@ -4125,6 +4125,396 @@ test('domBus omits global characterData:true and capture pointerenter O(1) skips
     assert.ok(env.timers.size >= 1, 'Hovering interactive button must still schedule trailing tooltip scan');
     env.advanceTime(200);
     assert.equal(lateTip.textContent, '复制', 'Trailing scan from interactive trigger must translate delayed tooltip');
+  } finally {
+    inst.destroy();
+  }
+});
+
+test('Model selector panel whitelist (ces-ag-panel-enhanced exemption, badges, tooltips, Usage hovercard, off restore) preserves model names, effort levels & conversation-list-sidebar boundary', () => {
+  const env = createTestEnv(1000);
+  const zhDict = JSON.parse(fs.readFileSync(path.join(ROOT, 'vendor', 'host-i18n', 'zh-CN.json'), 'utf8'));
+
+  // Confirm conversation-list-sidebar remains in USER_CONTENT_BOUNDARY (PR #133 architecture preserved)
+  const sidebarList = env.makeEl('div', { attrs: { 'data-testid': 'conversation-list-sidebar' } });
+  assert.equal(runtime.isUserContentBoundary(sidebarList), true, 'conversation-list-sidebar must stay protected in USER_CONTENT_BOUNDARY');
+
+  const panel = env.makeEl('div', {
+    className: 'flex flex-col ces-ag-panel-enhanced',
+    attrs: { 'data-testid': 'model-selector-panel' },
+  });
+  const header = env.makeEl('div', { attrs: { 'data-testid': 'model-selector-header' }, text: 'Model' });
+  const list = env.makeEl('div', { attrs: { 'data-testid': 'model-selector-list' } });
+
+  const item1 = env.makeEl('div', { attrs: { 'data-testid': 'model-selector-item' } });
+  const name1 = env.makeEl('span', { text: 'Gemini 4 Argon' });
+  const effort1 = env.makeEl('span', { text: 'Medium' });
+  const badge1 = env.makeEl('span', { text: 'Leaving Soon' });
+  item1.append(name1, effort1, badge1);
+
+  const item2 = env.makeEl('div', { attrs: { 'data-testid': 'model-selector-item' } });
+  const name2 = env.makeEl('span', { text: 'Claude Opus 5.5' });
+  const autoTag = env.makeEl('span', { text: 'Auto' });
+  const badge2 = env.makeEl('span', { text: 'New' });
+  item2.append(name2, autoTag, badge2);
+
+  const item3 = env.makeEl('div', { attrs: { 'data-testid': 'model-selector-item' } });
+  const name3 = env.makeEl('span', { text: 'GPT-OSS 120B (Medium)' });
+  const badge3 = env.makeEl('span', { text: 'Notice' });
+  item3.append(name3, badge3);
+
+  const item4 = env.makeEl('div', { attrs: { 'data-testid': 'model-selector-orchestrator', role: 'menuitem' } });
+  const orchLabel = env.makeEl('span', { text: 'Orchestrator' });
+  const highLabel = env.makeEl('span', { text: 'High' });
+  const orchBadge = env.makeEl('span', { text: 'New' });
+  item4.append(orchLabel, highLabel, orchBadge);
+
+  const effortGroup = env.makeEl('div', { attrs: { 'data-testid': 'model-selector-effort-group' } });
+  const effortSettingText = env.makeEl('span', { text: 'Save' });
+  effortGroup.append(effortSettingText);
+
+  const footerBtn = env.makeEl('button', { text: 'View Usage' });
+  const depTooltip = env.makeEl('div', { attrs: { role: 'tooltip' }, text: 'Use Hydrogen for better quality with lower quota usage. Leaving on Nov 30.' });
+  const orchTooltip = env.makeEl('div', { attrs: { role: 'tooltip' }, text: 'Offloads routine steps to a faster executor. Same quality, fewer tokens used.' });
+  const neonTooltip = env.makeEl('div', { attrs: { role: 'tooltip' }, text: 'For most deep reasoning and complex problems' });
+  const carbonTooltip = env.makeEl('div', { attrs: { role: 'tooltip' }, text: 'For your hardest, long-horizon tasks' });
+  const argonTooltip = env.makeEl('div', { attrs: { role: 'tooltip' }, text: 'The original Gemini 4 model for advanced workflows. Leaving on Nov 30.' });
+  const hydroTooltip = env.makeEl('div', { attrs: { role: 'tooltip' }, text: 'For speed and efficiency in execution tasks' });
+  const gptNoticeTooltip = env.makeEl('div', { attrs: { role: 'tooltip' }, text: 'GPT-OSS will be removed from Antigravity on November 30, 2026.' });
+  const orchSubTooltip = env.makeEl('div', { attrs: { role: 'tooltip' }, text: 'Neon that may offload routine steps to Hydrogen. Same Neon-level quality, fewer tokens used.' });
+
+  const usageCard = env.makeEl('div', { attrs: { 'data-hover-card-popup': '' } });
+  const usageTitle = env.makeEl('div', { text: 'Usage' });
+  const geminiGroup = env.makeEl('div', { text: 'Gemini Models' });
+  const weekly1 = env.makeEl('span', { text: 'Weekly limit' });
+  const reset1 = env.makeEl('span', { text: 'Resets in 5d 23h' });
+  const left1 = env.makeEl('span', { text: '65% left' });
+  const h5 = env.makeEl('span', { text: '5h limit' });
+  const reset2 = env.makeEl('span', { text: 'Resets in 3h 3m' });
+  const left2 = env.makeEl('span', { text: '80% left' });
+  const claudeGroup = env.makeEl('div', { text: 'Claude and GPT models' });
+  const resetSoon = env.makeEl('span', { text: 'Resets in < 1m' });
+  const left3 = env.makeEl('span', { text: '100% left' });
+  usageCard.append(usageTitle, geminiGroup, weekly1, reset1, left1, h5, reset2, left2, claudeGroup, resetSoon, left3);
+
+  const otherCes = env.makeEl('div', { className: 'ces-panel' });
+  const otherCesSpan = env.makeEl('span', { text: 'Model' });
+  otherCes.append(otherCesSpan);
+
+  list.append(item1, item2, item3, item4);
+  panel.append(header, list, effortGroup, footerBtn, depTooltip, orchTooltip, neonTooltip, carbonTooltip, argonTooltip, hydroTooltip, gptNoticeTooltip, orchSubTooltip, usageCard);
+  env.doc.body.append(panel, otherCes);
+
+  const inst = runtime.mountHostI18n({
+    root: env.win, doc: env.doc, dict: zhDict, mode: 'on',
+    nowFn: env.nowFn, setTimeoutFn: env.setTimeoutFn, clearTimeoutFn: env.clearTimeoutFn, rafFn: env.rafFn, cancelRafFn: env.cancelRafFn,
+  });
+
+  try {
+    assert.equal(runtime.isModelSelectorElement(panel), true, 'isModelSelectorElement backward compatibility preserved');
+    assert.equal(header.textContent, '模型');
+    assert.equal(badge1.textContent, '即将下线');
+    assert.equal(badge2.textContent, '新');
+    assert.equal(orchBadge.textContent, '新');
+    assert.equal(badge3.textContent, '提示');
+    assert.equal(footerBtn.textContent, '查看用量明细');
+    assert.equal(depTooltip.textContent, '建议改用 Hydrogen，效果更好且额度消耗更低。将于 Nov 30 下线。');
+    assert.equal(orchTooltip.textContent, '将常规步骤分流给更快的执行器。质量不变，Token 消耗更少。');
+    assert.equal(neonTooltip.textContent, '适合大多数深度推理与复杂问题');
+    assert.equal(carbonTooltip.textContent, '适合最具挑战性的长周期任务');
+    assert.equal(argonTooltip.textContent, '适用于高阶工作流的初代 Gemini 4 模型。将于 Nov 30 下线。');
+    assert.equal(hydroTooltip.textContent, '兼顾执行任务的速度与效率');
+    assert.equal(gptNoticeTooltip.textContent, 'GPT-OSS 将于 November 30, 2026 从 Antigravity 下线移除。');
+    assert.equal(orchSubTooltip.textContent, '可将常规步骤分流给 Hydrogen 的 Neon。保持同等 Neon 级质量，Token 消耗更少。');
+    assert.equal(usageTitle.textContent, '用量');
+    assert.equal(geminiGroup.textContent, 'Gemini 模型');
+    assert.equal(weekly1.textContent, '周限额');
+    assert.equal(reset1.textContent, '5 天 23 小时后重置');
+    assert.equal(left1.textContent, '剩余 65%');
+    assert.equal(h5.textContent, '5 小时限额');
+    assert.equal(reset2.textContent, '3 小时 3 分钟后重置');
+    assert.equal(left2.textContent, '剩余 80%');
+    assert.equal(claudeGroup.textContent, 'Claude 与 GPT 模型');
+    assert.equal(resetSoon.textContent, '不到 1 分钟后重置');
+    assert.equal(left3.textContent, '剩余 100%');
+
+    // Model names, effort levels, hard-ignored effort group & non-exempt ces-* stay untouched
+    assert.equal(name1.textContent, 'Gemini 4 Argon');
+    assert.equal(effort1.textContent, 'Medium');
+    assert.equal(name2.textContent, 'Claude Opus 5.5');
+    assert.equal(autoTag.textContent, 'Auto');
+    assert.equal(name3.textContent, 'GPT-OSS 120B (Medium)');
+    assert.equal(orchLabel.textContent, 'Orchestrator');
+    assert.equal(highLabel.textContent, 'High');
+    assert.equal(effortSettingText.textContent, 'Save');
+    assert.equal(otherCesSpan.textContent, 'Model', 'Non-exempt ces-* Prism controls remain isolated');
+
+    // Off mode cleanly restores English chrome and tooltips (including external pre-translated Chinese strings)
+    inst.setMode('off');
+    env.advanceTime(60);
+    assert.equal(header.textContent, 'Model');
+    assert.equal(badge1.textContent, 'Leaving Soon');
+    assert.equal(badge2.textContent, 'New');
+    assert.equal(orchBadge.textContent, 'New');
+    assert.equal(badge3.textContent, 'Notice');
+    assert.equal(footerBtn.textContent, 'View Usage');
+    assert.equal(depTooltip.textContent, 'Use Hydrogen for better quality with lower quota usage. Leaving on Nov 30.');
+    assert.equal(orchTooltip.textContent, 'Offloads routine steps to a faster executor. Same quality, fewer tokens used.');
+    assert.equal(neonTooltip.textContent, 'For most deep reasoning and complex problems');
+    assert.equal(argonTooltip.textContent, 'The original Gemini 4 model for advanced workflows. Leaving on Nov 30.');
+    assert.equal(gptNoticeTooltip.textContent, 'GPT-OSS will be removed from Antigravity on November 30, 2026.');
+    assert.equal(usageTitle.textContent, 'Usage');
+    assert.equal(geminiGroup.textContent, 'Gemini Models');
+    assert.equal(weekly1.textContent, 'Weekly limit');
+    assert.equal(claudeGroup.textContent, 'Claude and GPT models');
+  } finally {
+    inst.destroy();
+  }
+});
+
+test('Turkish (tr.json) model panel, tooltips, usage & launcher translations work with 0 CJK leakage', () => {
+  const trDict = JSON.parse(fs.readFileSync(path.join(ROOT, 'vendor', 'host-i18n', 'tr.json'), 'utf8'));
+  const trEngine = runtime.createHostI18nEngine(trDict);
+
+  assert.equal(trEngine.translateUnit('Web'), 'Web');
+  assert.equal(trEngine.translateUnit('Leaving Soon'), 'Yakında Kaldırılacak');
+  assert.equal(trEngine.translateUnit('Notice'), 'Bildirim');
+  assert.equal(trEngine.translateUnit('Claude and GPT Models'), 'Claude ve GPT modelleri');
+  assert.equal(trEngine.translateUnit('Gemini models'), 'Gemini modelleri');
+  assert.equal(trEngine.translateUnit('Resets in < 1m'), '< 1 dk içinde sıfırlanır');
+  assert.equal(
+    trEngine.translateUnit('Offloads routine steps to a faster executor. Same quality, fewer tokens used.'),
+    'Rutin adımları daha hızlı bir yürütücüye aktarır. Aynı kalite, daha az token.'
+  );
+  assert.equal(
+    trEngine.translateUnit('For most deep reasoning and complex problems'),
+    'Çoğu derin akıl yürütme ve karmaşık sorun için'
+  );
+  assert.equal(trEngine.translateText('Search Google for "ssd"'), 'Google\'da "ssd" ara');
+  assert.equal(
+    trEngine.translateText('Use Hydrogen for better quality with lower quota usage. Leaving on Nov 30.'),
+    'Daha düşük kota kullanımıyla daha iyi kalite için Hydrogen kullanın. Nov 30 tarihinde kaldırılacak.'
+  );
+  assert.equal(
+    trEngine.translateText('GPT-OSS 120B (Medium) will be removed from Antigravity on Dec 15.'),
+    'GPT-OSS 120B (Medium), Dec 15 tarihinde Antigravity\'den kaldırılacak.'
+  );
+
+  // Verify both explicit locale:'tr' and dict-only trDict never leak Chinese "新" on scoped New badge
+  for (const explicitLocale of ['tr', undefined]) {
+    const env = createTestEnv(1000);
+    const panel = env.makeEl('div', { className: 'ces-ag-panel-enhanced', attrs: { 'data-testid': 'model-selector-panel' } });
+    const newBadge = env.makeEl('span', { text: 'New' });
+    const leavingBadge = env.makeEl('span', { text: 'Leaving Soon' });
+    const noticeBadge = env.makeEl('span', { text: 'Notice' });
+    const viewUsageBtn = env.makeEl('button', { text: 'View Usage' });
+    const modelName = env.makeEl('span', { text: 'Gemini 4 Argon' });
+    const effortTag = env.makeEl('span', { text: 'Medium' });
+    const searchInput = env.makeEl('input', {
+      attrs: { 'data-testid': 'new-tab-search-input', placeholder: 'Search or enter a URL', value: 'Settings' },
+    });
+    const webBtn = env.makeEl('button', {
+      attrs: { 'data-testid': 'new-tab-result-web__search' },
+      text: 'Search Google for "ssd"',
+    });
+    panel.append(newBadge, leavingBadge, noticeBadge, viewUsageBtn, modelName, effortTag);
+    env.doc.body.append(panel, searchInput, webBtn);
+
+    const inst = runtime.mountHostI18n({
+      root: env.win, doc: env.doc, dict: trDict, mode: 'on', locale: explicitLocale,
+      nowFn: env.nowFn, setTimeoutFn: env.setTimeoutFn, clearTimeoutFn: env.clearTimeoutFn, rafFn: env.rafFn, cancelRafFn: env.cancelRafFn,
+    });
+    try {
+      assert.equal(newBadge.textContent, 'Yeni');
+      assert.equal(leavingBadge.textContent, 'Yakında Kaldırılacak');
+      assert.equal(noticeBadge.textContent, 'Bildirim');
+      assert.equal(viewUsageBtn.textContent, 'Kullanımı görüntüle');
+      assert.equal(modelName.textContent, 'Gemini 4 Argon');
+      assert.equal(effortTag.textContent, 'Medium');
+      assert.equal(searchInput.getAttribute('placeholder'), 'Ara veya bir URL girin');
+      assert.equal(searchInput.getAttribute('value'), 'Settings');
+      assert.equal(webBtn.textContent, 'Google\'da "ssd" ara');
+    } finally {
+      inst.destroy();
+    }
+  }
+});
+
+test('ReDoS hardening: MODEL_PANEL_RULES.isSafeText and safeRe resist 50k adversarial inputs in linear < 10ms with <= 260 length cap', () => {
+  const revPack = require(path.join(ROOT, 'vendor', 'host-i18n', 'reverse-patterns.js'));
+  const rules = revPack.MODEL_PANEL_RULES;
+  assert.ok(rules && typeof rules.isSafeText === 'function' && rules.safeRe instanceof RegExp);
+
+  // Positive semantic parity
+  for (const okText of [
+    'Model', 'New', '新', 'Yeni', 'Leaving Soon', '即将下线', 'Yakında Kaldırılacak', 'Notice', '提示', 'Bildirim',
+    'View Usage', '查看用量明细', 'Kullanımı görüntüle', '5h limit', '5 小时限额', '5 saat sınırı', '65% left',
+    '剩余 65%', '%65 kaldı', 'Resets in 5d 23h', '5 天 23 小时后重置', '< 1 dk içinde sıfırlanır',
+    'Use Hydrogen for better quality with lower quota usage. Leaving on Nov 30.',
+    'GPT-OSS will be removed from Antigravity on November 30, 2026.',
+  ]) {
+    assert.equal(rules.isSafeText(okText), true, `Expected safe model panel chrome text: ${okText}`);
+  }
+
+  // Negative semantic parity & 260-char hard cap
+  for (const badText of ['Gemini 4 Argon', 'Claude Opus 5.5', 'Medium', 'High', 'Auto', 'Save', 'Settings', 'Resets in ' + '1'.repeat(255)]) {
+    assert.equal(rules.isSafeText(badText), false, `Expected blocked model panel text: ${badText.slice(0, 40)}`);
+  }
+
+  const advInputs = [
+    'a' + ' '.repeat(50000) + 'b',
+    ' '.repeat(50000) + 'b',
+    'a '.repeat(25000) + '!',
+    '1天'.repeat(25000) + 'x',
+    'use ' + ' '.repeat(50000) + 'for better quality',
+    'a 将于 '.repeat(10000) + 'x',
+    'a '.repeat(25000) + 'tarihinde',
+  ];
+  for (const input of advInputs) {
+    const t0 = performance.now();
+    assert.equal(rules.isSafeText(input), false);
+    const dtSafe = performance.now() - t0;
+    assert.ok(dtSafe < 10, `MODEL_PANEL_RULES.isSafeText took ${dtSafe.toFixed(3)}ms on 50k input`);
+
+    const t1 = performance.now();
+    assert.equal(rules.safeRe.test(input), false);
+    const dtRe = performance.now() - t1;
+    assert.ok(dtRe < 10, `MODEL_PANEL_RULES.safeRe.test took ${dtRe.toFixed(3)}ms on 50k input`);
+  }
+});
+
+test('HoverCard concurrent portal queue translates multiple portals within 120ms without dropping earlier portals and enforces 16-item cap with dedup', () => {
+  const revPack = require(path.join(ROOT, 'vendor', 'host-i18n', 'reverse-patterns.js'));
+  const zhDict = JSON.parse(fs.readFileSync(path.join(ROOT, 'vendor', 'host-i18n', 'zh-CN.json'), 'utf8'));
+
+  // Unit check for 16-item cap & deduplication
+  const q = [];
+  const fakeNodes = Array.from({ length: 20 }, (_, i) => ({ nodeType: 1, id: `hc-${i}` }));
+  revPack.MODEL_PANEL_RULES.queueNode(q, fakeNodes[0]);
+  revPack.MODEL_PANEL_RULES.queueNode(q, fakeNodes[0]);
+  assert.equal(q.length, 1, 'Duplicate HoverCard portal must not occupy extra queue slot');
+  for (const n of fakeNodes) revPack.MODEL_PANEL_RULES.queueNode(q, n);
+  assert.equal(q.length, 16, 'HoverCard queue must enforce strict 16-node upper bound');
+
+  // End-to-end MO check: two portals mutating 20ms apart within 120ms debounce window
+  const env = createTestEnv(1000);
+  const inst = runtime.mountHostI18n({
+    root: env.win, doc: env.doc, dict: zhDict, mode: 'on',
+    nowFn: env.nowFn, setTimeoutFn: env.setTimeoutFn, clearTimeoutFn: env.clearTimeoutFn, rafFn: env.rafFn, cancelRafFn: env.cancelRafFn,
+  });
+  try {
+    const portal1 = env.makeEl('div', { attrs: { 'data-base-ui-portal': '' } });
+    const card1 = env.makeEl('div', { attrs: { 'data-hover-card-popup': '' } });
+    const card1Text = env.makeEl('span', { text: 'Weekly limit' });
+    card1.append(card1Text);
+    portal1.append(card1);
+    env.doc.body.append(portal1);
+    env.flushObservers();
+
+    env.advanceTime(20);
+
+    const portal2 = env.makeEl('div', { attrs: { 'data-base-ui-portal': '' } });
+    const card2 = env.makeEl('div', { attrs: { 'data-hover-card-popup': '' } });
+    const card2Text = env.makeEl('span', { text: '5h limit' });
+    card2.append(card2Text);
+    portal2.append(card2);
+    env.doc.body.append(portal2);
+    env.flushObservers();
+
+    env.advanceTime(200);
+    assert.equal(card1Text.textContent, '周限额');
+    assert.equal(card2Text.textContent, '5 小时限额');
+  } finally {
+    inst.destroy();
+  }
+});
+
+test('Launcher input placeholder-only translation protects value/other attrs, enforces ancestor Prism/External/data-uri exemptions, and supports Web / Search Google bidirectional restore', () => {
+  const env = createTestEnv(1000);
+  const zhDict = JSON.parse(fs.readFileSync(path.join(ROOT, 'vendor', 'host-i18n', 'zh-CN.json'), 'utf8'));
+
+  const pane = env.makeEl('div');
+  const searchInput = env.makeEl('input', {
+    attrs: {
+      'data-testid': 'new-tab-search-input',
+      placeholder: 'Search or enter a URL',
+      value: 'Settings',
+      title: 'Settings',
+      'aria-label': 'Save',
+    },
+  });
+  const prismSelfInput = env.makeEl('input', {
+    className: 'ag-prism-omni-input',
+    attrs: { placeholder: 'Search or enter a URL' },
+  });
+  const prismAncestor = env.makeEl('div', { className: 'ag-prism-omni-box' });
+  const prismNestedWrap = env.makeEl('div');
+  const prismDescendantInput = env.makeEl('input', { attrs: { placeholder: 'Search or enter a URL' } });
+  prismNestedWrap.append(prismDescendantInput);
+  prismAncestor.append(prismNestedWrap);
+
+  const extAncestor = env.makeEl('div', { id: 'agy-theme-menu' });
+  const extDescendantInput = env.makeEl('input', { attrs: { placeholder: 'Search or enter a URL' } });
+  extAncestor.append(extDescendantInput);
+
+  const uriSelfInput = env.makeEl('input', { attrs: { 'data-uri': 'file:///tmp/a.ts', placeholder: 'Search or enter a URL' } });
+  const uriAncestor = env.makeEl('div', { attrs: { 'data-uri': 'file:///tmp/dir' } });
+  const uriDescendantInput = env.makeEl('input', { attrs: { placeholder: 'Search or enter a URL' } });
+  uriAncestor.append(uriDescendantInput);
+
+  const groupHdr = env.makeEl('div', { attrs: { 'data-testid': 'new-tab-group-Web' }, text: 'Web' });
+  const webBtn = env.makeEl('button', {
+    attrs: { 'data-testid': 'new-tab-result-web__search' },
+    text: 'Search Google for "ssd"',
+  });
+  pane.append(searchInput, prismSelfInput, prismAncestor, extAncestor, uriSelfInput, uriAncestor, groupHdr, webBtn);
+  env.doc.body.append(pane);
+
+  const inst = runtime.mountHostI18n({
+    root: env.win, doc: env.doc, dict: zhDict, mode: 'on',
+    nowFn: env.nowFn, setTimeoutFn: env.setTimeoutFn, clearTimeoutFn: env.clearTimeoutFn, rafFn: env.rafFn, cancelRafFn: env.cancelRafFn,
+  });
+
+  try {
+    // Only placeholder translates on safe input; value, title & aria-label stay untouched
+    assert.equal(searchInput.getAttribute('placeholder'), '搜索或输入网址');
+    assert.equal(searchInput.getAttribute('value'), 'Settings', 'Input value must never be mutated');
+    assert.equal(searchInput.getAttribute('title'), 'Settings', 'maybeTranslateInputAttrs must only translate placeholder');
+    assert.equal(searchInput.getAttribute('aria-label'), 'Save', 'maybeTranslateInputAttrs must not mutate aria-label');
+
+    // All self & ancestor Prism / External / data-uri inputs stay strictly protected
+    assert.equal(prismSelfInput.getAttribute('placeholder'), 'Search or enter a URL');
+    assert.equal(prismDescendantInput.getAttribute('placeholder'), 'Search or enter a URL', 'Descendant of Prism ancestor must stay untouched');
+    assert.equal(extDescendantInput.getAttribute('placeholder'), 'Search or enter a URL', 'Descendant of external plugin ancestor must stay untouched');
+    assert.equal(uriSelfInput.getAttribute('placeholder'), 'Search or enter a URL', 'Input with data-uri must stay untouched');
+    assert.equal(uriDescendantInput.getAttribute('placeholder'), 'Search or enter a URL', 'Descendant of data-uri ancestor must stay untouched');
+
+    assert.equal(groupHdr.textContent, '网页');
+    assert.equal(webBtn.textContent, '在 Google 中搜索“ssd”');
+
+    // Dynamically appended safe input via MutationObserver
+    const dynInput = env.makeEl('input', { attrs: { placeholder: 'Search or enter a URL', value: 'Copy', title: 'Copy' } });
+    pane.append(dynInput);
+    env.flushObservers();
+    env.advanceTime(60);
+    assert.equal(dynInput.getAttribute('placeholder'), '搜索或输入网址');
+    assert.equal(dynInput.getAttribute('value'), 'Copy');
+    assert.equal(dynInput.getAttribute('title'), 'Copy');
+
+    // Off mode cleanly restores placeholder, Web & Search Google for
+    inst.setMode('off');
+    env.advanceTime(60);
+    assert.equal(searchInput.getAttribute('placeholder'), 'Search or enter a URL');
+    assert.equal(dynInput.getAttribute('placeholder'), 'Search or enter a URL');
+    assert.equal(groupHdr.textContent, 'Web');
+    assert.equal(webBtn.textContent, 'Search Google for "ssd"');
+
+    // External Chinese placeholder injected while in off mode also reverse-restores cleanly
+    const extZhInput = env.makeEl('input', { attrs: { placeholder: '搜索或输入网址', value: '设置' } });
+    pane.append(extZhInput);
+    env.flushObservers();
+    env.advanceTime(60);
+    assert.equal(extZhInput.getAttribute('placeholder'), 'Search or enter a URL');
+    assert.equal(extZhInput.getAttribute('value'), '设置', 'Input value must stay untouched in off mode too');
   } finally {
     inst.destroy();
   }

@@ -44,6 +44,13 @@
     最近会话: 'Recent Conversations', 当前会话: 'Current Conversation',
     扩展程序: 'Extensions', 键盘快捷键: 'Keyboard Shortcuts', 登出: 'Sign Out',
     升级: 'Upgrade', 开启: 'On', 恢复默认: 'Reset to Default', 折叠: 'Collapse', 极速: 'Turbo',
+    即将下线: 'Leaving Soon', 提示: 'Notice', 用量: 'Usage', 周限额: 'Weekly limit',
+    查看用量明细: 'View Usage', 'Gemini 模型': 'Gemini Models', 'Claude 与 GPT 模型': 'Claude and GPT models',
+    '将常规步骤分流给更快的执行器。质量不变，Token 消耗更少。': 'Offloads routine steps to a faster executor. Same quality, fewer tokens used.',
+    适合大多数深度推理与复杂问题: 'For most deep reasoning and complex problems',
+    适合最具挑战性的长周期任务: 'For your hardest, long-horizon tasks',
+    兼顾执行任务的速度与效率: 'For speed and efficiency in execution tasks',
+    网页: 'Web',
   });
 
   var REVERSE_PATTERNS = [
@@ -221,6 +228,27 @@
     { regex: '^几秒后重置$', replacement: 'Resets in a few seconds' },
     { regex: '^即将重置$', replacement: 'Resets soon' },
     {
+      regex: '^建议(?:改用|使用)\\s{0,2}([^\\r\\n]{1,80}?)，(?:效果更好且额度消耗更低|质量更高且配额消耗更低)[。.]\\s{0,4}将于\\s{1,2}([^\\r\\n]{1,60}?)\\s{1,2}下线[。.]?$',
+      replacement: 'Use $1 for better quality with lower quota usage. Leaving on $2.',
+    },
+    {
+      regex: '^建议(?:改用|使用)\\s{0,2}([^\\r\\n]{1,80}?)，(?:效果更好且额度消耗更低|质量更高且配额消耗更低)[。.]?$',
+      replacement: 'Use $1 for better quality with lower quota usage.',
+    },
+    {
+      regex: '^适用于高阶工作流的初代\\s{1,2}([^\\r\\n]{1,80}?)\\s{1,2}模型[。.]\\s{0,4}将于\\s{1,2}([^\\r\\n]{1,60}?)\\s{1,2}下线[。.]?$',
+      replacement: 'The original $1 model for advanced workflows. Leaving on $2.',
+    },
+    {
+      regex: '^可将常规步骤分流给\\s{1,2}([^\\r\\n]{1,80}?)\\s{1,2}的\\s{1,2}([^\\r\\n]{1,80}?)[。.]\\s{0,4}保持同等\\s{1,2}([^\\r\\n]{1,80}?)\\s{0,2}级质量[，,]\\s{0,4}Token 消耗更少[。.]?$',
+      replacement: '$2 that may offload routine steps to $1. Same $3-level quality, fewer tokens used.',
+    },
+    {
+      regex: '^([^\\r\\n]{1,120}?)\\s{1,2}将于\\s{1,2}([^\\r\\n]{1,60}?)\\s{1,2}从 Antigravity 下线移除[。.]?$',
+      replacement: '$1 will be removed from Antigravity on $2.',
+    },
+    { regex: '^将于\\s{1,2}([^\\r\\n]{1,60}?)\\s{1,2}下线[。.]?$', replacement: 'Leaving on $1.' },
+    {
       regex: '^(\\d+)\\s*天\\s*(\\d+)\\s*小时\\s*(\\d+)\\s*分(?:钟)?后重置刷新$',
       replacement: 'Refreshes in $1d $2h $3m',
     },
@@ -242,6 +270,7 @@
     { regex: '^(\\d+)\\s*秒后重置刷新$', replacement: 'Refreshes in $1s' },
     { regex: '^即将重置刷新$', replacement: 'Refreshes soon' },
     { regex: '^(\\d+)\\s*天\\s*(\\d+)\\s*小时$', replacement: '$1 days, $2 hours' },
+    { regex: '^在 Google (?:中)?搜索[“"]([^\\r\\n]{1,240})[”"]$', replacement: 'Search Google for "$1"' },
     { regex: '^(\\d+)\\s*小时\\s*(\\d+)\\s*分钟$', replacement: '$1 hours, $2 minutes' },
     { regex: '^1\\s*天$', replacement: '1 day' },
     { regex: '^(\\d+)\\s*天$', replacement: '$1 days' },
@@ -520,9 +549,83 @@
     },
   ];
 
+  // 模型面板壳层白名单（仅放行固定标签/徽章/用量提示，严格保护模型名与思考强度，safeRe 采用有界非回溯结构免疫 ReDoS）
+  var MODEL_PANEL_MAX_LEN = 260;
+  var MODEL_PANEL_RULES = {
+    maxLen: MODEL_PANEL_MAX_LEN,
+    scopedTestids: {
+      'model-selector-panel': 1,
+      'model-selector-list': 1,
+      'model-selector-item': 1,
+      'model-selector-orchestrator': 1,
+      'orchestrator-picker-row': 1,
+    },
+    safeExact: {
+      Model: 1, 模型: 1, New: 1, 新: 1, 新建: 1, Yeni: 1,
+      'Leaving Soon': 1, 即将下线: 1, 'Yakında Kaldırılacak': 1,
+      Notice: 1, 提示: 1, Bildirim: 1,
+      'View Usage': 1, 'View usage': 1, 'View Model Usage': 1, 'View Usage Details': 1,
+      查看用量明细: 1, 查看模型用量: 1, 查看用量详情: 1, 查看用量: 1,
+      'Kullanımı görüntüle': 1, 'Model kullanımını görüntüle': 1, 'Kullanım ayrıntılarını görüntüle': 1,
+      Usage: 1, 'Usage & Quota': 1, 用量: 1, 用量与配额: 1, Kullanım: 1, 'Kullanım ve kota': 1,
+      'Gemini Models': 1, 'Gemini models': 1, 'Gemini 模型': 1, 'Gemini modelleri': 1,
+      'Claude and GPT models': 1, 'Claude and GPT Models': 1, 'Claude 与 GPT 模型': 1, 'Claude ve GPT modelleri': 1,
+      'Weekly limit': 1, 'Weekly Limit': 1, 周限额: 1, 'Haftalık sınır': 1,
+      '5h limit': 1, '5 小时限额': 1, '5 saat sınırı': 1,
+      'Loading token usage...': 1, '正在加载 Token 用量...': 1, 'Token kullanımı yükleniyor...': 1,
+      'Resets in < 1m': 1, 'Resets in < 1m.': 1, '不到 1 分钟后重置': 1, '不到 1 分钟后重置。': 1,
+      '< 1 dk içinde sıfırlanır': 1, '< 1 dk içinde sıfırlanır.': 1,
+      'Offloads routine steps to a faster executor. Same quality, fewer tokens used.': 1,
+      'Offloads routine steps to a faster executor. Same quality, fewer tokens used': 1,
+      '将常规步骤分流给更快的执行器。质量不变，Token 消耗更少。': 1,
+      '将常规步骤分流给更快的执行器。质量不变，Token 消耗更少': 1,
+      'Rutin adımları daha hızlı bir yürütücüye aktarır. Aynı kalite, daha az token.': 1,
+      'Rutin adımları daha hızlı bir yürütücüye aktarır. Aynı kalite, daha az token': 1,
+      'For most deep reasoning and complex problems': 1,
+      'For most deep reasoning and complex problems.': 1,
+      适合大多数深度推理与复杂问题: 1, '适合大多数深度推理与复杂问题。': 1,
+      'Çoğu derin akıl yürütme ve karmaşık sorun için': 1,
+      'Çoğu derin akıl yürütme ve karmaşık sorun için.': 1,
+      'For your hardest, long-horizon tasks': 1,
+      'For your hardest, long-horizon tasks.': 1,
+      适合最具挑战性的长周期任务: 1, '适合最具挑战性的长周期任务。': 1,
+      'En zorlu ve uzun vadeli görevleriniz için': 1,
+      'En zorlu ve uzun vadeli görevleriniz için.': 1,
+      'For speed and efficiency in execution tasks': 1,
+      'For speed and efficiency in execution tasks.': 1,
+      兼顾执行任务的速度与效率: 1, '兼顾执行任务的速度与效率。': 1,
+      'Yürütme görevlerinde hız ve verimlilik için': 1,
+      'Yürütme görevlerinde hız ve verimlilik için.': 1,
+    },
+    safeRe: /^(?:\d{1,4}\s{0,2}[hdms]\s{1,2}(?:rate\s{1,2})?limit|\d{1,3}(?:\.\d{1,2})?%\s{1,2}left|resets?\b|use\s{1,2}[^\r\n]{1,80}?\s{1,2}for\s{1,2}better\s{1,2}quality\s{1,2}with\s{1,2}lower\s{1,2}quota\s{1,2}usage|the\s{1,2}original\s{1,2}[^\r\n]{1,80}?\s{1,2}model\s{1,2}for\s{1,2}advanced\s{1,2}workflows|[^\r\n]{1,80}?\s{1,2}that\s{1,2}may\s{1,2}offload\s{1,2}routine\s{1,2}steps\s{1,2}to\s{1,2}[^\r\n]{1,80}|[^\r\n]{1,120}?\s{1,2}will\s{1,2}be\s{1,2}removed\s{1,2}from\s{1,2}antigravity\s{1,2}on\s{1,2}[^\r\n]{1,60}|leaving\s{1,2}on\b|models\s{1,2}within\s{1,2}this\s{1,2}group|your\s{1,2}quota\s{1,2}for\s{1,2}this\s{1,2}model|\d{1,4}\s{0,2}(?:小时|天|分钟|秒)(?:速率限(?:制|额)|限额)|剩余\s{0,2}\d{1,3}(?:\.\d{1,2})?%|(?:\d{1,4}\s{0,2}(?:天|小时|分(?:钟)?|秒)\s{0,2}){1,4}后重置|不到\s{0,2}1\s{0,2}分钟后重置|几秒后重置|即将重置|重置于|建议(?:改用|使用)\s{0,2}[^\r\n，]{1,80}，(?:效果更好|质量更高)|适用于高阶工作流的初代\s{1,2}[^\r\n模]{1,80}\s{1,2}模型|可将常规步骤分流给\s{1,2}[^\r\n]{1,80}|[^\r\n将]{1,120}\s{1,2}将于\s{1,2}[^\r\n从]{1,60}\s{1,2}从\s{1,2}Antigravity\s{1,2}下线移除|将于\s{1,2}[^\r\n下]{1,60}\s{1,2}下线|\d{1,4}\s{0,2}(?:saat\s{1,2}sınırı|(?:sa|gün|dk|sn)\s{1,2}(?:hız\s{1,2}sınırı|limit))|%\d{1,3}(?:\.\d{1,2})?\s{1,2}kaldı|<?\s{0,2}1\s{1,2}dk\s{1,2}içinde\s{1,2}sıfırlanır|[^\r\n]{1,60}?\s{1,2}(?:içinde|sonra)\s{1,2}sıfırlanır|yakında\s{1,2}sıfırlanır|daha\s{1,2}düşük\s{1,2}kota\s{1,2}kullanımıyla\s{1,2}daha\s{1,2}iyi\s{1,2}kalite\s{1,2}için\s{1,2}[^\r\n]{1,80}|gelişmiş\s{1,2}iş\s{1,2}akışları\s{1,2}için\s{1,2}özgün\s{1,2}[^\r\n]{1,80}|rutin\s{1,2}adımları\s{1,2}[^\r\n]{1,80}?\s{1,2}modeline\s{1,2}aktarabilen\s{1,2}[^\r\n]{1,80}|[^\r\n]{1,120}?\s{1,2}tarihinde\s{1,2}(?:antigravity'den\s{1,2})?kaldırılacak)/i,
+    fwdZh: { New: '新' },
+    revZh: { 新: 'New' },
+    isSafeText: function (trimmed) {
+      if (!trimmed || typeof trimmed !== 'string' || trimmed.length > MODEL_PANEL_MAX_LEN) return false;
+      return Boolean(Object.prototype.hasOwnProperty.call(MODEL_PANEL_RULES.safeExact, trimmed) || MODEL_PANEL_RULES.safeRe.test(trimmed));
+    },
+    isScopedTid: function (tid) {
+      return Boolean(tid && Object.prototype.hasOwnProperty.call(MODEL_PANEL_RULES.scopedTestids, tid));
+    },
+    resolveUnit: function (trimmed, isScoped, isOff, eng, fallbackFn) {
+      if (isScoped) {
+        if (isOff && Object.prototype.hasOwnProperty.call(MODEL_PANEL_RULES.revZh, trimmed)) return MODEL_PANEL_RULES.revZh[trimmed];
+        var ed = !isOff && eng && eng.exactDict;
+        if (ed && (ed['Weekly limit'] === '周限额' || ed.New === '新建') && Object.prototype.hasOwnProperty.call(MODEL_PANEL_RULES.fwdZh, trimmed)) {
+          return MODEL_PANEL_RULES.fwdZh[trimmed];
+        }
+      }
+      return fallbackFn(trimmed);
+    },
+    queueNode: function (list, n) {
+      if (n && n.nodeType === 1 && list.indexOf(n) === -1 && list.length < 16) list.push(n);
+    },
+  };
+
   return {
     REVERSE_EXACT_OVERRIDES: REVERSE_EXACT_OVERRIDES,
     REVERSE_PATTERNS: REVERSE_PATTERNS,
     REVERSE_CROSS_NODE_RULES: REVERSE_CROSS_NODE_RULES,
+    MODEL_PANEL_RULES: MODEL_PANEL_RULES,
   };
 });

@@ -28,7 +28,9 @@
  return map;
  }
  var IGNORED_CLASS_MAP = toLookupMap(IGNORED_CLASSES);
- var MODEL_SELECTOR_TESTIDS = { 'model-selector-trigger': 1, 'model-selector-panel': 1, 'model-selector-item': 1, 'model-selector-effort-option': 1, 'model-selector-effort-group': 1, 'model-selector-list': 1, 'model-selector-orchestrator': 1, 'orchestrator-effort-bar': 1, 'orchestrator-picker-row': 1, 'orchestrator-picker-effort': 1 };
+ var MODEL_SELECTOR_TESTIDS = { 'model-selector-trigger': 1, 'model-selector-effort-option': 1, 'model-selector-effort-group': 1, 'orchestrator-effort-bar': 1, 'orchestrator-picker-effort': 1 };
+ function getModelPanelRules() { var m = resolveDefaultReverseModule(root); return (m && m.MODEL_PANEL_RULES) || null; }
+ function isSafeModelPanelChromeText(t) { var r = getModelPanelRules(); return Boolean(r && r.isSafeText(t)); }
  var PRISM_OWNED_IDS = { 'ag-cs-settings-sec': 1, 'ag-prism-settings-sec': 1, 'ag-prism-pulse-bar': 1, 'ag-pulse-status-bar': 1, 'ag-prism-periodic-picker-root': 1, 'ag-prism-overlay-portal': 1 };
  var PRISM_OWNED_ATTRS = ['data-ag-prism-pulse-bar', 'data-ag-prism-ui', 'data-ag-cs-ui', 'data-ag-no-i18n', 'data-ag-owned', 'data-ces-part', 'data-ag-prism-sidebar-owned', 'data-ag-prism-omni-owned', 'data-ag-prism-fallback', 'data-ag-prism-overlay'];
  var PRISM_CLASS_PREFIXES = ['ag-cs-', 'ag-prism-', 'ag-v2-', 'ag-omni-', 'ag-ss-', 'ag-pp-', 'ces-', 'ag-anim-'];
@@ -124,6 +126,7 @@
  var tokens = preTokens || getClassTokens(el);
  for (var t = 0; t < tokens.length; t++) {
  var cls = tokens[t];
+ if (cls === 'ces-ag-panel-enhanced') continue;
  for (var p = 0; p < PRISM_CLASS_PREFIXES.length; p++) {
  if (cls.indexOf(PRISM_CLASS_PREFIXES[p]) === 0) return true;
  }
@@ -142,18 +145,20 @@
  function isPrismOwnedElement(el) {
  return hasMatchingAncestor(el, isPrismOwnedSelf);
  }
- function isModelSelectorSelf(el, preTid) {
+ function isModelSelectorHardSelf(el, preTid) {
  if (!el || el.nodeType !== 1) return false;
  var tid = preTid !== undefined ? preTid : getAttr(el, 'data-testid');
- if (tid && hasOwn.call(MODEL_SELECTOR_TESTIDS, tid)) return true;
- return (
- hasAttr(el, 'data-effort') ||
- hasAttr(el, 'data-ag-cs-model-submenu') ||
- hasAttr(el, 'data-ag-cs-orch-l2') ||
- hasAttr(el, 'data-ag-cs-orch-l3') ||
- hasAttr(el, 'data-ces-orch-row')
- );
+ return Boolean((tid && hasOwn.call(MODEL_SELECTOR_TESTIDS, tid)) || hasAttr(el, 'data-effort') || hasAttr(el, 'data-ag-cs-model-submenu') || hasAttr(el, 'data-ag-cs-orch-l2') || hasAttr(el, 'data-ag-cs-orch-l3') || hasAttr(el, 'data-ces-orch-row'));
  }
+ function isModelSelectorScopedSelf(el, preTid) {
+ if (!el || el.nodeType !== 1) return false;
+ var tid = preTid !== undefined ? preTid : getAttr(el, 'data-testid');
+ if (!tid) return false;
+ var r = getModelPanelRules();
+ return Boolean(r && r.isScopedTid(tid));
+ }
+ function isModelSelectorSelf(el, preTid) { return isModelSelectorHardSelf(el, preTid) || isModelSelectorScopedSelf(el, preTid); }
+ function isModelPanelPopupSelf(el) { return Boolean(el && el.nodeType === 1 && (getAttr(el, 'role') === 'tooltip' || hasAttr(el, 'data-hover-card-popup'))); }
  function isModelSelectorElement(el) {
  return hasMatchingAncestor(el, isModelSelectorSelf);
  }
@@ -405,18 +410,18 @@
  function isFocusGuardSelf(el) {
  return Boolean(el && el.nodeType === 1 && (hasAttr(el, 'data-floating-ui-focus-guard') || hasAttr(el, 'data-base-ui-focus-guard')));
  }
- function isDirectIgnoredSelf(el) {
+ function isDirectIgnoredSelf(el, preTid) {
  if (!el || el.nodeType !== 1) return false;
  var tag = el.tagName ? String(el.tagName).toUpperCase() : '';
  if (IGNORED_TAGS[tag]) return true;
  if (el.isContentEditable === true || getAttr(el, 'contenteditable') === 'true') return true;
  if (isFocusGuardSelf(el)) return true;
  var tokens = getClassTokens(el);
- var tid = getAttr(el, 'data-testid');
+ var tid = preTid !== undefined ? preTid : getAttr(el, 'data-testid');
  if (isThinkingPanelSelf(el, tag, tid)) return true;
  if (isPrismOwnedSelf(el, tokens)) return true;
  if (isExternalPluginOwnedSelf(el)) return true;
- if (isModelSelectorSelf(el, tid)) return true;
+ if (isModelSelectorHardSelf(el, tid)) return true;
  if (isChatProseSelf(el, tokens, tid)) return true;
  if (isUserContentBoundarySelf(el, tokens, tid)) return true;
  return isCodeDiffContainerSelf(el, tokens, tid);
@@ -424,15 +429,15 @@
  function measureSafeBoundaryDepth(el) {
  if (!el) return { blocked: false, canDescendConv: false, state: 0, remDepth: MAX_SAFE_BOUNDARY_DEPTH, inStep: false, inStepControl: false };
  var startEl = el.nodeType === 3 ? el.parentElement || el.parentNode : el;
- if (!startEl || startEl.nodeType !== 1) {
- return { blocked: false, canDescendConv: false, state: 0, remDepth: MAX_SAFE_BOUNDARY_DEPTH, inStep: false, inStepControl: false };
- }
- var cur = startEl, sawInteractiveChrome = false, sawConvStream = false, blockedByConvStream = false, inStep = false, inStepControl = false, stepChecked = false, depth = 0;
+ if (!startEl || startEl.nodeType !== 1) return { blocked: false, canDescendConv: false, state: 0, remDepth: MAX_SAFE_BOUNDARY_DEPTH, inStep: false, inStepControl: false };
+ var cur = startEl, sawInteractiveChrome = false, sawConvStream = false, blockedByConvStream = false, sawPanel = false, sawPopup = false, inStep = false, inStepControl = false, stepChecked = false, depth = 0;
  while (cur && depth < MAX_SAFE_BOUNDARY_DEPTH) {
  if (cur.nodeType === 1) {
- if (isDirectIgnoredSelf(cur)) return { blocked: true, canDescendConv: false, state: -1, remDepth: -1, inStep: inStep, inStepControl: inStepControl };
- var isCtl = isStepControlSelf(cur);
- var isStp = isStepContainerSelf(cur);
+ var tid = getAttr(cur, 'data-testid');
+ if (isDirectIgnoredSelf(cur, tid)) return { blocked: true, canDescendConv: false, state: -1, remDepth: -1, inStep: inStep, inStepControl: inStepControl };
+ if (isModelPanelPopupSelf(cur) && !sawPanel) sawPopup = true;
+ if (isModelSelectorScopedSelf(cur, tid)) sawPanel = true;
+ var isCtl = isStepControlSelf(cur), isStp = isStepContainerSelf(cur);
  if (isCtl) { sawInteractiveChrome = true; if (!inStep) inStepControl = true; }
  if (isStp) {
  sawInteractiveChrome = true;
@@ -455,25 +460,22 @@
  if (cur) return { blocked: true, canDescendConv: false, state: -1, remDepth: -1, inStep: inStep, inStepControl: inStepControl };
  var remDepth = MAX_SAFE_BOUNDARY_DEPTH - depth;
  if (blockedByConvStream) return { blocked: true, canDescendConv: true, state: 1, remDepth: remDepth, inStep: false, inStepControl: false };
- return { blocked: false, canDescendConv: false, state: sawConvStream ? 2 : 0, remDepth: remDepth, inStep: inStep, inStepControl: inStepControl };
+ return { blocked: false, canDescendConv: false, state: sawPanel ? (sawPopup ? 4 : 3) : (sawConvStream ? 2 : 0), remDepth: remDepth, inStep: inStep, inStepControl: inStepControl };
  }
  function advanceBoundaryForChild(parentCtx, childEl) {
  var nextRem = parentCtx.remDepth - 1;
  if (nextRem < 0 || parentCtx.state === -1) return null;
- if (isDirectIgnoredSelf(childEl)) return null;
+ var tid = getAttr(childEl, 'data-testid');
+ if (isDirectIgnoredSelf(childEl, tid)) return null;
  if (parentCtx.inStep && isStepArgElementSelf(childEl)) return null;
- var pState = parentCtx.state;
- var isCtl = isStepControlSelf(childEl);
- var isStp = isStepContainerSelf(childEl);
- var isInter = isCtl || isStp;
- var isConv = isConversationStreamSelf(childEl);
- var nextState = pState;
- if (pState === 0) { if (isConv) nextState = isInter ? 2 : 1; }
- else if (pState === 1) { nextState = isInter ? 2 : 1; }
- else if (pState === 2) { if (isConv && !isInter) nextState = 1; }
+ var pState = parentCtx.state, isCtl = isStepControlSelf(childEl), isStp = isStepContainerSelf(childEl), isInter = isCtl || isStp, isConv = isConversationStreamSelf(childEl), nextState = pState;
+ if (pState === 3 || pState === 4) nextState = pState === 4 || isModelPanelPopupSelf(childEl) ? 4 : 3;
+ else if (isModelSelectorScopedSelf(childEl, tid)) nextState = 3;
+ else if (pState === 0) { if (isConv) nextState = isInter ? 2 : 1; }
+ else if (pState === 1) nextState = isInter ? 2 : 1;
+ else if (pState === 2 && isConv && !isInter) nextState = 1;
  var nextInStep = parentCtx.inStep || isStp;
- var nextInStepCtl = nextInStep ? (parentCtx.inStepControl || isCtl) : false;
- return { blocked: nextState === 1, canDescendConv: nextState === 1, state: nextState, remDepth: nextRem, inStep: nextInStep, inStepControl: nextInStepCtl };
+ return { blocked: nextState === 1, canDescendConv: nextState === 1, state: nextState, remDepth: nextRem, inStep: nextInStep, inStepControl: nextInStep ? (parentCtx.inStepControl || isCtl) : false };
  }
  function isIgnoredBoundary(el) {
  return measureSafeBoundaryDepth(el).blocked;
@@ -483,46 +485,26 @@
  return isConversationStreamSelf(cur) || isChatProseSelf(cur);
  });
  }
- function isChromeControlElement(el) {
+ function matchesChromeControl(el, tags, roles, tids) {
  if (!el || el.nodeType !== 1) return false;
  var tid = getAttr(el, 'data-testid');
- if (tid === 'sidebar-split' || tid === 'aux-pane-split') return false;
- if (isUserContentBoundarySelf(el)) return false;
+ if (tid === 'sidebar-split' || tid === 'aux-pane-split' || isUserContentBoundarySelf(el, null, tid)) return false;
  var tag = el.tagName ? String(el.tagName).toUpperCase() : '';
- if (tag === 'NAV' || tag === 'ASIDE' || tag === 'HEADER' || tag === 'BUTTON') return true;
+ if (tags[tag]) return true;
  var role = getAttr(el, 'role');
- if (role === 'tablist' || role === 'toolbar' || role === 'menubar' || role === 'menu' || role === 'tab' || role === 'menuitem' || role === 'menuitemcheckbox' || role === 'menuitemradio') {
- return true;
+ if (role && roles[role]) return true;
+ return Boolean(tid && tids[tid]);
  }
- if (tid === 'permissions-selector-trigger') return true;
- return false;
- }
- function isLeafChromeControl(el) {
- if (!el || el.nodeType !== 1) return false;
- var tid = getAttr(el, 'data-testid');
- if (tid === 'sidebar-split' || tid === 'aux-pane-split') return false;
- if (isUserContentBoundarySelf(el)) return false;
- var tag = el.tagName ? String(el.tagName).toUpperCase() : '';
- if (tag === 'BUTTON') return true;
- var role = getAttr(el, 'role');
- if (role === 'tab' || role === 'menuitem' || role === 'menuitemcheckbox' || role === 'menuitemradio') return true;
- if (tid === 'permissions-selector-trigger' || tid === 'new-conversation-button' || tid === 'settings-button') return true;
- return false;
- }
- function isExplicitDelayedChromeControl(el) {
- if (!el || el.nodeType !== 1) return false;
- var tid = getAttr(el, 'data-testid');
- if (tid === 'sidebar-split' || tid === 'aux-pane-split') return false;
- if (isUserContentBoundarySelf(el)) return false;
- var tag = el.tagName ? String(el.tagName).toUpperCase() : '';
- if (tag === 'BUTTON' || tag === 'NAV' || tag === 'HEADER') return true;
- var role = getAttr(el, 'role');
- if (role === 'button' || role === 'menu' || role === 'menubar' || role === 'menuitem' || role === 'menuitemcheckbox' || role === 'menuitemradio' || role === 'tab' || role === 'tablist' || role === 'toolbar') {
- return true;
- }
- if (tid === 'permissions-selector-trigger' || tid === 'new-conversation-button' || tid === 'settings-button') return true;
- return false;
- }
+ var CHROME_TAGS = { NAV: 1, ASIDE: 1, HEADER: 1, BUTTON: 1 };
+ var CHROME_ROLES = { tablist: 1, toolbar: 1, menubar: 1, menu: 1, tab: 1, menuitem: 1, menuitemcheckbox: 1, menuitemradio: 1 };
+ var LEAF_ROLES = { tab: 1, menuitem: 1, menuitemcheckbox: 1, menuitemradio: 1 };
+ var DELAYED_TAGS = { BUTTON: 1, NAV: 1, HEADER: 1 };
+ var DELAYED_ROLES = { button: 1, menu: 1, menubar: 1, menuitem: 1, menuitemcheckbox: 1, menuitemradio: 1, tab: 1, tablist: 1, toolbar: 1 };
+ var CHROME_TIDS = { 'permissions-selector-trigger': 1 };
+ var LEAF_TIDS = { 'permissions-selector-trigger': 1, 'new-conversation-button': 1, 'settings-button': 1 };
+ function isChromeControlElement(el) { return matchesChromeControl(el, CHROME_TAGS, CHROME_ROLES, CHROME_TIDS); }
+ function isLeafChromeControl(el) { return matchesChromeControl(el, { BUTTON: 1 }, LEAF_ROLES, LEAF_TIDS); }
+ function isExplicitDelayedChromeControl(el) { return matchesChromeControl(el, DELAYED_TAGS, DELAYED_ROLES, LEAF_TIDS); }
  function isInsideExplicitDelayedChrome(el) {
  var cur = el && el.nodeType === 3 ? el.parentElement || el.parentNode : el;
  var depth = 0;
@@ -590,26 +572,15 @@
  return { hit: true, provider: '3169657175', detail: 'class:agy-theme-active' };
  }
  if (typeof doc.querySelector === 'function') {
- try {
- if (doc.querySelector('[data-agy-hans-ui]')) {
- return { hit: true, provider: 'yuexps/Antigravity-Hans', detail: 'dom:[data-agy-hans-ui]' };
+ var l1DomRules = [
+ ['[data-agy-hans-ui]', 'yuexps/Antigravity-Hans', 'dom:[data-agy-hans-ui]'],
+ ['#agy-theme-switcher, #antigravity-quota-widget', '3169657175', 'dom:#agy-theme-switcher|#antigravity-quota-widget'],
+ ['[data-model-selector-badge="true"]', 'Ace2025001', 'dom:[data-model-selector-badge="true"]'],
+ ['script[src*="ag_agent_hanhua.js"]', 'cshitian', 'script:ag_agent_hanhua.js'],
+ ];
+ for (var lr = 0; lr < l1DomRules.length; lr++) {
+ try { if (doc.querySelector(l1DomRules[lr][0])) return { hit: true, provider: l1DomRules[lr][1], detail: l1DomRules[lr][2] }; } catch (e) {}
  }
- } catch (e) {}
- try {
- if (doc.querySelector('#agy-theme-switcher, #antigravity-quota-widget')) {
- return { hit: true, provider: '3169657175', detail: 'dom:#agy-theme-switcher|#antigravity-quota-widget' };
- }
- } catch (e) {}
- try {
- if (doc.querySelector('[data-model-selector-badge="true"]')) {
- return { hit: true, provider: 'Ace2025001', detail: 'dom:[data-model-selector-badge="true"]' };
- }
- } catch (e) {}
- try {
- if (doc.querySelector('script[src*="ag_agent_hanhua.js"]')) {
- return { hit: true, provider: 'cshitian', detail: 'script:ag_agent_hanhua.js' };
- }
- } catch (e) {}
  }
  if (typeof doc.querySelectorAll === 'function') {
  try {
@@ -651,7 +622,7 @@
  return;
  }
  if (el.nodeType !== 1) return;
- if (isDirectIgnoredSelf(el) || isConversationStreamSelf(el)) return;
+ if (isDirectIgnoredSelf(el) || isModelSelectorScopedSelf(el) || isConversationStreamSelf(el)) return;
  var child = el.firstChild;
  while (child) {
  collectTextSkippingIgnored(child, outChunks, textSnapshots);
@@ -699,7 +670,7 @@
  return;
  }
  if (node.nodeType !== 1) return;
- if (isDirectIgnoredSelf(node) || isConversationStreamSelf(node)) return;
+ if (isDirectIgnoredSelf(node) || isModelSelectorScopedSelf(node) || isConversationStreamSelf(node)) return;
  if (isLeafChromeControl(node)) {
  var chunks = [];
  collectTextSkippingIgnored(node, chunks, textSnapshots);
@@ -740,75 +711,35 @@
  * and Object.prototype keys (__proto__, constructor, toString).
  */
  function createNullProtoBoundedCache(maxSize) {
- var cap = maxSize > 4 ? maxSize : 2048;
- var genCap = cap >> 1;
- var hot = Object.create(null);
- var cold = Object.create(null);
- var hotSize = 0;
- var coldSize = 0;
+ var cap = maxSize > 4 ? maxSize : 2048, genCap = cap >> 1;
+ var hot = Object.create(null), cold = Object.create(null), hotSize = 0, coldSize = 0;
+ function rotate() { cold = hot; coldSize = hotSize; hot = Object.create(null); hotSize = 0; }
  return {
- has: function (key) {
- return key in hot || key in cold;
- },
+ has: function (key) { return key in hot || key in cold; },
  get: function (key) {
  if (key in hot) return hot[key];
  if (key in cold) {
- var val = cold[key];
- delete cold[key];
- coldSize--;
- if (hotSize >= genCap) {
- cold = hot;
- coldSize = hotSize;
- hot = Object.create(null);
- hotSize = 0;
- }
- hot[key] = val;
- hotSize++;
+ var val = cold[key]; delete cold[key]; coldSize--;
+ if (hotSize >= genCap) rotate();
+ hot[key] = val; hotSize++;
  return val;
  }
  return undefined;
  },
  set: function (key, val) {
- if (key in hot) {
- hot[key] = val;
- return;
- }
- if (key in cold) {
- delete cold[key];
- coldSize--;
- }
- if ((hotSize >= genCap && hotSize + coldSize >= cap) || hotSize >= cap) {
- cold = hot;
- coldSize = hotSize;
- hot = Object.create(null);
- hotSize = 0;
- }
- hot[key] = val;
- hotSize++;
+ if (key in hot) { hot[key] = val; return; }
+ if (key in cold) { delete cold[key]; coldSize--; }
+ if ((hotSize >= genCap && hotSize + coldSize >= cap) || hotSize >= cap) rotate();
+ hot[key] = val; hotSize++;
  },
  delete: function (key) {
  var removed = false;
- if (key in hot) {
- delete hot[key];
- hotSize--;
- removed = true;
- }
- if (key in cold) {
- delete cold[key];
- coldSize--;
- removed = true;
- }
+ if (key in hot) { delete hot[key]; hotSize--; removed = true; }
+ if (key in cold) { delete cold[key]; coldSize--; removed = true; }
  return removed;
  },
- clear: function () {
- hot = Object.create(null);
- cold = Object.create(null);
- hotSize = 0;
- coldSize = 0;
- },
- get size() {
- return hotSize + coldSize;
- },
+ clear: function () { hot = Object.create(null); cold = Object.create(null); hotSize = coldSize = 0; },
+ get size() { return hotSize + coldSize; },
  };
  }
  function readRegexQuantifier(src, pos) {
@@ -874,68 +805,40 @@
  cur = '';
  }
  }
+ function skipClosedDelim(src, start, closeCh) {
+ var p = start;
+ while (p < src.length && src.charAt(p) !== closeCh) p++;
+ return readRegexQuantifier(src, p < src.length ? p + 1 : p).end;
+ }
  var i = 0;
  while (i < src.length) {
  var c = src.charAt(i);
  if (c === '\\') {
- if (i + 1 >= src.length) {
- flushRun();
- break;
- }
+ if (i + 1 >= src.length) { flushRun(); break; }
  var nx = src.charAt(i + 1);
  if (nx === 'u') {
  flushRun();
- if (src.charAt(i + 2) === '{') {
- var uEnd = i + 3;
- while (uEnd < src.length && src.charAt(uEnd) !== '}') uEnd++;
- i = readRegexQuantifier(src, uEnd < src.length ? uEnd + 1 : uEnd).end;
- } else {
- i = readRegexQuantifier(src, Math.min(src.length, i + 6)).end;
- }
+ i = src.charAt(i + 2) === '{' ? skipClosedDelim(src, i + 3, '}') : readRegexQuantifier(src, Math.min(src.length, i + 6)).end;
  continue;
  }
- if (nx === 'x') {
+ if (nx === 'x' || nx === 'c') {
  flushRun();
- i = readRegexQuantifier(src, Math.min(src.length, i + 4)).end;
+ i = readRegexQuantifier(src, Math.min(src.length, i + (nx === 'x' ? 4 : 3))).end;
  continue;
  }
- if (nx === 'c') {
- flushRun();
- i = readRegexQuantifier(src, Math.min(src.length, i + 3)).end;
- continue;
- }
- if ((nx === 'p' || nx === 'P') && src.charAt(i + 2) === '{') {
- flushRun();
- var pEnd = i + 3;
- while (pEnd < src.length && src.charAt(pEnd) !== '}') pEnd++;
- i = readRegexQuantifier(src, pEnd < src.length ? pEnd + 1 : pEnd).end;
- continue;
- }
- if (nx === 'k' && src.charAt(i + 2) === '<') {
- flushRun();
- var kEnd = i + 3;
- while (kEnd < src.length && src.charAt(kEnd) !== '>') kEnd++;
- i = readRegexQuantifier(src, kEnd < src.length ? kEnd + 1 : kEnd).end;
- continue;
- }
+ if ((nx === 'p' || nx === 'P') && src.charAt(i + 2) === '{') { flushRun(); i = skipClosedDelim(src, i + 3, '}'); continue; }
+ if (nx === 'k' && src.charAt(i + 2) === '<') { flushRun(); i = skipClosedDelim(src, i + 3, '>'); continue; }
  if (/[a-zA-Z0-9]/.test(nx)) {
  flushRun();
  var escEnd = i + 2;
- if (/[0-9]/.test(nx)) {
- while (escEnd < src.length && /[0-9]/.test(src.charAt(escEnd))) escEnd++;
- }
+ if (/[0-9]/.test(nx)) { while (escEnd < src.length && /[0-9]/.test(src.charAt(escEnd))) escEnd++; }
  i = readRegexQuantifier(src, escEnd).end;
  continue;
  }
  var qEsc = readRegexQuantifier(src, i + 2);
- if (qEsc.kind === 'one') {
- cur += nx;
- } else if (qEsc.kind === 'plus') {
- cur += nx;
- flushRun();
- } else {
- flushRun();
- }
+ if (qEsc.kind === 'one') cur += nx;
+ else if (qEsc.kind === 'plus') { cur += nx; flushRun(); }
+ else flushRun();
  i = qEsc.end;
  continue;
  }
@@ -1588,31 +1491,6 @@
  }
  return false;
  }
- function isFloatingElement(el, doc) {
- if (!el || el.nodeType !== 1) return false;
- if (doc && (el === doc.body || el === doc.documentElement)) return false;
- if (el.id === 'workbench' || el.id === 'root' || el.id === 'app') return false;
- var cls = typeof el.className === 'string' ? el.className : '';
- if (cls && cls.indexOf('monaco-workbench') !== -1) return false;
- var role = getAttr(el, 'role') || '';
- if (role === 'dialog') return false;
- if (role === 'tooltip' || role === 'menu' || role === 'listbox') return true;
- if (isPortalAttr(el)) {
- return !isDialogOrPortalWrappingDialog(el);
- }
- if (hasAttr(el, 'data-radix-popper-content-wrapper')) return true;
- if (cls) {
- if (
- cls.indexOf('popover') !== -1 ||
- cls.indexOf('tooltip') !== -1 ||
- cls.indexOf('context-view') !== -1 ||
- cls.indexOf('monaco-hover') !== -1
- ) {
- return true;
- }
- }
- return false;
- }
  function isWorkbenchOrRoot(el, doc) {
  if (!el || el.nodeType !== 1) return true;
  if (doc && (el === doc.body || el === doc.documentElement)) return true;
@@ -1620,102 +1498,39 @@
  var tid = getAttr(el, 'data-testid');
  if (tid === 'sidebar-split' || tid === 'aux-pane-split') return true;
  var cls = typeof el.className === 'string' ? el.className : '';
- if (cls && cls.indexOf('monaco-workbench') !== -1) return true;
- return false;
+ return Boolean(cls && cls.indexOf('monaco-workbench') !== -1);
+ }
+ function isFloatingElement(el, doc) {
+ if (isWorkbenchOrRoot(el, doc)) return false;
+ var role = getAttr(el, 'role') || '';
+ if (role === 'dialog') return false;
+ if (role === 'tooltip' || role === 'menu' || role === 'listbox') return true;
+ if (isPortalAttr(el)) return !isDialogOrPortalWrappingDialog(el);
+ if (hasAttr(el, 'data-radix-popper-content-wrapper')) return true;
+ var cls = typeof el.className === 'string' ? el.className : '';
+ return Boolean(cls && (cls.indexOf('popover') !== -1 || cls.indexOf('tooltip') !== -1 || cls.indexOf('context-view') !== -1 || cls.indexOf('monaco-hover') !== -1));
  }
  function createWeakNodeTracker() {
- var hasWeakRef = typeof WeakRef === 'function';
- if (!hasWeakRef) {
+ if (typeof WeakRef !== 'function') {
  var fallbackSet = new Set();
  return {
- add: function (node) {
- if (!node) return;
- fallbackSet.add(node);
- if (fallbackSet.size > 256) this.prune();
- },
- delete: function (node) {
- fallbackSet.delete(node);
- },
- prune: function () {
- fallbackSet.forEach(function (n) {
- if (!n || n.isConnected === false) fallbackSet.delete(n);
- });
- },
- forEachAll: function (cb) {
- fallbackSet.forEach(function (n) {
- if (n) cb(n);
- });
- },
- countActive: function () {
- var count = 0;
- fallbackSet.forEach(function (n) {
- if (!n || n.isConnected === false) {
- fallbackSet.delete(n);
- return;
- }
- count++;
- });
- return count;
- },
- clear: function () {
- fallbackSet.clear();
- },
+ add: function (n) { if (!n) return; fallbackSet.add(n); if (fallbackSet.size > 256) this.prune(); },
+ delete: function (n) { fallbackSet.delete(n); },
+ prune: function () { fallbackSet.forEach(function (n) { if (!n || n.isConnected === false) fallbackSet.delete(n); }); },
+ forEachAll: function (cb) { fallbackSet.forEach(function (n) { if (n) cb(n); }); },
+ countActive: function () { var c = 0; fallbackSet.forEach(function (n) { if (!n || n.isConnected === false) fallbackSet.delete(n); else c++; }); return c; },
+ clear: function () { fallbackSet.clear(); },
  };
  }
- var refs = new Set();
- var nodeToRef = new WeakMap();
+ var refs = new Set(), nodeToRef = new WeakMap();
+ function dropDead(ref, n) { refs.delete(ref); if (n) nodeToRef.delete(n); }
  return {
- add: function (node) {
- if (!node || nodeToRef.has(node)) return;
- var ref = new WeakRef(node);
- nodeToRef.set(node, ref);
- refs.add(ref);
- if (refs.size > 256) this.prune();
- },
- delete: function (node) {
- if (!node) return;
- var ref = nodeToRef.get(node);
- if (ref) {
- refs.delete(ref);
- nodeToRef.delete(node);
- }
- },
- prune: function () {
- refs.forEach(function (ref) {
- var n = ref.deref();
- if (!n || n.isConnected === false) {
- refs.delete(ref);
- if (n) nodeToRef.delete(n);
- }
- });
- },
- forEachAll: function (cb) {
- refs.forEach(function (ref) {
- var n = ref.deref();
- if (!n) {
- refs.delete(ref);
- return;
- }
- cb(n);
- });
- },
- countActive: function () {
- var count = 0;
- refs.forEach(function (ref) {
- var n = ref.deref();
- if (!n || n.isConnected === false) {
- refs.delete(ref);
- if (n) nodeToRef.delete(n);
- return;
- }
- count++;
- });
- return count;
- },
- clear: function () {
- refs.clear();
- nodeToRef = new WeakMap();
- },
+ add: function (n) { if (!n || nodeToRef.has(n)) return; var r = new WeakRef(n); nodeToRef.set(n, r); refs.add(r); if (refs.size > 256) this.prune(); },
+ delete: function (n) { var r = n && nodeToRef.get(n); if (r) { refs.delete(r); nodeToRef.delete(n); } },
+ prune: function () { refs.forEach(function (r) { var n = r.deref(); if (!n || n.isConnected === false) dropDead(r, n); }); },
+ forEachAll: function (cb) { refs.forEach(function (r) { var n = r.deref(); if (!n) refs.delete(r); else cb(n); }); },
+ countActive: function () { var c = 0; refs.forEach(function (r) { var n = r.deref(); if (!n || n.isConnected === false) dropDead(r, n); else c++; }); return c; },
+ clear: function () { refs.clear(); nodeToRef = new WeakMap(); },
  };
  }
  function isInsideDialog(el) {
@@ -1763,221 +1578,67 @@
  var opts = options || {};
  var win = opts.root || (typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : null);
  var doc = opts.doc || (win && win.document) || (typeof document !== 'undefined' ? document : null);
- try {
- if (win && win.__agPrismHostI18n && typeof win.__agPrismHostI18n.destroy === 'function') {
- win.__agPrismHostI18n.destroy();
- }
- } catch (e) {}
+ try { if (win && win.__agPrismHostI18n && typeof win.__agPrismHostI18n.destroy === 'function') win.__agPrismHostI18n.destroy(); } catch (e) {}
  var mode = opts.mode === 'on' || opts.mode === 'off' ? opts.mode : 'auto';
  var locale = opts.locale === 'tr' ? 'tr' : 'zh-CN';
  var initialHtmlLang = doc && doc.documentElement ? getAttr(doc.documentElement, 'lang') : null;
  var nowFn = typeof opts.nowFn === 'function' ? opts.nowFn : function () { return Date.now(); };
- var perfNowFn =
- typeof opts.perfNowFn === 'function'
- ? opts.perfNowFn
- : typeof opts.nowFn === 'function'
- ? nowFn
- : typeof performance !== 'undefined' && typeof performance.now === 'function'
- ? function () {
- return performance.now();
- }
- : nowFn;
- var setTimeoutFn =
- typeof opts.setTimeoutFn === 'function'
- ? opts.setTimeoutFn
- : function (fn, ms) {
- return setTimeout(fn, ms);
- };
- var clearTimeoutFn =
- typeof opts.clearTimeoutFn === 'function'
- ? opts.clearTimeoutFn
- : function (id) {
- clearTimeout(id);
- };
+ var perfNowFn = typeof opts.perfNowFn === 'function' ? opts.perfNowFn : typeof opts.nowFn === 'function' ? nowFn : (typeof performance !== 'undefined' && typeof performance.now === 'function' ? function () { return performance.now(); } : nowFn);
+ var setTimeoutFn = typeof opts.setTimeoutFn === 'function' ? opts.setTimeoutFn : function (fn, ms) { return setTimeout(fn, ms); };
+ var clearTimeoutFn = typeof opts.clearTimeoutFn === 'function' ? opts.clearTimeoutFn : function (id) { clearTimeout(id); };
  var hasCustomRaf = typeof opts.rafFn === 'function';
- var hasRafSupport =
- hasCustomRaf || Boolean(win && typeof win.requestAnimationFrame === 'function');
- var rafFn =
- typeof opts.rafFn === 'function'
- ? opts.rafFn
- : win && typeof win.requestAnimationFrame === 'function'
- ? function (cb) {
- return win.requestAnimationFrame(cb);
- }
- : function (cb) {
- return setTimeoutFn(cb, 16);
- };
- var cancelRafFn =
- typeof opts.cancelRafFn === 'function'
- ? opts.cancelRafFn
- : win && typeof win.cancelAnimationFrame === 'function'
- ? function (id) {
- win.cancelAnimationFrame(id);
- }
- : function (id) {
- clearTimeoutFn(id);
- };
- var customMutationObserver = opts.MutationObserver || null;
- var inputDict = opts.dict || { exact: {}, patterns: [] };
- var customReversePatterns = opts.reversePatterns || null;
- var customReverseOverrides = opts.reverseExactOverrides || null;
- var customReverseCrossRules = opts.reverseCrossNodeRules || null;
+ var hasRafSupport = hasCustomRaf || Boolean(win && typeof win.requestAnimationFrame === 'function');
+ var rafFn = hasCustomRaf ? opts.rafFn : (win && typeof win.requestAnimationFrame === 'function' ? function (cb) { return win.requestAnimationFrame(cb); } : function (cb) { return setTimeoutFn(cb, 16); });
+ var cancelRafFn = typeof opts.cancelRafFn === 'function' ? opts.cancelRafFn : (win && typeof win.cancelAnimationFrame === 'function' ? function (id) { win.cancelAnimationFrame(id); } : function (id) { clearTimeoutFn(id); });
+ var customMutationObserver = opts.MutationObserver || null, inputDict = opts.dict || { exact: {}, patterns: [] };
+ var customReversePatterns = opts.reversePatterns || null, customReverseOverrides = opts.reverseExactOverrides || null, customReverseCrossRules = opts.reverseCrossNodeRules || null;
  var seedExact = Object.create(null);
  if (inputDict.exact && typeof inputDict.exact === 'object') {
- for (var sk in inputDict.exact) {
- if (hasOwn.call(inputDict.exact, sk)) {
- seedExact[sk] = inputDict.exact[sk];
+ for (var sk in inputDict.exact) if (hasOwn.call(inputDict.exact, sk)) seedExact[sk] = inputDict.exact[sk];
  }
- }
- }
- var internalDictSeed = {
- exact: seedExact,
- patterns: Array.isArray(inputDict.patterns) ? inputDict.patterns.slice() : [],
- rules: Array.isArray(inputDict.rules) ? inputDict.rules.slice() : [],
- };
- // Sever closure retention of options / options.dict immediately
- inputDict = null;
- options = null;
- opts = null;
- var forwardEngine = null;
- var reverseEngine = null;
- var activeEngine = null;
- var translateSingleUnit = null;
- var translatedValues = Object.create(null);
- var activeCrossNodeRules = [];
+ var internalDictSeed = { exact: seedExact, patterns: Array.isArray(inputDict.patterns) ? inputDict.patterns.slice() : [], rules: Array.isArray(inputDict.rules) ? inputDict.rules.slice() : [] };
+ inputDict = options = opts = null;
+ var forwardEngine = null, reverseEngine = null, activeEngine = null, translateSingleUnit = null, translatedValues = Object.create(null), activeCrossNodeRules = [];
  function selectEngineForMode(targetMode) {
  if (targetMode === 'off') {
- if (!reverseEngine) {
- reverseEngine = createHostI18nEngine(internalDictSeed, {
- direction: 'reverse',
- reversePatterns: customReversePatterns,
- reverseExactOverrides: customReverseOverrides,
- reverseCrossNodeRules: customReverseCrossRules,
- root: win,
- });
- }
- activeEngine = reverseEngine;
- translateSingleUnit = reverseEngine.translateUnit;
- translatedValues = Object.create(null);
- activeCrossNodeRules = reverseEngine.crossNodeRules || [];
+ if (!reverseEngine) reverseEngine = createHostI18nEngine(internalDictSeed, { direction: 'reverse', reversePatterns: customReversePatterns, reverseExactOverrides: customReverseOverrides, reverseCrossNodeRules: customReverseCrossRules, root: win });
+ activeEngine = reverseEngine; translateSingleUnit = reverseEngine.translateUnit; translatedValues = Object.create(null); activeCrossNodeRules = reverseEngine.crossNodeRules || [];
  } else {
- if (!forwardEngine) {
- forwardEngine = createHostI18nEngine(internalDictSeed, {
- direction: 'forward',
- root: win,
- });
- }
- activeEngine = forwardEngine;
- translateSingleUnit = forwardEngine.translateUnit || forwardEngine.translate;
- translatedValues = forwardEngine.translatedValues || Object.create(null);
- activeCrossNodeRules = [];
+ if (!forwardEngine) forwardEngine = createHostI18nEngine(internalDictSeed, { direction: 'forward', root: win });
+ activeEngine = forwardEngine; translateSingleUnit = forwardEngine.translateUnit || forwardEngine.translate; translatedValues = forwardEngine.translatedValues || Object.create(null); activeCrossNodeRules = [];
  }
  }
- var state = {
- active: false,
- mode: mode,
- status: 'off',
- reason: null,
- detectedProvider: null,
- yielded: false,
- destroyed: false,
- };
- var TIER2_SKIP_ATTRS = [
- ['data-ag-localization-skip', 'true'],
- ['data-antigravity-zh-skip', '1'],
- ];
- var textSnapshots = new WeakMap();
- var textUntranslatedCache = new WeakMap();
- var attrSnapshots = new WeakMap();
- var attrUntranslatedCache = new WeakMap();
- var elementConflictState = new WeakMap();
- var exemptElements = new WeakSet();
- var exemptNodes = new WeakSet();
- var processedAlerts = new WeakSet();
- var tier2SkipSnapshots = new WeakMap();
- var offPendingRetryElements = new WeakMap();
- var modifiedTextNodes = createWeakNodeTracker();
- var modifiedAttrElements = createWeakNodeTracker();
- var tier2MarkedElements = createWeakNodeTracker();
- var blockedElementsTracker = createWeakNodeTracker();
- var tier1State = null;
- var offRetryTimers = new Set();
- var inOffRetryPass = false;
- var observer = null;
- var observing = false;
- var dirtyObserver = null;
- var dirtyProbeActive = false;
- var winBlurObserver = null;
- var pendingFullFloatScan = false;
- var pendingSidebarRescan = false;
- var pendingConvViewRescan = false;
- var pendingNodes = [];
- var pendingNodeSet = new Set();
- var rafId = null;
- var hoverScanTimer = null;
- var hoverCardTimer = null;
- var pendingHoverCardNode = null;
- var focusWakeTimer = null;
- var layer2bTimers = [];
+ var state = { active: false, mode: mode, status: 'off', reason: null, detectedProvider: null, yielded: false, destroyed: false };
+ var TIER2_SKIP_ATTRS = [['data-ag-localization-skip', 'true'], ['data-antigravity-zh-skip', '1']];
+ var textSnapshots = new WeakMap(), textUntranslatedCache = new WeakMap(), attrSnapshots = new WeakMap(), attrUntranslatedCache = new WeakMap();
+ var elementConflictState = new WeakMap(), tier2SkipSnapshots = new WeakMap(), offPendingRetryElements = new WeakMap();
+ var exemptElements = new WeakSet(), exemptNodes = new WeakSet(), processedAlerts = new WeakSet();
+ var modifiedTextNodes = createWeakNodeTracker(), modifiedAttrElements = createWeakNodeTracker(), tier2MarkedElements = createWeakNodeTracker(), blockedElementsTracker = createWeakNodeTracker();
+ var tier1State = null, offRetryTimers = new Set(), inOffRetryPass = false;
+ var observer = null, observing = false, dirtyObserver = null, dirtyProbeActive = false, winBlurObserver = null;
+ var pendingFullFloatScan = false, pendingSidebarRescan = false, pendingConvViewRescan = false;
+ var pendingNodes = [], pendingNodeSet = new Set(), pendingHoverCardNodes = [];
+ var rafId = null, hoverScanTimer = null, hoverCardTimer = null, focusWakeTimer = null, layer2bTimers = [];
  var domReadyHandler = null, hoverHandler = null, visibilityHandler = null, blurHandler = null, focusHandler = null, cvRevealHandler = null;
  var observedCvEls = new WeakSet(), cvUnsubs = [];
- var bootAt = nowFn();
- var delayedExternalNodes = new Set();
- var globalConflictRecords = [];
- var lastHoverTime = 0;
- var pausedByWindowBlur = false;
- var hibernating = false;
- var missedWhilePaused = false;
- var initialScanDraining = false;
- var MAX_NODES_PER_FRAME = 80;
- var FRAME_BUDGET_MS = 5;
- var INITIAL_SYNC_MAX_NODES = 160;
- var INITIAL_SYNC_BUDGET_MS = 5;
- var MAX_PENDING_NODES = 4096;
- var LAYER2B_WINDOW_MS = 1200;
- var CONFLICT_WINDOW_MS = 3000;
- var NODE_CONFLICT_THRESHOLD = 3;
- var GLOBAL_CONFLICT_NODE_THRESHOLD = 5;
- var OFF_RETRY_DELAY_MS = 16;
- function isDocHidden() {
- return Boolean(doc && doc.hidden === true);
- }
- function isWinBlurAttrSet() {
- return Boolean(doc && doc.documentElement && getAttr(doc.documentElement, 'data-ag-cs-win-blur') === '1');
- }
- // 元素周期表 3D 键盘打开期间进入休眠，避免高频扫键触发宿主 i18n 扫描与 hover 拦截
- function isPeriodicPickerOpen() {
- return Boolean(doc && doc.documentElement && getAttr(doc.documentElement, 'data-ag-pp-open') === '1');
- }
+ var bootAt = nowFn(), delayedExternalNodes = new Set(), globalConflictRecords = [], lastHoverTime = 0;
+ var pausedByWindowBlur = false, hibernating = false, missedWhilePaused = false, initialScanDraining = false;
+ var MAX_NODES_PER_FRAME = 80, FRAME_BUDGET_MS = 5, INITIAL_SYNC_MAX_NODES = 160, INITIAL_SYNC_BUDGET_MS = 5;
+ var MAX_PENDING_NODES = 4096, LAYER2B_WINDOW_MS = 1200, CONFLICT_WINDOW_MS = 3000, NODE_CONFLICT_THRESHOLD = 3, GLOBAL_CONFLICT_NODE_THRESHOLD = 5, OFF_RETRY_DELAY_MS = 16;
+ function isDocHidden() { return Boolean(doc && doc.hidden === true); }
+ function isWinBlurAttrSet() { return Boolean(doc && doc.documentElement && getAttr(doc.documentElement, 'data-ag-cs-win-blur') === '1'); }
+ function isPeriodicPickerOpen() { return Boolean(doc && doc.documentElement && getAttr(doc.documentElement, 'data-ag-pp-open') === '1'); }
  function isPerformancePerfMode() {
  if (!doc || !doc.documentElement) return false;
  var ds = doc.documentElement.dataset;
  var raw = String((ds && ds.agCsPerfMode) || getAttr(doc.documentElement, 'data-ag-cs-perf-mode') || '').trim().toLowerCase();
  return raw === 'performance' || raw === 'eco';
  }
- function canDrainVisibleBlur() {
- return !isDocHidden() && !isPeriodicPickerOpen() && !isPerformancePerfMode();
- }
- function canContinuePendingFlush() {
- return initialScanDraining && canDrainVisibleBlur();
- }
- function isPaused() {
- return isDocHidden() || pausedByWindowBlur || isWinBlurAttrSet() || isPeriodicPickerOpen();
- }
- function setRootStatusAttr(val) {
- try {
- if (doc && doc.documentElement && typeof doc.documentElement.setAttribute === 'function') {
- doc.documentElement.setAttribute('data-ag-prism-host-i18n', val);
- }
- } catch (e) {}
- }
- function removeRootStatusAttr() {
- try {
- if (doc && doc.documentElement && typeof doc.documentElement.removeAttribute === 'function') {
- doc.documentElement.removeAttribute('data-ag-prism-host-i18n');
- }
- } catch (e) {}
- }
+ function canDrainVisibleBlur() { return !isDocHidden() && !isPeriodicPickerOpen() && !isPerformancePerfMode(); }
+ function canContinuePendingFlush() { return initialScanDraining && canDrainVisibleBlur(); }
+ function isPaused() { return isDocHidden() || pausedByWindowBlur || isWinBlurAttrSet() || isPeriodicPickerOpen(); }
+ function setRootStatusAttr(val) { try { if (doc && doc.documentElement && typeof doc.documentElement.setAttribute === 'function') doc.documentElement.setAttribute('data-ag-prism-host-i18n', val); } catch (e) {} }
+ function removeRootStatusAttr() { try { if (doc && doc.documentElement && typeof doc.documentElement.removeAttribute === 'function') doc.documentElement.removeAttribute('data-ag-prism-host-i18n'); } catch (e) {} }
  function activateTier1Suppression() {
  tier1State = {
  hansSwitched: false,
@@ -2073,62 +1734,35 @@
  var saved = tier1State;
  tier1State = null;
  if (saved.htmlLangModified && doc && doc.documentElement && typeof doc.documentElement.setAttribute === 'function') {
- try {
- if (getAttr(doc.documentElement, 'lang') === 'en') {
- doc.documentElement.setAttribute('lang', saved.htmlLangOrig);
- }
- } catch (e) {}
+ try { if (getAttr(doc.documentElement, 'lang') === 'en') doc.documentElement.setAttribute('lang', saved.htmlLangOrig); } catch (e) {}
  }
  if (saved.agyCachePaused && saved.agyCacheRef) {
  try {
- if (saved.agyOrigHasDesc) {
- Object.defineProperty(saved.agyCacheRef, 'has', saved.agyOrigHasDesc);
- } else {
- delete saved.agyCacheRef.has;
- }
- if (saved.agyOrigGetDesc) {
- Object.defineProperty(saved.agyCacheRef, 'get', saved.agyOrigGetDesc);
- } else {
- delete saved.agyCacheRef.get;
- }
- if (win && typeof win.__AGY_RUN_FULL_SCAN__ === 'function') {
- win.__AGY_RUN_FULL_SCAN__();
- }
+ if (saved.agyOrigHasDesc) Object.defineProperty(saved.agyCacheRef, 'has', saved.agyOrigHasDesc); else delete saved.agyCacheRef.has;
+ if (saved.agyOrigGetDesc) Object.defineProperty(saved.agyCacheRef, 'get', saved.agyOrigGetDesc); else delete saved.agyCacheRef.get;
+ if (win && typeof win.__AGY_RUN_FULL_SCAN__ === 'function') win.__AGY_RUN_FULL_SCAN__();
  } catch (e) {}
  }
  if (saved.patchObserverPaused && saved.patchObserverRef && saved.patchObserverTarget) {
- try {
- saved.patchObserverRef.observe(saved.patchObserverTarget, saved.patchObserverOpts);
- } catch (e) {}
+ try { saved.patchObserverRef.observe(saved.patchObserverTarget, saved.patchObserverOpts); } catch (e) {}
  }
  if (saved.hansSwitched && win && typeof win.__antigravityZhSetLang === 'function') {
- try {
- win.__antigravityZhSetLang(saved.hansPrevLang || 'zh-CN');
- } catch (e) {}
+ try { win.__antigravityZhSetLang(saved.hansPrevLang || 'zh-CN'); } catch (e) {}
  }
  }
  function markTier2SkipElement(el) {
- if (state.mode !== 'off' || !el || el.nodeType !== 1 || typeof el.setAttribute !== 'function') return;
- if (doc && el === doc.documentElement) return;
+ if (state.mode !== 'off' || !el || el.nodeType !== 1 || typeof el.setAttribute !== 'function' || (doc && el === doc.documentElement)) return;
  var tag = el.tagName ? String(el.tagName).toUpperCase() : '';
  if (IGNORED_TAGS[tag] || tag === 'HEAD' || tag === 'META' || tag === 'LINK') return;
  var snap = tier2SkipSnapshots.get(el);
  if (!snap) {
  snap = Object.create(null);
- for (var i = 0; i < TIER2_SKIP_ATTRS.length; i++) {
- var attrName = TIER2_SKIP_ATTRS[i][0];
- snap[attrName] = hasAttr(el, attrName) ? getAttr(el, attrName) : null;
- }
+ for (var i = 0; i < TIER2_SKIP_ATTRS.length; i++) { var a = TIER2_SKIP_ATTRS[i][0]; snap[a] = hasAttr(el, a) ? getAttr(el, a) : null; }
  tier2SkipSnapshots.set(el, snap);
  }
  for (var j = 0; j < TIER2_SKIP_ATTRS.length; j++) {
- var name = TIER2_SKIP_ATTRS[j][0];
- var targetVal = TIER2_SKIP_ATTRS[j][1];
- if (getAttr(el, name) !== targetVal) {
- try {
- el.setAttribute(name, targetVal);
- } catch (e) {}
- }
+ var name = TIER2_SKIP_ATTRS[j][0], targetVal = TIER2_SKIP_ATTRS[j][1];
+ if (getAttr(el, name) !== targetVal) { try { el.setAttribute(name, targetVal); } catch (e) {} }
  }
  tier2MarkedElements.add(el);
  }
@@ -2136,16 +1770,11 @@
  var snap = tier2SkipSnapshots.get(el);
  if (!snap) return;
  for (var i = 0; i < TIER2_SKIP_ATTRS.length; i++) {
- var name = TIER2_SKIP_ATTRS[i][0];
- var writtenVal = TIER2_SKIP_ATTRS[i][1];
- var prevVal = snap[name];
+ var name = TIER2_SKIP_ATTRS[i][0], prevVal = snap[name];
  try {
- if (getAttr(el, name) === writtenVal) {
- if (prevVal === null) {
- if (typeof el.removeAttribute === 'function') el.removeAttribute(name);
- } else if (typeof el.setAttribute === 'function') {
- el.setAttribute(name, prevVal);
- }
+ if (getAttr(el, name) === TIER2_SKIP_ATTRS[i][1]) {
+ if (prevVal === null) { if (typeof el.removeAttribute === 'function') el.removeAttribute(name); }
+ else if (typeof el.setAttribute === 'function') el.setAttribute(name, prevVal);
  }
  } catch (e) {}
  }
@@ -2235,41 +1864,27 @@
  offPendingRetryElements = new WeakMap();
  return hadAny;
  }
- function clearAllTimersAndListeners() {
- disconnectDirtyObserver();
- dirtyObserver = null;
+ function cancelPendingWorkTimers() {
  pendingFullFloatScan = false;
  pendingSidebarRescan = false;
  pendingConvViewRescan = false;
- clearOffRetryTimers();
  if (rafId === 'bus') {
  try { var _b = getHostDomBus(); if (_b && typeof _b.cancelTask === 'function') _b.cancelTask('conv:host-i18n-flush'); } catch (e) {}
  rafId = null;
  } else if (rafId !== null) {
- try {
- cancelRafFn(rafId);
- } catch (e) {}
+ try { cancelRafFn(rafId); } catch (e) {}
  rafId = null;
  }
- if (hoverScanTimer !== null) {
- try {
- clearTimeoutFn(hoverScanTimer);
- } catch (e) {}
- hoverScanTimer = null;
+ if (hoverScanTimer !== null) { try { clearTimeoutFn(hoverScanTimer); } catch (e) {} hoverScanTimer = null; }
+ if (hoverCardTimer !== null) { try { clearTimeoutFn(hoverCardTimer); } catch (e) {} hoverCardTimer = null; }
+ pendingHoverCardNodes.length = 0;
+ if (focusWakeTimer !== null) { try { clearTimeoutFn(focusWakeTimer); } catch (e) {} focusWakeTimer = null; }
  }
- if (hoverCardTimer !== null) {
- try {
- clearTimeoutFn(hoverCardTimer);
- } catch (e) {}
- hoverCardTimer = null;
- }
- pendingHoverCardNode = null;
- if (focusWakeTimer !== null) {
- try {
- clearTimeoutFn(focusWakeTimer);
- } catch (e) {}
- focusWakeTimer = null;
- }
+ function clearAllTimersAndListeners() {
+ disconnectDirtyObserver();
+ dirtyObserver = null;
+ clearOffRetryTimers();
+ cancelPendingWorkTimers();
  while (layer2bTimers.length > 0) {
  var tid = layer2bTimers.pop();
  try {
@@ -2334,36 +1949,24 @@
  tier2MarkedElements.forEachAll(rollbackTier2Element);
  tier2MarkedElements.clear();
  // DOM 兜底扫回：防止节点曾因暂时脱离 DOM 被 prune 剪枝后又被 React 复用回挂导致漏回滚
+ var rollbackOne = function (n) {
+ if (n.nodeType === 3) rollbackTextNode(n);
+ else if (n.nodeType === 1) { rollbackAttrEl(n); rollbackTier2Element(n); }
+ };
  var rootEl = doc && (doc.body || doc.documentElement);
  if (rootEl) {
  try {
  if (typeof doc.createTreeWalker === 'function') {
  var tw = doc.createTreeWalker(rootEl, 5);
- var cur = tw.currentNode;
- while (cur) {
- if (cur.nodeType === 3) {
- rollbackTextNode(cur);
- } else if (cur.nodeType === 1) {
- rollbackAttrEl(cur);
- rollbackTier2Element(cur);
- }
- cur = tw.nextNode();
- }
+ for (var cur = tw.currentNode; cur; cur = tw.nextNode()) rollbackOne(cur);
  } else {
  var stack = [rootEl];
  while (stack.length) {
  var nd = stack.pop();
  if (!nd) continue;
- if (nd.nodeType === 3) {
- rollbackTextNode(nd);
- } else if (nd.nodeType === 1) {
- rollbackAttrEl(nd);
- rollbackTier2Element(nd);
- var ch = nd.childNodes;
- if (ch && ch.length) {
- for (var ci = ch.length - 1; ci >= 0; ci--) stack.push(ch[ci]);
- }
- }
+ rollbackOne(nd);
+ var ch = nd.nodeType === 1 ? nd.childNodes : null;
+ if (ch && ch.length) { for (var ci = ch.length - 1; ci >= 0; ci--) stack.push(ch[ci]); }
  }
  }
  } catch (e) {}
@@ -2658,68 +2261,32 @@
  }
  var sliceEdgeWhitespace = splitOuterWhitespace;
  function enqueueNode(node) {
- if (!node || !state.active || state.destroyed) return;
- if (node.isConnected === false) return;
- if (pendingNodeSet.has(node)) return;
- if (pendingNodes.length < MAX_PENDING_NODES) {
- pendingNodes.push(node);
- pendingNodeSet.add(node);
- }
+ if (!node || !state.active || state.destroyed || node.isConnected === false || pendingNodeSet.has(node)) return;
+ if (pendingNodes.length < MAX_PENDING_NODES) { pendingNodes.push(node); pendingNodeSet.add(node); }
  }
  function createScanBudget(maxNodes, budgetMs) {
- var start = perfNowFn();
+ var deadline = perfNowFn() + budgetMs;
  return {
- processed: 0,
- maxNodes: maxNodes,
- deadline: start + budgetMs,
- exhausted: false,
+ processed: 0, maxNodes: maxNodes, deadline: deadline, exhausted: false,
  tick: function () {
  this.processed++;
- if (this.processed >= this.maxNodes) {
- this.exhausted = true;
- return true;
- }
- if ((this.processed & 3) === 0 || this.processed === 1) {
- if (perfNowFn() >= this.deadline) {
- this.exhausted = true;
- return true;
- }
+ if (this.processed >= this.maxNodes || (((this.processed & 3) === 0 || this.processed === 1) && perfNowFn() >= this.deadline)) {
+ return (this.exhausted = true);
  }
  return false;
  },
  isExhausted: function () {
  if (this.exhausted) return true;
- if (this.processed >= this.maxNodes) {
- this.exhausted = true;
- return true;
- }
- if (this.processed > 0 && perfNowFn() >= this.deadline) {
- this.exhausted = true;
- return true;
- }
+ if (this.processed >= this.maxNodes || (this.processed > 0 && perfNowFn() >= this.deadline)) return (this.exhausted = true);
  return false;
  },
  };
  }
  function deferRemainingChildren(ownerEl, startChild) {
- var hasLaterText = false;
- var probe = startChild.nextSibling;
- while (probe) {
- if (probe.nodeType === 3 && (probe.nodeValue || '').trim()) {
- hasLaterText = true;
- break;
+ for (var probe = startChild.nextSibling; probe; probe = probe.nextSibling) {
+ if (probe.nodeType === 3 && (probe.nodeValue || '').trim()) { enqueueNode(ownerEl); return; }
  }
- probe = probe.nextSibling;
- }
- if (hasLaterText) {
- enqueueNode(ownerEl);
- } else {
- var rem = startChild;
- while (rem) {
- if (rem.nodeType === 1) enqueueNode(rem);
- rem = rem.nextSibling;
- }
- }
+ for (var rem = startChild; rem; rem = rem.nextSibling) { if (rem.nodeType === 1) enqueueNode(rem); }
  }
  function translateTextNode(node, knownSafeParent, nodeCtx) {
  if (!state.active || state.destroyed) return;
@@ -2741,15 +2308,15 @@
  if (!snap && textUntranslatedCache.get(node) === original) return;
  var trimmed = original.trim();
  if (!trimmed) { textUntranslatedCache.set(node, original); return; }
+ var isScopedChrome = Boolean(nodeCtx && nodeCtx.state === 3);
+ if (isScopedChrome && !isSafeModelPanelChromeText(trimmed)) { textUntranslatedCache.set(node, original); return; }
+ var mpr = isScopedChrome ? getModelPanelRules() : null;
  if (state.mode === 'off') {
  if (trimmed === '。' && node.previousSibling) {
  var prevSibText = (node.previousSibling.textContent || '').trim();
- if (prevSibText && EN_ALPHA_RE.test(prevSibText) && !ZH_CHAR_RE.test(prevSibText)) {
- applyTextWrite(node, original, original.replace('。', '.'));
- return;
+ if (prevSibText && EN_ALPHA_RE.test(prevSibText) && !ZH_CHAR_RE.test(prevSibText)) { applyTextWrite(node, original, original.replace('。', '.')); return; }
  }
- }
- var restored = translateSingleUnit(trimmed);
+ var restored = mpr && mpr.resolveUnit ? mpr.resolveUnit(trimmed, true, true, activeEngine, translateSingleUnit) : translateSingleUnit(trimmed);
  if (restored !== null && restored !== trimmed) {
  var revEdges = sliceEdgeWhitespace(original);
  applyTextWrite(node, original, revEdges.leading + restored + revEdges.trailing);
@@ -2757,11 +2324,8 @@
  return;
  }
  if (nodeCtx && nodeCtx.inStep && !nodeCtx.inStepControl && !isStepPlainTextAllowed(trimmed)) { textUntranslatedCache.set(node, original); return; }
- if (trimmed === '.' && node.previousSibling && ZH_CHAR_RE.test(node.previousSibling.textContent || '')) {
- applyTextWrite(node, original, original.replace('.', '。'));
- return;
- }
- var translated = translateSingleUnit(trimmed);
+ if (trimmed === '.' && node.previousSibling && ZH_CHAR_RE.test(node.previousSibling.textContent || '')) { applyTextWrite(node, original, original.replace('.', '。')); return; }
+ var translated = mpr && mpr.resolveUnit ? mpr.resolveUnit(trimmed, true, false, activeEngine, translateSingleUnit) : translateSingleUnit(trimmed);
  if (translated !== null && translated !== trimmed) {
  var edges = sliceEdgeWhitespace(original);
  var leadingSpace = edges.leading, trailingSpace = edges.trailing;
@@ -2772,16 +2336,17 @@
  applyTextWrite(node, original, leadingSpace + translated + trailingSpace);
  } else { textUntranslatedCache.set(node, original); }
  }
- function translateAttributes(el, elCtx) {
+ function translateAttributes(el, elCtx, onlyAttr) {
  if (!el || el.nodeType !== 1 || el.isConnected === false || typeof el.getAttribute !== 'function') return;
- var wroteAnyAttr = false;
- var hasUri = hasAttr(el, 'data-uri');
+ var wroteAnyAttr = false, hasUri = hasAttr(el, 'data-uri'), isScopedChrome = Boolean(elCtx && elCtx.state === 3), mpr = isScopedChrome ? getModelPanelRules() : null;
  for (var i = 0; i < TRANSLATABLE_ATTRS.length; i++) {
  var attr = TRANSLATABLE_ATTRS[i];
+ if (onlyAttr && attr !== onlyAttr) continue;
  if (!hasAttr(el, attr)) continue;
  var val = getAttr(el, attr);
  if (!val) continue;
  if (attr === 'title' && (hasUri || (elCtx && elCtx.inStep && val.length <= 260 && looksLikeStepPathOrCmd(val.trim())))) continue;
+ if (isScopedChrome && !isSafeModelPanelChromeText(String(val).replace(/\s+/g, ' ').trim())) continue;
  var mapRec = attrSnapshots.get(el);
  var snap = mapRec && attr in mapRec.entries ? mapRec.entries[attr] : null;
  if (snap && snap.expected === val) { modifiedAttrElements.add(el); continue; }
@@ -2793,8 +2358,14 @@
  }
  var untransMap = attrUntranslatedCache.get(el);
  if (!snap && untransMap && attr in untransMap && untransMap[attr] === val) continue;
- var trans = state.mode === 'off' && activeEngine && typeof activeEngine.translateText === 'function'
- ? activeEngine.translateText(val) : translateSingleUnit(val);
+ var trans;
+ if (isScopedChrome && mpr && mpr.resolveUnit) {
+ trans = mpr.resolveUnit(String(val).trim(), true, state.mode === 'off', activeEngine, function () {
+ return state.mode === 'off' && activeEngine && typeof activeEngine.translateText === 'function' ? activeEngine.translateText(val) : translateSingleUnit(val);
+ });
+ } else {
+ trans = state.mode === 'off' && activeEngine && typeof activeEngine.translateText === 'function' ? activeEngine.translateText(val) : translateSingleUnit(val);
+ }
  if (trans !== null && trans !== val && typeof el.setAttribute === 'function') {
  var baseOrig = val;
  el.setAttribute(attr, trans);
@@ -2811,6 +2382,20 @@
  }
  if (wroteAnyAttr && state.mode === 'off') markTier2SkipElement(el);
  }
+ function matchSandwich(first, isLead, isTail) {
+ if (!first || !first.nextSibling) return null;
+ var hasEl = false, p = first, lead = null, mid = false, tail = null;
+ for (; p; p = p.nextSibling) { if (p.nodeType === 1) { hasEl = true; break; } }
+ if (!hasEl) return null;
+ for (var c = first; c; c = c.nextSibling) {
+ if (c.nodeType === 3 && c.nodeValue) {
+ var t = c.nodeValue.trim();
+ if (!lead && isLead(t)) lead = c;
+ else if (lead && mid && isTail(t)) { tail = c; break; }
+ } else if (c.nodeType === 1 && lead) mid = true;
+ }
+ return lead && tail && !exemptNodes.has(lead) && !exemptNodes.has(tail) ? { lead: lead, tail: tail } : null;
+ }
  function applyReverseCrossNodeRulesOnElement(el) {
  if (!activeCrossNodeRules || activeCrossNodeRules.length === 0) return;
  for (var rIdx = 0; rIdx < activeCrossNodeRules.length; rIdx++) {
@@ -2820,62 +2405,37 @@
  if (getAttr(el, 'data-testid') === rule.testid && typeof el.querySelector === 'function') {
  var alertSpan = el.querySelector('span');
  if (alertSpan && !processedAlerts.has(alertSpan)) {
- var aCh = alertSpan.firstChild;
- while (aCh) {
+ for (var aCh = alertSpan.firstChild; aCh; aCh = aCh.nextSibling) {
  if (aCh.nodeType === 3 && aCh.nodeValue && !exemptNodes.has(aCh)) {
  var aTrim = aCh.nodeValue.trim();
  if (rule.matchTrimmed && rule.matchTrimmed.indexOf(aTrim) !== -1) {
  var repPrefix = aCh.nodeValue.replace(aTrim, rule.replacement);
- if (aCh.nextSibling && aCh.nextSibling.nodeType === 1 && !/\s$/.test(repPrefix)) {
- repPrefix += ' ';
- }
+ if (aCh.nextSibling && aCh.nextSibling.nodeType === 1 && !/\s$/.test(repPrefix)) repPrefix += ' ';
  applyTextWrite(aCh, aCh.nodeValue, repPrefix);
  }
  }
- aCh = aCh.nextSibling;
  }
  processedAlerts.add(alertSpan);
  }
  }
  } else if (rule.kind === 'element-sandwich') {
- var first = el.firstChild;
- if (first && first.nextSibling) {
- var hasElemSib = false;
- var probe = first;
- while (probe) {
- if (probe.nodeType === 1) {
- hasElemSib = true;
- break;
- }
- probe = probe.nextSibling;
- }
- if (hasElemSib) {
- var leadNode = null;
- var sawMidElement = false;
- var tailNode = null;
- var cur = first;
- while (cur) {
- if (cur.nodeType === 3 && cur.nodeValue) {
- var cTrim = cur.nodeValue.trim();
- if (!leadNode && rule.leadTrimmed && rule.leadTrimmed.indexOf(cTrim) !== -1) {
- leadNode = cur;
- } else if (leadNode && sawMidElement && rule.tailTrimmed && rule.tailTrimmed.indexOf(cTrim) !== -1) {
- tailNode = cur;
- break;
- }
- } else if (cur.nodeType === 1 && leadNode) {
- sawMidElement = true;
- }
- cur = cur.nextSibling;
- }
- if (leadNode && tailNode && !exemptNodes.has(leadNode) && !exemptNodes.has(tailNode)) {
- applyTextWrite(leadNode, leadNode.nodeValue, rule.leadReplacement);
- applyTextWrite(tailNode, tailNode.nodeValue, rule.tailReplacement);
+ var revSw = rule.leadTrimmed && rule.tailTrimmed && matchSandwich(el.firstChild, function (t) { return rule.leadTrimmed.indexOf(t) !== -1; }, function (t) { return rule.tailTrimmed.indexOf(t) !== -1; });
+ if (revSw) {
+ applyTextWrite(revSw.lead, revSw.lead.nodeValue, rule.leadReplacement);
+ applyTextWrite(revSw.tail, revSw.tail.nodeValue, rule.tailReplacement);
  }
  }
  }
  }
- }
+ // 仅穿透翻译安全输入框的 placeholder（严守 value 保护与祖先 Prism/外部插件/data-uri 边界豁免）
+ function maybeTranslateInputAttrs(node, parentCtx) {
+ if (!node || node.nodeType !== 1 || node.isConnected === false) return false;
+ if (!parentCtx || parentCtx.blocked || parentCtx.state === 3 || parentCtx.state === -1) return false;
+ var tg = node.tagName ? String(node.tagName).toUpperCase() : '';
+ if (tg !== 'INPUT' && tg !== 'TEXTAREA') return false;
+ if (exemptElements.has(node) || hasAttr(node, 'data-uri') || isPrismOwnedElement(node) || isExternalOwnedElement(node) || isUserContentBoundary(node)) return false;
+ translateAttributes(node, parentCtx, 'placeholder');
+ return true;
  }
  function translateElement(el, visitedSet, boundaryCtx, budget) {
  if (!state.active || state.destroyed) return;
@@ -2905,7 +2465,10 @@
  return;
  }
  var ctx = boundaryCtx || measureSafeBoundaryDepth(el);
- if (!ctx || ctx.state === -1 || ctx.remDepth < 0) return;
+ if (!ctx || ctx.state === -1 || ctx.remDepth < 0) {
+ if (!boundaryCtx && el.parentElement) maybeTranslateInputAttrs(el, measureSafeBoundaryDepth(el.parentElement));
+ return;
+ }
  if (visitedSet) { if (visitedSet.has(el)) return; visitedSet.add(el); }
  if (ctx.state === 1) {
  var sub = el.firstChild;
@@ -2920,9 +2483,10 @@
  }
  return;
  }
+ var isScopedChrome = ctx.state === 3;
  if (state.mode === 'off') {
  translateAttributes(el, ctx);
- applyReverseCrossNodeRulesOnElement(el);
+ if (!isScopedChrome) applyReverseCrossNodeRulesOnElement(el);
  } else {
  if (getAttr(el, 'data-testid') === 'plan-command-fyi-alert' && typeof el.querySelector === 'function') {
  var alertSpan = el.querySelector('span');
@@ -2936,27 +2500,13 @@
  }
  }
  translateAttributes(el, ctx);
- var first = el.firstChild;
- if (first && first.nextSibling) {
- var hasElementSibling = false;
- for (var cur = first; cur; cur = cur.nextSibling) { if (cur.nodeType === 1) { hasElementSibling = true; break; } }
- if (hasElementSibling) {
- var alsoNode = null, whenNode = null;
- for (var scanCur = first; scanCur; scanCur = scanCur.nextSibling) {
- if (scanCur.nodeType === 3 && scanCur.nodeValue) {
- var tVal = scanCur.nodeValue.trim();
- if (tVal === 'Also includes') alsoNode = scanCur;
- else if (alsoNode && tVal === 'when working in this project.') { whenNode = scanCur; break; }
+ var fwdSw = !isScopedChrome ? matchSandwich(el.firstChild, function (t) { return t === 'Also includes'; }, function (t) { return t === 'when working in this project.'; }) : null;
+ if (fwdSw) {
+ applyTextWrite(fwdSw.lead, fwdSw.lead.nodeValue, '在此项目中工作时，也包含');
+ for (var bw = fwdSw.lead.nextSibling; bw && bw !== fwdSw.tail; bw = bw.nextSibling) {
+ if (bw.nodeType === 3 && !(bw.nodeValue || '').trim()) applyTextWrite(bw, bw.nodeValue, '');
  }
- }
- if (alsoNode && whenNode && !exemptNodes.has(alsoNode) && !exemptNodes.has(whenNode)) {
- applyTextWrite(alsoNode, alsoNode.nodeValue, '在此项目中工作时，也包含');
- for (var between = alsoNode.nextSibling; between && between !== whenNode; between = between.nextSibling) {
- if (between.nodeType === 3 && !(between.nodeValue || '').trim()) applyTextWrite(between, between.nodeValue, '');
- }
- applyTextWrite(whenNode, whenNode.nodeValue, '。');
- }
- }
+ applyTextWrite(fwdSw.tail, fwdSw.tail.nodeValue, '。');
  }
  }
  if (budget) budget.tick();
@@ -2968,6 +2518,7 @@
  if (budget && budget.isExhausted()) { deferRemainingChildren(el, child); return; }
  var childCtx = advanceBoundaryForChild(ctx, child);
  if (childCtx) translateElement(child, visitedSet, childCtx, budget);
+ else maybeTranslateInputAttrs(child, ctx);
  }
  }
  }
@@ -3151,54 +2702,32 @@ function inspectExternalDelayedMutation(node) {
 if (state.mode !== 'auto') return false;
 if (nowFn() - bootAt > LAYER2B_WINDOW_MS) return false;
 if (!node) return false;
+function isDelayedSkipEl(el) {
+if (!el || isPrismOwnedElement(el) || isUserContentBoundary(el) || isInsideConversationStream(el)) return true;
+var b = measureSafeBoundaryDepth(el);
+return b.blocked || b.state === 3 || b.state === 4;
+}
 function checkSingleTextNode(tNode) {
 if (!tNode || tNode.nodeType !== 3) return;
 var parent = tNode.parentElement || tNode.parentNode;
- if (
-!parent ||
-isPrismOwnedElement(parent) ||
-isUserContentBoundary(parent) ||
-isInsideConversationStream(parent) ||
-isIgnoredBoundary(parent)
- ) {
- return;
- }
+if (isDelayedSkipEl(parent)) return;
 var val = (tNode.nodeValue || '').trim();
 if (!val || !ZH_CHAR_RE.test(val)) return;
 var snap = textSnapshots.get(tNode);
 if (snap && snap.expected === tNode.nodeValue) return;
-if (hasOwn.call(translatedValues, val) || isInsideExplicitDelayedChrome(parent)) {
-delayedExternalNodes.add(parent);
- }
+if (hasOwn.call(translatedValues, val) || isInsideExplicitDelayedChrome(parent)) delayedExternalNodes.add(parent);
  }
  if (node.nodeType === 3) {
 checkSingleTextNode(node);
 } else if (node.nodeType === 1) {
- if (
-isPrismOwnedElement(node) ||
-isUserContentBoundary(node) ||
-isInsideConversationStream(node) ||
-isIgnoredBoundary(node)
- ) {
- return false;
- }
-var stack = [node];
-var steps = 0;
+if (isDelayedSkipEl(node)) return false;
+var stack = [node], steps = 0;
 while (stack.length > 0 && steps < 120) {
 steps++;
 var cur = stack.pop();
- if (cur.nodeType === 3) {
-checkSingleTextNode(cur);
- } else if (
-cur.nodeType === 1 &&
-!isDirectIgnoredSelf(cur) &&
-!isConversationStreamSelf(cur)
- ) {
-var ch = cur.firstChild;
- while (ch) {
-stack.push(ch);
- ch = ch.nextSibling;
- }
+if (cur.nodeType === 3) { checkSingleTextNode(cur); }
+else if (cur.nodeType === 1 && !isDirectIgnoredSelf(cur) && !isModelSelectorScopedSelf(cur) && !isModelPanelPopupSelf(cur) && !isConversationStreamSelf(cur)) {
+for (var ch = cur.firstChild; ch; ch = ch.nextSibling) stack.push(ch);
  }
  }
  }
@@ -3366,6 +2895,9 @@ if (needParent && state.active && !state.destroyed) translateElement(parent, vis
 } catch (err) {}
 reconnectObserver();
 }
+function takeMissedRecords(obs, activeFlag) {
+if (obs && activeFlag) { try { if (typeof obs.takeRecords === 'function') { var r = obs.takeRecords(); if (r && r.length > 0) missedWhilePaused = true; } } catch (e) {} }
+}
 function enterHibernation(markMissed) {
  if (!state.active || state.destroyed) return;
 if (canContinuePendingFlush() && pendingNodes.length > 0) {
@@ -3379,69 +2911,26 @@ missedWhilePaused = true;
 initialScanDraining = false;
 var wasCovered = observing || dirtyProbeActive;
 hibernating = true;
- pendingFullFloatScan = false;
- pendingSidebarRescan = false;
- pendingConvViewRescan = false;
- if (rafId === 'bus') {
-try { var _hb = getHostDomBus(); if (_hb && typeof _hb.cancelTask === 'function') _hb.cancelTask('conv:host-i18n-flush'); } catch (e) {}
- rafId = null;
- } else if (rafId !== null) {
- cancelRafFn(rafId);
- rafId = null;
- }
- if (hoverScanTimer !== null) {
- clearTimeoutFn(hoverScanTimer);
- hoverScanTimer = null;
- }
- if (hoverCardTimer !== null) {
- clearTimeoutFn(hoverCardTimer);
- hoverCardTimer = null;
- }
- pendingHoverCardNode = null;
- if (focusWakeTimer !== null) {
- clearTimeoutFn(focusWakeTimer);
- focusWakeTimer = null;
- }
+cancelPendingWorkTimers();
 var hadOffRetry = clearOffRetryTimers();
 if (markMissed || hadOffRetry || pendingNodes.length > 0 || !wasCovered) missedWhilePaused = true;
  pendingNodes.length = 0;
  pendingNodeSet.clear();
 var hiddenNow = Boolean(doc && doc.hidden === true);
-if (hiddenNow) {
- missedWhilePaused = true;
- disconnectDirtyObserver();
- }
+if (hiddenNow) { missedWhilePaused = true; disconnectDirtyObserver(); }
 if (state.mode !== 'auto' || nowFn() - bootAt > LAYER2B_WINDOW_MS) {
-if (observer && observing) {
- try {
-if (typeof observer.takeRecords === 'function') {
-var recs = observer.takeRecords();
-if (recs && recs.length > 0) missedWhilePaused = true;
- }
- } catch (e) {}
- }
+takeMissedRecords(observer, observing);
  disconnectObserver(true);
-if (!hiddenNow && !missedWhilePaused) {
-armDirtyObserver();
- } else {
- disconnectDirtyObserver();
- }
+if (!hiddenNow && !missedWhilePaused) armDirtyObserver();
+else disconnectDirtyObserver();
  }
  }
 function wakeFromHibernation() {
- if (!state.active || state.destroyed) return;
-if (isPaused()) return;
+if (!state.active || state.destroyed || isPaused()) return;
  hibernating = false;
 var hadProbe = dirtyProbeActive;
- if (dirtyObserver && dirtyProbeActive) {
- try {
-if (typeof dirtyObserver.takeRecords === 'function') {
-var recs = dirtyObserver.takeRecords();
-if (recs && recs.length > 0) missedWhilePaused = true;
- }
- } catch (e) {}
- disconnectDirtyObserver();
- }
+takeMissedRecords(dirtyObserver, dirtyProbeActive);
+disconnectDirtyObserver();
 if (missedWhilePaused || pendingNodes.length > 0 || (!observing && !hadProbe)) {
 missedWhilePaused = false;
  pendingNodes.length = 0;
@@ -3468,15 +2957,17 @@ if (hasAttr(c, 'data-hover-card-popup') || hasAttr(c.firstElementChild, 'data-ho
  return false;
  };
 var scheduleHoverCardNode = function (n) {
-pendingHoverCardNode = n;
+var m = getModelPanelRules();
+if (m && m.queueNode) m.queueNode(pendingHoverCardNodes, n);
+else if (n && n.nodeType === 1 && pendingHoverCardNodes.indexOf(n) === -1 && pendingHoverCardNodes.length < 16) pendingHoverCardNodes.push(n);
 if (hoverCardTimer !== null) clearTimeoutFn(hoverCardTimer);
 hoverCardTimer = setTimeoutFn(function () {
  hoverCardTimer = null;
-var hc = pendingHoverCardNode;
- pendingHoverCardNode = null;
-if (!state.active || state.destroyed || isPaused() || !hc || hc.isConnected === false) return;
-enqueueNode(hc);
-scheduleFlush();
+var list = pendingHoverCardNodes.slice(), scheduled = false;
+pendingHoverCardNodes.length = 0;
+if (!state.active || state.destroyed || isPaused()) return;
+for (var i = 0; i < list.length; i++) if (list[i] && list[i].isConnected !== false) { enqueueNode(list[i]); scheduled = true; }
+if (scheduled) scheduleFlush();
 }, 120);
  };
 var domBusInst = getHostDomBus();
@@ -3564,6 +3055,11 @@ if (!addedNode || addedNode.isConnected === false) continue;
 if (addedNode.nodeType === 3) {
 if (targetBound.blocked || exemptNodes.has(addedNode)) continue;
 } else if (addedNode.nodeType === 1) {
+var addedTag = addedNode.tagName ? String(addedNode.tagName).toUpperCase() : '';
+if (addedTag === 'INPUT' || addedTag === 'TEXTAREA') {
+if (!pausedNow && !targetBound.blocked && targetBound.state !== 3 && !exemptElements.has(addedNode)) enqueueNode(addedNode);
+continue;
+}
 if (exemptElements.has(addedNode) || isChatProseSelf(addedNode) || isDirectIgnoredSelf(addedNode) || isFocusGuard(addedNode)) continue;
 if (isHoverCardPortalOrSelf(addedNode)) {
 if (!pausedNow) scheduleHoverCardNode(addedNode);
