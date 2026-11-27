@@ -1,13 +1,5 @@
-// Obsidian Prism — Omni Native Browser Router, Context Menu & Streaming Workbench Client
-// Second-channel runtime (`window.__agPrismOmni`) + CommonJS factory for deterministic unit tests.
-// Engineering & security guarantees:
-// 1. ZERO custom side-dock DOM or rogue `wcvBrowser` calls: 100% native integration with Antigravity's
-//    resizable, tab-closeable Right Side Panel (`openUrlInBrowserPane` + Redux `sidePanelV2` / `sidePanel`).
-// 2. ZERO hover popups or inline clutter; enhanced actions live in Right-Click (`contextmenu`) menu.
-// 3. Zero-DOM-Mutation bare URL/path activation via CSS Custom Highlight API (`CSS.highlights` + Range)
-//    so React 19 `HostText` nodes are never split or detached (`0` `removeChild`/`insertBefore` crashes),
-//    with automatic `<span>` fallback only in headless test harnesses lacking `CSS.highlights`.
-// 4. 100% alignment with `style.css` tokens (`--ag-cs-*`) and zero-residue re-entrant `destroy() <-> sync()`.
+// Obsidian Prism — Omni Native Browser Router, Context Menu & Streaming Workbench Client (Ch2)
+// Guarantees: 0 custom side-dock, right-click menu in #ag-prism-overlay-portal, CSS.highlights zero-DOM-mutation + span fallback, style.css token alignment & zero-residue destroy()/sync().
 
 (function (root, factory) {
   'use strict';
@@ -1324,7 +1316,7 @@
             ta.style.opacity = '0';
             ta.style.pointerEvents = 'none';
           }
-          D.body?.appendChild?.(ta);
+          (getOverlayPortal() || D.body)?.appendChild?.(ta);
           ta.select?.();
           const ok = Boolean(D.execCommand?.('copy'));
           ta.remove?.();
@@ -1545,7 +1537,7 @@
       });
     }
 
-    // ── Right-Click Optical Context Menu ─────────────────────────────────────
+    // Right-Click Optical Context Menu
     function closeContextMenu() {
       if (activeMenuEl) {
         try { activeMenuEl.remove(); } catch (_) {}
@@ -1578,6 +1570,20 @@
       el.setAttribute('data-antigravity-zh-skip', '1');
       el.setAttribute('data-ag-no-i18n', '');
       return el;
+    }
+
+    function getOverlayPortal() {
+      const b = D?.body || D?.documentElement;
+      if (!b) return null;
+      let p = D.getElementById?.('ag-prism-overlay-portal') || b.querySelector?.('#ag-prism-overlay-portal');
+      if (!p && D.body && typeof D.createElement === 'function') {
+        p = markNoTranslate(D.createElement('div'));
+        p.id = 'ag-prism-overlay-portal';
+        p.setAttribute('data-ag-owned', '1');
+        if (p.style) p.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:9990;contain:layout style';
+        D.body.appendChild(p);
+      }
+      return p || b;
     }
 
     function openContextMenuAt(clientX, clientY, headerLabel, entries) {
@@ -1640,7 +1646,8 @@
 
       activeMenuEl = menu;
       activeMenuItems = itemButtons;
-      (D.body || D.documentElement).appendChild(menu);
+      if (menu.style) { menu.style.pointerEvents = 'auto'; menu.style.contain = 'layout style'; }
+      (getOverlayPortal() || D.body || D.documentElement).appendChild(menu);
 
       const vw = W?.innerWidth || 1280;
       const vh = W?.innerHeight || 800;
@@ -1838,7 +1845,7 @@
       else rootEl.removeAttribute('data-ag-omni-hover-token');
     }
 
-    // ── Event Handlers ───────────────────────────────────────────────────────
+    // Event Handlers
     function evalPointerHoverAt(rawTarget, x, y) {
       if (!enabled || !urlHighlight || (!urlHighlight.size && !pathHighlight?.size)) {
         if (hoverTokenActive) setHoverTokenCursor(false);
@@ -1935,7 +1942,7 @@
       }
 
       // 3. Check zero-DOM-mutation CSS Highlight token at click coordinates
-      if (urlHighlight || pathHighlight) {
+      if ((urlHighlight?.size || pathHighlight?.size) && highlightedParentCount.get(el)) {
         let sel = '';
         try { sel = String(W?.getSelection?.()?.toString?.() || '').trim(); } catch (_) {}
         if (!sel) {
@@ -1979,7 +1986,8 @@
       let selectedText = '';
       try { selectedText = String(W?.getSelection?.()?.toString?.() || '').trim(); } catch (_) {}
 
-      const meta = extractTargetMeta(el, getStrings().omniMermaidDiagram) || hitTestHighlightedToken(ev.clientX, ev.clientY);
+      const canHit = Boolean((urlHighlight?.size || pathHighlight?.size) && highlightedParentCount.get(el));
+      const meta = extractTargetMeta(el, getStrings().omniMermaidDiagram) || (canHit ? hitTestHighlightedToken(ev.clientX, ev.clientY) : null);
       if (!meta) {
         closeContextMenu();
         return;
@@ -2861,7 +2869,7 @@ decorateAuxUnsupportedViews(r);
 }
 }, delay);
 }
-// ── Lifecycle & Zero-Residue Teardown ────────────────────────────────────
+// Lifecycle & Zero-Residue Teardown
 function ensureStyleInjected() {
 if (!D) return;
 let styleEl = D.getElementById?.(STYLE_EL_ID);
@@ -3103,6 +3111,7 @@ D.removeEventListener('mousemove', onDocPointerMove, { passive: true });
 D.removeEventListener('visibilitychange', onWindowBlurOrScroll);
 D.removeEventListener('scroll', onWindowBlurOrScroll, { capture: true, passive: true });
 try { D.getElementById?.(STYLE_EL_ID)?.remove?.(); } catch (_) {}
+if (removeRootAttrs) { const pr = D.getElementById?.('ag-prism-overlay-portal'); if (pr && !pr.children?.length) try { pr.remove(); } catch (_) {} }
 if (D.documentElement) {
 D.documentElement.removeAttribute?.('data-ag-omni-hover-token');
 if (removeRootAttrs) {

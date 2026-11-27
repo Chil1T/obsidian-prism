@@ -1304,6 +1304,17 @@ for (const el of qa(r, HOST_BTN_QUERY)) if (!isThoughtIsolatedNode(el)) set.add(
     }
   }
 
+  const getOverlayPortal = () => {
+    if (!D.body) return null;
+    let p = byId('ag-prism-overlay-portal');
+    if (!p && isFn(D.createElement)) {
+      p = D.createElement('div'); p.id = 'ag-prism-overlay-portal';
+      for (const [k, v] of [['translate', 'no'], ['data-no-translate', 'true'], ['data-ag-no-i18n', '1'], ['data-ag-owned', '1']]) sa(p, k, v);
+      if (p.style) p.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:9990;contain:layout style';
+      D.body.appendChild(p);
+    }
+    return p || D.body;
+  };
   const handledGroupClicks = new WeakSet();
   const runSettingsGroupGlide = (group, prevBtn, nextBtn, prevRectOv = null, nextRectOv = null) => {
     if (!group || !prevBtn || !nextBtn || prevBtn === nextBtn || !isMotionStandardOrUltra() || !isFn(motionEngine?.glideIndicator)) return;
@@ -1313,7 +1324,8 @@ for (const el of qa(r, HOST_BTN_QUERY)) if (!isThoughtIsolatedNode(el)) set.add(
     if (nr && nr.width > 0 && nr.height > 0) {
       for (const [k, v] of [['position', 'fixed'], ['left', `${Math.round(nr.left)}px`], ['top', `${Math.round(nr.top)}px`], ['width', `${Math.round(nr.width)}px`], ['height', `${Math.round(nr.height)}px`], ['border-radius', '6px'], ['background', 'rgba(148, 163, 184, 0.14)'], ['box-shadow', 'inset 0 1px 0 rgba(255, 255, 255, 0.12)'], ['pointer-events', 'none'], ['z-index', '9999']]) sp(pill, k, v);
     }
-    if (D.body) D.body.appendChild(pill);
+    const pHost = getOverlayPortal();
+    if (pHost) pHost.appendChild(pill);
     try { motionEngine.glideIndicator(pill, pr || prevBtn, nr || nextBtn, { durationMs: 220 }); } catch {}
     streamChoreoCtl.scheduleTransient(() => pill.remove(), 240);
   };
@@ -1608,14 +1620,14 @@ const COMP_TIDS = new Set(['agent-input-box', 'input-cancel-button', 'stop-butto
 const COLL_TIDS = new Set(['worked-for-collapsible', 'thinking-collapsible-trigger', 'tool-group-collapsible', 'changed-files-card-header', 'sidecar-iframe', 'sidecar-iframe-slot', 'artifact-view']);
 const COLL_SEL = [...COLL_TIDS].map((t) => `[data-testid="${t}"]`).join(',') + ',pre';
 const TK_SUB_SEL = `${TK_SEL}, ${S_AQO}, [data-testid="queued-messages-card"]`;
+const T_AP = '[data-testid="aux-pane-split"]', T_BGC = '[data-testid="background-task-command"]', T_SP = '[data-testid="step-plan"]', T_TKT = '[data-testid="thinking-collapsible-trigger"]', T_CFH = '[data-testid="changed-files-card-header"]';
+const IN_CONV_PROBE = `${TK_SUB_SEL},${S_RP},${T_BGC},${T_SP},.md-table-host,${COLL_SEL},${HOST_BTN_QUERY},${T_AP}`;
 const classifyDirtySubtree = (el, ia, pCtx = null) => {
 if (!isElementLike(el)) return;
 const df = dirtyFlags, tid = tidOf(el), role = String(ga(el, 'role') || ''), cls = typeof el.className === 'string' ? el.className : String(el.className?.baseVal || ga(el, 'class') || ''), tg = tagU(el);
 const hc = el.firstElementChild !== undefined ? !!el.firstElementChild : !!(el.children?.length > 0);
-const q = (s) => hc && !!qs(el, s);
 if (!tid && !role && !el.id && !cls.includes('agy-') && !cls.includes('surface-') && FAST_PRUNE_LEAF_TAGS.has(tg) && !hc) return;
 if (isHcEl(el) || (!pCtx && cl(el, HC_S))) return;
-if (tid === 'aux-pane-split' || q('[data-testid="aux-pane-split"]')) df.a = true;
 if (tid === 'background-task-command') { if (ia) { df.m = true; dirtyBgCmds.add(el); } return; }
 const aConv = pCtx ? pCtx.inConv : !!cl(el, S_CV);
 const aComp = pCtx ? pCtx.inComp : !!cl(el, S_IB);
@@ -1624,6 +1636,9 @@ const aDlg = pCtx ? pCtx.inDlg : !!cl(el, '[role="dialog"]');
 const aMdl = pCtx ? pCtx.inMdl : !!cl(el, MODEL_PANEL_SEL);
 let tb = false, ipd = false, inSbR = false;
 const ics = tid !== 'conversation-view' && tid !== 'agent-input-box' && !cls.includes('agy-home') && aConv && !aComp;
+const cHit = !ics || aDlg || (hc && !!qs(el, IN_CONV_PROBE));
+const q = (s) => hc && cHit && !!qs(el, s);
+if (tid === 'aux-pane-split' || q(T_AP)) df.a = true;
 const chkDlg = (r) => {
 ipd = true;
 if (r || (ia && (tg === 'H2' || cls.includes('space-y-2') || q('h2, div.space-y-2')))) df.g = true;
@@ -1650,15 +1665,15 @@ if (tid === T_TK || tid === T_QM || tid === T_SQ || tid === T_RP || tid === 'age
 if (role === 'dialog' || aDlg) chkDlg(role === 'dialog');
 else if (tid === 'overview-panel' || cls.includes('agy-overlay')) df.o = true;
 }
-if (ia && q('[data-testid="background-task-command"]')) { df.m = true; dirtyBgCmds.add(el); }
+if (ia && q(T_BGC)) { df.m = true; dirtyBgCmds.add(el); }
 if (ia) {
 if (tg === 'STYLE' || tg === 'IMG') dirtyTurboRoots.add(el);
 else if (hc) {
 if (ics && isFn(el.getElementsByTagName)) { if (el.getElementsByTagName('img').length > 0 || el.getElementsByTagName('style').length > 0) dirtyTurboRoots.add(el); }
-else if (q(`style:not([id]):not([${TS_A}]),img:not([${TI_A}])`)) dirtyTurboRoots.add(el);
+else if (qs(el, `style:not([id]):not([${TS_A}]),img:not([${TI_A}])`)) dirtyTurboRoots.add(el);
 }
 }
-if (tid === 'step-plan' || q('[data-testid="step-plan"]')) df.o = true;
+if (tid === 'step-plan' || q(T_SP)) df.o = true;
 if (cls.includes('md-table-host') || q('.md-table-host')) df.l = true;
 const isTk = tid === 'thinking-collapsible-trigger', isCf = tid === 'changed-files-card-header';
 if (isTk || isCf || tg === 'PRE' || COLL_TIDS.has(tid)) {
@@ -1666,14 +1681,14 @@ df.l = true;
 if (isTk) df.tk = true;
 if (isCf) df.cf = true;
 if (ia) dirtyCollapsibleTargets.add(el);
-} else if (hc) {
+} else if (hc && cHit) {
 const ch = qs(el, COLL_SEL);
 if (ch) {
 df.l = true;
 if (ia) dirtyCollapsibleTargets.add(el);
 const ht = tidOf(ch);
-if (ht === 'thinking-collapsible-trigger' || qs(el, '[data-testid="thinking-collapsible-trigger"]')) df.tk = true;
-if (ht === 'changed-files-card-header' || qs(el, '[data-testid="changed-files-card-header"]')) df.cf = true;
+if (ht === 'thinking-collapsible-trigger' || qs(el, T_TKT)) df.tk = true;
+if (ht === 'changed-files-card-header' || qs(el, T_CFH)) df.cf = true;
 }
 }
 if (!ipd && !inSbR) {
@@ -2435,7 +2450,7 @@ qa(D, '.agy-overlay,.agy-fastpick,[data-testid="context-menu-popup"],[data-testi
 for (const s of 'placeholder|orch-active|model-overlay|aux-dual|overview-shell|prism-mirror|prism-reflect|settings-dlg|settings-nav|nav-active|conv-seat|conv-ripple-host|vp-wrap|home-sheet|row-running|menu-open|auto-unfolded|outer-open|caustic|fiber-camp|pane-camp|sonar|stage-glide|liftoff-bubble|thought-streaming|spark-streaming|prism-cv|code-folded|bg-cmd-wrap|input-layer|hdr-open|rich-pre|glide-item|crab-anchor|bleed'.split('|')) qa(D, `[data-ag-cs-${s}]`).forEach((e) => ra(e, 'data-ag-cs-' + s));
 for (const a of 'data-has-sep,data-pv-warn,data-ag-sp-running'.split(',')) qa(D, `[${a}]`).forEach((e) => ra(e, a));
 try { getDomBus()?.dispose?.(D, W); getMascotHop()?.dispose?.(D); for (const k of ['__agPrismFontCustomizer', '__agPrismReducedMotionGuard']) (W[k] || GT[k])?.dispose?.(D); } catch {}
-qa(D, '#ag-prism-mascot-hop-style,.ag-prism-mascot-hop-layer,#ag-prism-custom-fonts-style,#ag-prism-settings-ext-beta4-css,#ag-prism-settings-v101-css,#ag-prism-studio-v101-css,#ag-prism-omni-css,#ag-prism-motion-off-css,#ag-prism-periodic-stub-css,#ag-prism-periodic-picker-css,#ag-prism-periodic-picker-root,.ag-pp-hold-ring,.ag-pp-mini-keycap,#ag-prism-wallpaper-root,#ag-prism-wallpaper-css,#ag-prism-suggester-css,.ag-omni-dock,.ag-omni-menu,.ag-prism-omni-menu,.ag-prism-omni-pane,.ag-cs-ctx-menu,.ag-cs-ctx-toast,.ag-cs-sb-more-wrap,[data-ag-prism-omni-owned="1"],.ag-cs-home-panel,.ag-cs-home-panel-seat,.ag-cs-liftoff-veil,.ag-cs-sidebar-glide-pill,.ag-cs-pill-glide,.ag-cs-conv-aura-host,.ag-cs-conv-glow,.ag-cs-prism-rim-cv,.ag-cs-code-fold-btn,.ag-cs-nav-outline-popover,.ag-cs-model-glyph,.ag-cs-panel-row-glyph,[data-testid="orchestrator-effort-bar"],.ag-cs-thinking-spark,.ag-cs-orbital-backdrop,.ag-cs-perf-backdrop,.ag-v2-habitat-prop,#' + SETTINGS_SEC_ID).forEach((e) => e.remove());
+qa(D, '#ag-prism-overlay-portal,#ag-prism-mascot-hop-style,.ag-prism-mascot-hop-layer,#ag-prism-custom-fonts-style,#ag-prism-settings-ext-beta4-css,#ag-prism-settings-v101-css,#ag-prism-studio-v101-css,#ag-prism-omni-css,#ag-prism-motion-off-css,#ag-prism-periodic-stub-css,#ag-prism-periodic-picker-css,#ag-prism-periodic-picker-root,.ag-pp-hold-ring,.ag-pp-mini-keycap,#ag-prism-wallpaper-root,#ag-prism-wallpaper-css,#ag-prism-suggester-css,.ag-omni-dock,.ag-omni-menu,.ag-prism-omni-menu,.ag-prism-omni-pane,.ag-cs-ctx-menu,.ag-cs-ctx-toast,.ag-cs-sb-more-wrap,[data-ag-prism-omni-owned="1"],.ag-cs-home-panel,.ag-cs-home-panel-seat,.ag-cs-liftoff-veil,.ag-cs-sidebar-glide-pill,.ag-cs-pill-glide,.ag-cs-conv-aura-host,.ag-cs-conv-glow,.ag-cs-prism-rim-cv,.ag-cs-code-fold-btn,.ag-cs-nav-outline-popover,.ag-cs-model-glyph,.ag-cs-panel-row-glyph,[data-testid="orchestrator-effort-bar"],.ag-cs-thinking-spark,.ag-cs-orbital-backdrop,.ag-cs-perf-backdrop,.ag-v2-habitat-prop,#' + SETTINGS_SEC_ID).forEach((e) => e.remove());
 const html = de();
 if (html) {
 ra(html, 'data-ag-perf-busy');
