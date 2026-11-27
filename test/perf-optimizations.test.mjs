@@ -157,13 +157,18 @@ test('perf guard 3: conv-aura O(1) indicator cache immediately exits running whe
   assert.equal(api.isConvRunning(), false, 'In-place data-testid mutation must invalidate O(1) indicator cache immediately');
   assert.equal(qsaCalls, 2);
 
-  // Restore stop-button then hide via CSS class (checkVisibility -> false) -> must exit running!
+  // Restore stop-button then hide via zero-reflow attrs (aria-hidden / data-ag-offscreen) -> exits without checkVisibility!
   btnTestId = 'stop-button';
   now += 250;
   assert.equal(api.isConvRunning(), true);
   btnVisible = false;
   now += 250;
-  assert.equal(api.isConvRunning(), false, 'CSS-hidden indicator must invalidate O(1) indicator cache immediately');
+  assert.equal(api.isConvRunning(), true, 'Hot path must skip synchronous checkVisibility() reflow by default');
+  assert.equal(api.isConvRunning({ syncVis: true }), false, 'Explicit syncVis check must honor CSS-hidden checkVisibility()');
+  btnVisible = true;
+  stopBtn.hidden = true;
+  now += 250;
+  assert.equal(api.isConvRunning(), false, 'Zero-reflow hidden attribute must invalidate O(1) indicator cache immediately');
 });
 
 test('perf guard 4: host-workbench-enhancer pruneUnsubs clears WeakSet so detached-then-reattached navRail rebinds cleanly', () => {
@@ -774,15 +779,17 @@ test('perf guard 15: conv-aura prime+sync(true) avoids post-write checkVisibilit
     runGuardedMut: (fn) => fn(),
   });
   ctl.prime();
-  assert.equal(checkVisCalls, 1, 'prime() measures visibility once before DOM writes');
+  assert.equal(checkVisCalls, 0, 'prime() must avoid forced-reflow checkVisibility() on hot path');
   ctl.sync(true);
-  assert.equal(checkVisCalls, 1, 'sync(true) must reuse primed cache without redundant checkVisibility reflow');
+  assert.equal(checkVisCalls, 0, 'sync(true) must reuse primed WeakMap cache with 0 checkVisibility reflow');
   tNow += 300;
   ctl.advancePhase(tNow, true);
-  assert.equal(checkVisCalls, 1, 'drawNow anim loop must skip synchronous checkVisibility within 2000ms while indicator matches');
+  assert.equal(checkVisCalls, 0, 'drawNow anim loop must stay zero-reflow (0 checkVisibility)');
   tNow += 2100;
   ctl.advancePhase(tNow, true);
-  assert.equal(checkVisCalls, 2, 'drawNow anim loop performs full checkVisibility safety check after 2000ms');
+  assert.equal(checkVisCalls, 0, 'drawNow anim loop stays zero-reflow after 2000ms without forced checkVisibility');
+  assert.equal(sbAura.__agPrismConvAura.isConvRunning({ syncVis: true }, convHost), true);
+  assert.equal(checkVisCalls, 1, 'Explicit { syncVis: true } still performs synchronous checkVisibility() on demand');
 
   // 2) stream-choreography convEntrySeq cancels stale frame2Fn when fn() synchronously calls cancelDeferredHydration
   const scSrc = fs.readFileSync(path.join(ROOT, 'stream-choreography.js'), 'utf8');
@@ -2167,4 +2174,223 @@ test('perf guard 22: home-ripple-host coalesces burst ResizeObserver ticks via r
   assert.ok(fnSlice.includes("ga(btn, 'data-tooltip-id')"), 'bSig must include data-tooltip-id');
   assert.ok(fnSlice.includes("ga(btn, 'role')"), 'bSig must include role');
   assert.ok(fnSlice.includes('rawSvgCls'), 'bSig must include original <svg> className to prevent stale copy->check->copy hits');
+});
+
+test('conv-aura multi-scope WeakMap isolation, zero-reflow isVisibleAuraNode, and 0.4x/0.5x antialias:false glow scaling', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'conv-aura.js'), 'utf8');
+  let now = 2000;
+  let checkVisCalls = 0;
+  let docQsa = 0;
+  let scopeAQsa = 0;
+  let scopeBQsa = 0;
+
+  let stopHidden = false;
+  let stopAriaHidden = null;
+  let stopOffscreen = null;
+  let stopSyncVisible = false;
+  let skippedByBus = false;
+
+  const stopBtn = {
+    nodeType: 1,
+    isConnected: true,
+    get hidden() { return stopHidden; },
+    style: {},
+    getAttribute: (k) => (k === 'aria-hidden' ? stopAriaHidden : k === 'data-ag-offscreen' ? stopOffscreen : null),
+    matches: (sel) => sel.includes('stop-button'),
+    closest: (sel) => (sel.includes('conversation-view') ? scopeA : null),
+    checkVisibility: () => { checkVisCalls++; return stopSyncVisible; },
+  };
+  const decCard = {
+    nodeType: 1,
+    isConnected: true,
+    hidden: false,
+    style: {},
+    getAttribute: () => null,
+    matches: (sel) => sel.includes('interaction-takeover-card'),
+    closest: (sel) => (sel.includes('conversation-view') ? scopeB : null),
+    checkVisibility: () => { checkVisCalls++; return true; },
+  };
+
+  const scopeA = {
+    nodeType: 1,
+    isConnected: true,
+    clientWidth: 1600,
+    clientHeight: 1000,
+    parentElement: null,
+    firstChild: null,
+    insertBefore() {},
+    contains: (n) => n === stopBtn,
+    matches: (s) => s.includes('conversation-view'),
+    closest: () => null,
+    querySelector: () => null,
+    querySelectorAll(sel) {
+      scopeAQsa++;
+      return sel.includes('stop-button') ? [stopBtn] : [];
+    },
+  };
+  const scopeB = {
+    nodeType: 1,
+    isConnected: true,
+    clientWidth: 1600,
+    clientHeight: 1000,
+    parentElement: null,
+    firstChild: null,
+    insertBefore() {},
+    contains: (n) => n === decCard,
+    matches: (s) => s.includes('conversation-view'),
+    closest: () => null,
+    querySelector: () => null,
+    querySelectorAll(sel) {
+      scopeBQsa++;
+      return sel.includes('interaction-takeover-card') ? [decCard] : [];
+    },
+  };
+  const seatParent = {
+    nodeType: 1,
+    isConnected: true,
+    clientWidth: 1600,
+    clientHeight: 1000,
+    firstChild: scopeA,
+    insertBefore() {},
+  };
+  scopeA.parentElement = seatParent;
+  scopeB.parentElement = seatParent;
+
+  let perfMode = 'quality';
+  const htmlEl = {
+    dataset: {},
+    getAttribute: (k) => (k === 'data-ag-cs-perf-mode' ? perfMode : k === 'data-ag-cs-motion' ? 'ultra' : null),
+  };
+  const fakeDoc = {
+    hidden: false,
+    documentElement: htmlEl,
+    activeElement: null,
+    querySelector: () => null,
+    querySelectorAll(sel) {
+      if (sel.includes('conversation-view')) return [scopeA, scopeB];
+      docQsa++;
+      if (sel.includes('stop-button')) return [stopBtn];
+      if (sel.includes('interaction-takeover-card')) return [decCard];
+      return [];
+    },
+    createElement: (tag) => ({
+      tagName: tag.toUpperCase(),
+      className: '',
+      width: 0,
+      height: 0,
+      isConnected: true,
+      style: { setProperty() {} },
+      setAttribute() {},
+      getAttribute: () => null,
+      hasAttribute: () => false,
+      removeAttribute() {},
+      appendChild() {},
+      remove() {},
+      addEventListener() {},
+      removeEventListener() {},
+    }),
+    addEventListener() {},
+    removeEventListener() {},
+  };
+
+  const mountedOpts = [];
+  const resizeCalls = [];
+  const sb = {
+    window: null,
+    document: fakeDoc,
+    performance: { now: () => now },
+    WeakMap, WeakSet, Map, Set, Array, Object, Math, Number, String, Boolean,
+    setTimeout: () => 1,
+    clearTimeout() {},
+    __agDomBus: { isSkipped: (el) => el === stopBtn && skippedByBus },
+    __agPrismRippleWorker: {
+      mountManagedGlow(opts) {
+        mountedOpts.push(opts);
+        return {
+          mode: 'worker-webgl2',
+          resize(w, h, dpr) { resizeCalls.push({ w, h, dpr }); },
+          getBufferSize() { return { width: 800, height: 160 }; },
+          draw() {},
+          drawStaticSnapshot() {},
+          clear() {},
+          invalidate() {},
+          setPaused() {},
+          dispose() {},
+        };
+      },
+    },
+  };
+  sb.window = sb;
+  sb.globalThis = sb;
+  vm.runInNewContext(src, sb);
+
+  const api = sb.__agPrismConvAura;
+
+  // 1) Multi-scope WeakMap isolation: alternating document / scopeA / scopeB must never thrash each other's cache
+  assert.equal(api.isConvRunning(false, scopeA), true);
+  assert.equal(api.isConvRunning(false, scopeB), false);
+  assert.equal(api.isConvRunning(false, fakeDoc), true);
+  assert.equal(api.isAwaitingDecision(false, scopeA), false);
+  assert.equal(api.isAwaitingDecision(false, scopeB), true);
+  assert.equal(api.isAwaitingDecision(false, fakeDoc), true);
+  const qSnap = { scopeAQsa, scopeBQsa, docQsa };
+
+  now += 40;
+  for (let i = 0; i < 6; i++) {
+    assert.equal(api.isConvRunning(false, scopeA), true);
+    assert.equal(api.isConvRunning(false, scopeB), false);
+    assert.equal(api.isConvRunning(false, fakeDoc), true);
+    assert.equal(api.isAwaitingDecision(false, scopeA), false);
+    assert.equal(api.isAwaitingDecision(false, scopeB), true);
+    assert.equal(api.isAwaitingDecision(false, fakeDoc), true);
+  }
+  assert.deepEqual({ scopeAQsa, scopeBQsa, docQsa }, qSnap, 'WeakMap per-scope cache must avoid cross-scope thrashing');
+  assert.equal(checkVisCalls, 0, 'Hot-path isConvRunning / isAwaitingDecision must execute 0 checkVisibility() reflows');
+
+  // 2) Zero-reflow visibility checks (aria-hidden / data-ag-offscreen / domBus.isSkipped) & explicit syncVis opt-in
+  now += 250;
+  stopAriaHidden = 'true';
+  assert.equal(api.isConvRunning(false, scopeA), false, 'aria-hidden="true" must be detected with 0 reflow');
+  stopAriaHidden = null;
+  now += 250;
+  stopOffscreen = '1';
+  assert.equal(api.isConvRunning(false, scopeA), false, 'data-ag-offscreen="1" must be detected with 0 reflow');
+  stopOffscreen = null;
+  now += 250;
+  skippedByBus = true;
+  assert.equal(api.isConvRunning(false, scopeA), false, 'domBus.isSkipped must be respected with 0 reflow');
+  skippedByBus = false;
+  assert.equal(checkVisCalls, 0, 'All zero-reflow visibility checks must keep checkVisibility() calls at 0');
+
+  now += 250;
+  assert.equal(api.isConvRunning({ syncVis: true }, scopeA), false, 'Explicit { syncVis: true } must consult checkVisibility()');
+  assert.ok(checkVisCalls >= 1, 'Explicit { syncVis: true } must invoke checkVisibility()');
+
+  // 3) ag-cs-conv-glow 0.5x (quality) & 0.4x (performance) downscaled backing + antialias:false
+  const ctl = api.createConvAuraController({
+    isDestroyed: () => false,
+    isHomeRippleEnabled: () => true,
+    isMotionStandardOrUltra: () => true,
+    isDarkTheme: () => true,
+    getAmbientIntensity: () => 1,
+    getSpectrumMode: () => 'default',
+    rippleCore: { mountBrandHorizonGlow: () => ({ mode: 'none' }) },
+    setAttrIfChanged() {},
+    runGuardedMut: (fn) => fn(),
+  });
+  try {
+    ctl.sync(false);
+    assert.equal(mountedOpts.length, 1);
+    assert.equal(mountedOpts[0].antialias, false, 'ag-cs-conv-glow must disable MSAA (antialias: false)');
+    assert.deepEqual(resizeCalls[0], { w: 1600, h: 320, dpr: 0.5 }, 'Quality/balanced conv-glow must render at 0.5x scale');
+
+    // Switch to performance mode -> 0.4x effective backing (w*0.8 at 0.5 dpr => 640x128)
+    perfMode = 'performance';
+    ctl.getInstance().relayout();
+    const lastR = resizeCalls[resizeCalls.length - 1];
+    assert.equal(lastR.w * lastR.dpr, 640, 'Performance mode must scale backing width to 0.4x (1600 * 0.4 = 640)');
+    assert.equal(lastR.h * lastR.dpr, 128, 'Performance mode must scale backing height to 0.4x (320 * 0.4 = 128)');
+  } finally {
+    ctl.unmount();
+  }
 });

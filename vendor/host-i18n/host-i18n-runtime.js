@@ -2215,7 +2215,6 @@
  dirtyObserver.observe(doc.documentElement, {
  childList: true,
  subtree: true,
- characterData: true,
  });
  dirtyProbeActive = true;
  } catch (e) {
@@ -3348,8 +3347,7 @@ stack.push([child, depth + 1]);
  return false;
  }
 function runHoverTargetScan(target, preBound) {
-if (!state.active || state.destroyed || isPaused() || !target || target.nodeType !== 1) return;
-if (target.isConnected === false || exemptElements.has(target)) return;
+if (!state.active || state.destroyed || isPaused() || !target || target.nodeType !== 1 || target.isConnected === false || exemptElements.has(target)) return;
 if (isDialogOrPortalWrappingDialog(target) || isWorkbenchOrRoot(target, doc)) return;
 var now = nowFn(), targetCtx = preBound || getHoverBoundary(target, now);
 if (targetCtx.blocked) return;
@@ -3357,17 +3355,17 @@ var scanTarget = getChildElementCount(target) <= 12, parent = target.parentEleme
 if (parent && !isWorkbenchOrRoot(parent, doc) && !isDialogOrPortalWrappingDialog(parent) && getChildElementCount(parent) <= 8) {
 var pCtx = getHoverBoundary(parent, now);
 if (!pCtx.blocked) parentCtx = pCtx;
- }
+}
 if (!scanTarget && !parentCtx) return;
 var needTarget = scanTarget && hasHoverCandidateWork(target, true), needParent = !!parentCtx && hasHoverCandidateWork(parent, true);
- var visitedSet = new WeakSet();
- disconnectObserver();
- try {
+var visitedSet = new WeakSet();
+disconnectObserver();
+try {
 if (needTarget) translateElement(target, visitedSet, targetCtx, null);
 if (needParent && state.active && !state.destroyed) translateElement(parent, visitedSet, parentCtx, null);
 } catch (err) {}
- reconnectObserver();
- }
+reconnectObserver();
+}
 function enterHibernation(markMissed) {
  if (!state.active || state.destroyed) return;
 if (canContinuePendingFlush() && pendingNodes.length > 0) {
@@ -3640,7 +3638,7 @@ if (!pausedNow && pendingNodes.length > 0) scheduleFlush();
 if (domBusInst && typeof domBusInst.subscribe === 'function') {
 observer = {
 observe: function () {
-if (!busDomUnsub) busDomUnsub = domBusInst.subscribe('host-i18n-dom', onDomMutations, { doc: doc, win: win, priority: 'low', observeOptions: { childList: true, subtree: true, characterData: true } });
+if (!busDomUnsub) busDomUnsub = domBusInst.subscribe('host-i18n-dom', onDomMutations, { doc: doc, win: win, priority: 'low', observeOptions: { childList: true, subtree: true } });
  },
 disconnect: function (hard) {
 if (hard && busDomUnsub) { try { busDomUnsub(); } catch (e) {} busDomUnsub = null; }
@@ -3741,30 +3739,26 @@ layer2bTimers.push(tid);
 })(checkDelays[d]);
  }
  }
-// 单趟 O(1) 判定侧栏点击目标（off 模式或非侧栏区域秒退，避免 300Hz 点击卡顿）
 function classifySidebarClickTarget(target) {
-var inRow = false;
-var inSidebar = false;
-var cur = target;
-for (var depth = 0; cur && cur.nodeType === 1 && depth < 16; depth++) {
+var inRow = false, inSidebar = false, cur = target;
+for (var d = 0; cur && cur.nodeType === 1 && d < 16; d++, cur = cur.parentElement) {
 if (cur === doc.body || cur === doc.documentElement) break;
-if (isPrismOwnedSelf(cur) || isExternalPluginOwnedSelf(cur)) {
-return { inRow: false, inSidebar: false };
-}
+if (isPrismOwnedSelf(cur) || isExternalPluginOwnedSelf(cur)) return { inRow: false, inSidebar: false };
 var tid = getAttr(cur, 'data-testid');
-if (tid === 'conversation-view' || tid === 'agent-input-box') {
-return { inRow: false, inSidebar: false };
-}
-if (tid === 'conversation-row-sidebar') {
-inRow = true;
-inSidebar = true;
-} else if (tid === 'conversation-list-sidebar') {
-inSidebar = true;
-break;
-}
-cur = cur.parentElement;
+if (tid === 'conversation-view' || tid === 'agent-input-box') return { inRow: false, inSidebar: false };
+if (tid === 'conversation-row-sidebar') { inRow = inSidebar = true; }
+else if (tid === 'conversation-list-sidebar') { inSidebar = true; break; }
 }
 return { inRow: inRow, inSidebar: inSidebar };
+}
+var H_TAGS = { BUTTON: 1, A: 1, SUMMARY: 1, LABEL: 1, SELECT: 1, INPUT: 1 };
+var H_ROLES = { button: 1, menuitem: 1, tab: 1, option: 1, switch: 1, combobox: 1, tooltip: 1, menu: 1, listbox: 1, treeitem: 1 };
+var H_ATTRS = 'title|aria-label|aria-describedby|aria-controls|aria-haspopup|aria-expanded|data-tooltip-id|data-tooltip-content|data-state|data-radix-collection-item|data-base-ui-tooltip-trigger|data-floating-ui-portal|data-base-ui-portal|data-radix-popper-content-wrapper'.split('|');
+function isHoverTriggerNode(el) {
+if (!el || el.nodeType !== 1) return false;
+if (H_TAGS[String(el.tagName || '').toUpperCase()] || H_ROLES[getAttr(el, 'role')]) return true;
+for (var i = 0; i < H_ATTRS.length; i++) if (hasAttr(el, H_ATTRS[i])) return true;
+return false;
 }
 // Hover, ContextMenu & Sidebar Click targeted floating/conversation rescan
 hoverHandler = function (e) {
@@ -3796,6 +3790,7 @@ pendingFullFloatScan = true;
 } else if (evType === 'pointerenter') {
 var tg = String(target.tagName || '').toUpperCase();
 if (IGNORED_TAGS[tg] || tg === 'PATH' || tg === 'CIRCLE' || tg === 'RECT' || tg === 'LINE' || tg === 'POLYLINE' || tg === 'POLYGON' || tg === 'ELLIPSE' || tg === 'G' || tg === 'DEFS' || tg === 'USE' || tg === 'STOP') return;
+if (!isHoverTriggerNode(target) && !isHoverTriggerNode(target.parentElement)) return;
 if (exemptElements.has(target) || hasAttr(target, 'data-ag-owned') || hasAttr(target, 'data-ag-no-i18n') || isDialogOrPortalWrappingDialog(target)) return;
 if (target.closest?.(SIDEBAR_USER_SEL + ',' + SIDEBAR_LIST_SEL + ',[data-testid="sidebar-split"]>div:first-child,[data-hover-card-popup]')) return;
 hoverBound = getHoverBoundary(target, now);
@@ -3822,18 +3817,10 @@ var doConvView = pendingConvViewRescan;
 pendingSidebarRescan = false;
 pendingConvViewRescan = false;
 scanFloatingContainers(doFull, target);
-if (doSidebar && state.active && !state.destroyed && !isPaused()) {
-disconnectObserver();
-try {
-scanSidebarChrome();
-} catch (err) {}
-reconnectObserver();
-}
+if (doSidebar && state.active && !state.destroyed && !isPaused()) { disconnectObserver(); try { scanSidebarChrome(); } catch (err) {} reconnectObserver(); }
 if (doConvView && state.active && !state.destroyed && !isPaused() && typeof doc.querySelectorAll === 'function') {
 var convViews = doc.querySelectorAll('[data-testid="conversation-view"]');
-for (var ci = 0; ci < convViews.length; ci++) {
-enqueueNode(convViews[ci]);
-}
+for (var ci = 0; ci < convViews.length; ci++) enqueueNode(convViews[ci]);
 if (convViews.length > 0) scheduleFlush();
 }
 }, delay);
@@ -3842,36 +3829,21 @@ if (typeof doc.addEventListener === 'function') {
 doc.addEventListener('pointerenter', hoverHandler, { capture: true, passive: true });
 doc.addEventListener('contextmenu', hoverHandler, { capture: true, passive: true });
 doc.addEventListener('click', hoverHandler, { capture: true, passive: true });
-visibilityHandler = function () {
- if (!state.active || state.destroyed) return;
- if (isPaused()) {
-enterHibernation();
- } else {
-wakeFromHibernation();
- }
- };
+visibilityHandler = function () { if (!state.active || state.destroyed) return; if (isPaused()) enterHibernation(); else wakeFromHibernation(); };
 doc.addEventListener('visibilitychange', visibilityHandler);
- }
+}
 if (win && typeof win.addEventListener === 'function') {
-blurHandler = function () {
-pausedByWindowBlur = true;
-enterHibernation();
- };
+blurHandler = function () { pausedByWindowBlur = true; enterHibernation(); };
 focusHandler = function () {
- pausedByWindowBlur = false;
-if (!isPaused()) {
-wakeFromHibernation();
-} else if (isWinBlurAttrSet() && focusWakeTimer === null) {
-// Allow companion runtime's focus handler to clear data-ag-cs-win-blur in the same turn
-focusWakeTimer = setTimeoutFn(function () {
- focusWakeTimer = null;
+pausedByWindowBlur = false;
 if (!isPaused()) wakeFromHibernation();
-}, 0);
- }
- };
+else if (isWinBlurAttrSet() && focusWakeTimer === null) {
+focusWakeTimer = setTimeoutFn(function () { focusWakeTimer = null; if (!isPaused()) wakeFromHibernation(); }, 0);
+}
+};
 win.addEventListener('blur', blurHandler);
 win.addEventListener('focus', focusHandler);
- }
+}
  }
 function boot(targetMode) {
 mode = targetMode === 'on' || targetMode === 'off' ? targetMode : 'auto';

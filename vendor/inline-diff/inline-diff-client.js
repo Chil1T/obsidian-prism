@@ -574,13 +574,30 @@ stats.inlineDiffToggleCount++;return true;
 }
 
 function resolveBadge(t){if(!t?.closest)return null;const d=cl(t,S_CNT);if(d&&!cl(d,S_CHG))return d;const b=qs(cl(t,'[data-ag-diff-chip="1"]'),S_CNT);return b&&!cl(b,S_CHG)?b:cl(t,_C+'box')?._agDiffBadge||null;}
+function findPrefetchBadge(t){
+if(!isEl(t))return null;
+let cur=t,hit=null;
+for(let i=0;i<4&&cur;i++,cur=cur.parentElement){
+if(cur.classList?.contains?.(P+'box'))return null;
+if(ga(cur,'data-testid')==='diff-line-count'){hit=cur;break;}
+if(ga(cur,'data-ag-diff-chip')==='1'||ga(cur,'data-ag-diff-chip-file')==='1'||tagU(cur)==='BUTTON'){
+const b=qs(cur,S_CNT);
+if(b){hit=b;break;}
+}
+}
+if(!hit||cl(hit,S_CHG)||!cl(hit,'[data-testid="conversation-view"],[data-testid="tool-call-row"],[data-ag-tool-row="1"],[data-ag-diff-chip="1"]'))return null;
+return hit;
+}
+function findPrefetchRow(badgeEl){
+return cl(badgeEl,'[data-testid="tool-call-row"], [data-ag-tool-row="1"], [data-ag-diff-chip="1"], button, [role="button"]')||badgeEl?.parentElement||null;
+}
 const clearHover=()=>{if(hoverTmr){clearTimeout(hoverTmr);hoverTmr=0;}};
 const onClick=(ev)=>{try{const t=ev?.target;if(isDead()||!t?.closest)return;if(ctxMenu&&!cl(t,'.ag-cs-diff-ctx-menu'))closeCtxMenu();if(!allowNative&&!cl(t,_C+'box')){const db=resolveBadge(t);if(db){if(toggleInlineDiffPreview(db))stopEv(ev);return;}}if(cl(t,'button, [role="button"]')){if(syncTmr)clearTimeout(syncTmr);syncTmr=setTimeout(()=>{syncTmr=0;if(!isDead())syncChips();},24);}}catch{}};
 const onPtrDown=(ev)=>{try{if(!isDead()&&ctxMenu&&(!ev?.target?.closest||!cl(ev.target,'.ag-cs-diff-ctx-menu')))closeCtxMenu();}catch{}};
 const onCtxMenu=(ev)=>{try{if(isDead()||!ev?.target?.closest)return;const t=ev.target,db=resolveBadge(t);if(!db||ev.shiftKey){closeCtxMenu();return;}if(cl(t,_C+'box')&&String(win?.getSelection?.()||'').trim().length>0){closeCtxMenu();return;}if(openCtxMenu(ev,db))stopEv(ev);}catch{}};
 const onKeyDown=(ev)=>{try{if(!isDead()&&ev?.key==='Escape'&&ctxMenu&&closeCtxMenu())stopEv(ev);}catch{}};
-const onPtrOver=(ev)=>{try{const t=ev?.target;if(isDead()||!t?.closest)return;if(!isFn(win?.__agPrismInlineDiffCall)){clearHover();return;}const hit=cl(t,`${_C}box, ${S_CNT}, [data-ag-diff-chip="1"]`);if(!hit||hit.classList?.contains?.(P+'box')||cl(hit,S_CHG)){clearHover();return;}const db=ga(hit,'data-testid')==='diff-line-count'?hit:qs(hit,S_CNT);if(!db||ga(db,'data-ag-inline-diff-open')==='1'){clearHover();return;}clearHover();hoverTmr=setTimeout(()=>{hoverTmr=0;if(isDead()||db.isConnected===false)return;const p=extractInlineDiffPayload(db,findHostRow(db),win);if(p.uri&&!p.lines.length)requestDaemon(p.uri,{additions:p.additions||0,deletions:p.deletions||0,isCreated:Boolean(p.isCreated)},false);},110);}catch{}};
-const onPtrOut=(ev)=>{try{if(hoverTmr&&(!ev?.relatedTarget?.closest||!resolveBadge(ev.relatedTarget)))clearHover();}catch{}};
+const onPtrOver=(ev)=>{try{const t=ev?.target;if(isDead()||!t)return;if(!isFn(win?.__agPrismInlineDiffCall)){clearHover();return;}const db=findPrefetchBadge(t);if(!db||ga(db,'data-ag-inline-diff-open')==='1'){clearHover();return;}clearHover();hoverTmr=setTimeout(()=>{hoverTmr=0;if(isDead()||db.isConnected===false)return;const p=extractInlineDiffPayload(db,findPrefetchRow(db),win);if(p.uri&&!p.lines.length)requestDaemon(p.uri,{additions:p.additions||0,deletions:p.deletions||0,isCreated:Boolean(p.isCreated)},false);},110);}catch{}};
+const onPtrOut=(ev)=>{try{if(hoverTmr&&!findPrefetchBadge(ev?.relatedTarget))clearHover();}catch{}};
 const onScroll=(ev)=>{try{if(ctxMenu&&!(ev?.target&&ctxMenu.contains?.(ev.target)))closeCtxMenu();}catch{}};
 const onBlur=()=>{try{if(ctxMenu)closeCtxMenu();}catch{}};
 const onBus=(ev)=>{try{if(ev?.detail?.source!=='inline-diff')closeCtxMenu();}catch{}};

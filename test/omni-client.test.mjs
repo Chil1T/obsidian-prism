@@ -1569,3 +1569,125 @@ test('omni-client.js has zero persist:ag-prism-omni or custom dock creation, ali
     env.window.__agPrismOmni.destroy();
   }
 });
+
+// ── 8. domBus Zero characterData, 6ms Time-Sliced Incremental Queue, and Pointer >=3px / Range-Rect Cache ─
+test('omni-client omits domBus characterData:true, time-slices scheduleIncrementalScan at 6ms, and caches pointer >=3px jitter + last hit Range rect', async () => {
+  const env = createFakeDomEnvironment({ enableCssHighlights: true });
+  const { window, document, FakeEvent, setCaretHit } = env;
+  mountMockHostRoot(document, { withBrowserCtx: true, withV2: true });
+
+  const domBusSubs = [];
+  let domBusCallback = null;
+  window.__agDomBus = {
+    subscribe(id, cb, opts) {
+      domBusSubs.push({ id, opts });
+      if (id === 'omni-dom') domBusCallback = cb;
+      return () => {};
+    },
+  };
+
+  // Provide Range.getClientRects for Range rect caching verification
+  const origCreateRange = document.createRange.bind(document);
+  document.createRange = () => {
+    const r = origCreateRange();
+    r.getClientRects = () => [{ left: 70, right: 190, top: 12, bottom: 28, width: 120, height: 16 }];
+    return r;
+  };
+
+  let caretCalls = 0;
+  const origCaret = document.caretRangeFromPoint.bind(document);
+  document.caretRangeFromPoint = (x, y) => {
+    caretCalls++;
+    return origCaret(x, y);
+  };
+
+  let rafSeq = 1;
+  const rafs = [];
+  window.requestAnimationFrame = (cb) => {
+    const id = rafSeq++;
+    rafs.push(cb);
+    return id;
+  };
+  window.cancelAnimationFrame = () => {};
+
+  const resp = document.createElement('div');
+  resp.setAttribute('data-testid', 'agent-response');
+  const hlPara = document.createElement('p');
+  const hlText = document.createTextNode('Visit https://cache-hit.example.com/guide now');
+  hlPara.appendChild(hlText);
+  resp.appendChild(hlPara);
+  document.body.appendChild(resp);
+
+  const client = omniMod.createOmniClient({ window, document });
+  try {
+    client.sync({ omniModule: 'on', linkTarget: 'builtin' }, { baseUrl: 'http://127.0.0.1:47000', token: 'tok_slice' });
+
+    // 1) domBus subscription omits global characterData:true
+    const omniSub = domBusSubs.find((s) => s.id === 'omni-dom');
+    assert.ok(omniSub, 'omni-client must subscribe omni-dom via __agDomBus');
+    assert.notEqual(omniSub.opts?.observeOptions?.characterData, true, 'omni-dom must not enable global characterData:true on domBus');
+    assert.notEqual(omniSub.opts?.characterData, true);
+
+    // 2) Pointer >=3px debounce + last-hit Range rect cache avoids redundant caretRangeFromPoint calls
+    setCaretHit(hlText, 10);
+    caretCalls = 0;
+    hlPara.dispatchEvent(new FakeEvent('mousemove', { bubbles: true, clientX: 80, clientY: 20 }));
+    while (rafs.length) rafs.shift()(16);
+    assert.equal(caretCalls, 1, 'First pointer hit inside highlighted paragraph invokes caretRangeFromPoint once');
+    assert.equal(hlPara.getAttribute('data-ag-omni-hover-token'), '1');
+
+    // <3px jitter schedules 0 rAF and 0 caretRangeFromPoint
+    hlPara.dispatchEvent(new FakeEvent('mousemove', { bubbles: true, clientX: 81, clientY: 20 }));
+    hlPara.dispatchEvent(new FakeEvent('mousemove', { bubbles: true, clientX: 82, clientY: 21 }));
+    assert.equal(rafs.length, 0, '<3px pointer jitter must be debounced before scheduling rAF');
+    assert.equal(caretCalls, 1);
+
+    // Larger moves (>=3px) inside cached Range rect [70..190, 12..28] hit lastHitCache with 0 extra caretRangeFromPoint
+    hlPara.dispatchEvent(new FakeEvent('mousemove', { bubbles: true, clientX: 110, clientY: 20 }));
+    while (rafs.length) rafs.shift()(32);
+    hlPara.dispatchEvent(new FakeEvent('mousemove', { bubbles: true, clientX: 150, clientY: 22 }));
+    while (rafs.length) rafs.shift()(48);
+    assert.equal(caretCalls, 1, 'Moves inside cached Range bounding rect must reuse lastHitCache with 0 extra caretRangeFromPoint');
+    assert.equal(hlPara.getAttribute('data-ag-omni-hover-token'), '1');
+
+    // Moving outside cached Range rect re-queries caretRangeFromPoint
+    hlPara.dispatchEvent(new FakeEvent('mousemove', { bubbles: true, clientX: 240, clientY: 20 }));
+    while (rafs.length) rafs.shift()(64);
+    assert.equal(caretCalls, 2, 'Moving outside cached Range rect must re-evaluate caretRangeFromPoint');
+
+    // 3) scheduleIncrementalScan time-slices large batches at 6ms budget across yields instead of blocking one turn
+    const origPerfNow = performance.now;
+    let fakePerfNow = 1000;
+    let perfReads = 0;
+    performance.now = () => {
+      perfReads++;
+      // Advance simulated clock by 4ms on each budget check so batch yields after 2 items (>=6ms)
+      fakePerfNow += 4;
+      return fakePerfNow;
+    };
+    const origSetT = globalThis.setTimeout;
+    let sliceYields = 0;
+    globalThis.setTimeout = (fn, ms, ...args) => {
+      if (ms === 0) sliceYields++;
+      return origSetT(fn, ms, ...args);
+    };
+    try {
+      const addedNodes = [];
+      for (let i = 0; i < 8; i++) {
+        const p = document.createElement('p');
+        p.appendChild(document.createTextNode(`Batch link https://slice-${i}.example.com/item`));
+        resp.appendChild(p);
+        addedNodes.push(p);
+      }
+      domBusCallback([{ type: 'childList', target: resp, addedNodes, removedNodes: [] }]);
+      await new Promise((r) => origSetT(r, 150));
+      assert.ok(sliceYields >= 2, `Expected 6ms time-sliced incremental queue to yield via setTimeout(..., 0) >=2 times, got ${sliceYields}`);
+      assert.equal(window.CSS.highlights.get('ag-omni-url').size, 9, 'All 8 sliced incremental paragraphs plus initial link must finish highlighting');
+    } finally {
+      performance.now = origPerfNow;
+      globalThis.setTimeout = origSetT;
+    }
+  } finally {
+    client.destroy();
+  }
+});

@@ -3228,3 +3228,57 @@ test('peek 探头姿态深度（PEEK_Y=7）与输入框顶边裁切保护（不�
   assert.ok(peekLine.includes('pointer-events:none !important;'), 'peek 规则必须保留 pointer-events:none !important');
   assert.ok(peekLine.includes('clip-path:inset(-48px -24px 8px -24px)!important;'), 'peek 规则必须通过底部 clip-path 裁切防止压过输入框顶边穿帮');
 });
+
+test('高频 setRimLight 鼠标横扫经像素/强度/方向量化防抖抑制重绘风暴，且静止态心跳跳过冗余重绘', () => {
+  const { doc } = createRigMockDom(760);
+  const hostEl = doc.createElement('div');
+  doc.body.appendChild(hostEl);
+  const stage = rig.mountDualMascotStage(hostEl, {
+    mascot: 'dual',
+    camp: 'gemini',
+    reducedMotion: false,
+  });
+  try {
+    const snap0 = stage.getLayoutSnapshot();
+    const draws0 = snap0.perf.canvasDraws;
+    const catX = snap0.actors.find((a) => a.id === 'cat').x;
+
+    // 1) 在感知区外（距离两只主宠均 > 240px）连续高频扫过 30 次：应触发 0 次 canvasDraws
+    const farX = Math.max(0, catX - 420);
+    for (let i = 0; i < 30; i++) {
+      stage.setRimLight({ active: true, localX: farX + (i % 6) * 3, strength: 0.7, toneKey: 'default', dark: true });
+    }
+    const drawsAfterFar = stage.getLayoutSnapshot().perf.canvasDraws;
+    assert.equal(drawsAfterFar, draws0, 'Out-of-range (>240px) rim-light sweeps must cause 0 canvasDraws');
+
+    // 2) 贴近双主宠上方连续 60 次细粒度横扫（每步 4px）：经量化桶防抖后总重绘次数远低于 60（无 1,561 fillRect 风暴）
+    const startX = Math.max(20, catX - 160);
+    for (let i = 0; i < 60; i++) {
+      stage.setRimLight({ active: true, localX: startX + i * 4, strength: 0.6 + (i % 5) * 0.02, toneKey: 'default', dark: true });
+    }
+    const drawsAfterSweep = stage.getLayoutSnapshot().perf.canvasDraws;
+    const deltaSweep = drawsAfterSweep - drawsAfterFar;
+    assert.ok(deltaSweep >= 1, 'In-range rim-light sweep must still update mascot edge light');
+    assert.ok(deltaSweep <= 22, `Quantized rim-light sweep across 60 moves must stay tightly bounded (<=22 draws), got ${deltaSweep}`);
+
+    // 3) 同一量化桶内微小抖动（+/- 2px, +/- 0.01 强度）触发严格 0 次重绘
+    for (let i = 0; i < 25; i++) {
+      stage.setRimLight({ active: true, localX: startX + 236 + (i % 3), strength: 0.62 + (i % 2) * 0.01, toneKey: 'default', dark: true });
+    }
+    assert.equal(stage.getLayoutSnapshot().perf.canvasDraws, drawsAfterSweep, 'Sub-quantum jitter within same rim bucket must cause 0 redraws');
+
+    // 4) 静止休眠态且关闭 rim-light 时，连续推进心跳应命中静态帧缓存（Zzz 窗口外 0 额外绘制，至多 1 次 Zzz 换相）
+    stage.setRimLight({ active: false, localX: -9999, strength: 0, toneKey: 'default', dark: true });
+    stage.triggerDemo('doze');
+    const drawsBeforeDoze = stage.getLayoutSnapshot().perf.canvasDraws;
+    const skipsBefore = stage.getLayoutSnapshot().perf.canvasSkips;
+    stage.stepTick(1);
+    stage.stepTick(1);
+    stage.stepTick(1);
+    const snapAfterDoze = stage.getLayoutSnapshot();
+    assert.ok(snapAfterDoze.perf.canvasDraws - drawsBeforeDoze <= 2, `Stationary doze 3 ticks must cause at most 1 Zzz phase swap (<=2 draws), got ${snapAfterDoze.perf.canvasDraws - drawsBeforeDoze}`);
+    assert.ok(snapAfterDoze.perf.canvasSkips >= skipsBefore + 4, 'Stationary doze ticks must hit static frame cache');
+  } finally {
+    stage.dispose();
+  }
+});

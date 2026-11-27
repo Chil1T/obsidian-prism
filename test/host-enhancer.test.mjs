@@ -2418,3 +2418,73 @@ test('侧栏出现时 .agy-scroll-bottom 层级/过渡/分屏宽度防裁切与 
     ctl.destroy();
   }
 });
+
+test('悬浮导航大纲悬停采用 rAF 延迟合并（移出前取消 0 回流）且命中激活圆点时 O(1) 零 getBoundingClientRect', () => {
+  const env = createMockEnv();
+  const rafQueue = new Map();
+  let rafId = 1;
+  env.win.requestAnimationFrame = (cb) => {
+    const id = rafId++;
+    rafQueue.set(id, cb);
+    return id;
+  };
+  env.win.cancelAnimationFrame = (id) => {
+    rafQueue.delete(id);
+  };
+
+  let stepRectCalls = 0;
+  const conv = env.createElement('div', { 'data-testid': 'conversation-view', 'data-cascade-id': 'conv-raf-outline' });
+  const vp = env.createElement('div', { 'data-testid': 'autoscroll-viewport' });
+  const nav = env.createElement('div', { 'data-testid': 'conversation-navigator' });
+
+  for (let i = 0; i < 4; i++) {
+    const step = env.createElement('div', { 'data-testid': 'user-input-step' });
+    step.getBoundingClientRect = () => { stepRectCalls++; return { left: 0, top: i * 120, width: 600, height: 80, bottom: i * 120 + 80, right: 600 }; };
+    const msg = env.createElement('div', { 'data-testid': 'user-message-content' });
+    msg.textContent = `Question turn ${i + 1}`;
+    step.appendChild(msg);
+    vp.appendChild(step);
+
+    const dot = env.createElement('button', {
+      'data-testid': 'conversation-navigator-turn',
+      'aria-label': `Turn ${i + 1} of 4`,
+      'aria-current': i === 2 ? 'true' : 'false',
+    });
+    nav.appendChild(dot);
+  }
+  conv.appendChild(vp);
+  conv.appendChild(nav);
+  env.body.appendChild(conv);
+
+  const ctl = enhancerMod.createHostEnhancerController({
+    doc: env.doc,
+    win: env.win,
+    getLang: () => 'zh-CN',
+  });
+  try {
+    ctl.sync();
+    // 1) Hover enter schedules rAF instead of running synchronous outline layout immediately
+    nav.dispatchEvent({ type: 'pointerenter', target: nav });
+    assert.equal(rafQueue.size, 1, 'Hovering nav rail must defer openNavOutline to a single rAF');
+    assert.equal(stepRectCalls, 0, 'Before rAF fires, 0 step getBoundingClientRect reads may occur');
+
+    // Coalesce repeated hover enters into the same single rAF
+    nav.dispatchEvent({ type: 'pointerenter', target: nav });
+    assert.equal(rafQueue.size, 1, 'Repeated pointerenter before rAF must coalesce');
+
+    // Leaving before rAF fires cancels pending open cleanly (0 layout reads, popover never opens)
+    nav.dispatchEvent({ type: 'pointerleave', target: nav });
+    assert.equal(rafQueue.size, 0, 'Leaving nav rail before rAF fires must cancel pending openNavOutline rAF');
+    assert.equal(stepRectCalls, 0, 'Cancelled hover open must perform 0 layout reads');
+
+    // 2) Hovering and letting rAF fire opens popover using O(1) active-dot fast path (0 step getBoundingClientRect!)
+    nav.dispatchEvent({ type: 'pointerenter', target: nav });
+    assert.equal(rafQueue.size, 1);
+    for (const [id, fn] of Array.from(rafQueue.entries())) { rafQueue.delete(id); fn(16); }
+    const pop = env.doc.querySelector('.ag-cs-nav-outline-popover');
+    assert.ok(pop && !pop.hidden, 'Outline popover must open cleanly on rAF flush');
+    assert.equal(stepRectCalls, 0, 'Active-dot fast path must skip per-step getBoundingClientRect reflows');
+  } finally {
+    ctl.destroy();
+  }
+});

@@ -568,3 +568,72 @@ test('Inline Diff UX 4: 300Hz anti-degradation redline (no win-blur/scroll backd
   const ch6 = report.channels.find((c) => c.id === 'inlineDiff');
   assert.ok(ch6 && ch6.bytes > 0 && ch6.bytes <= 57344, `Channel 6 inlineDiff ${ch6?.bytes} B exceeds 57,344 B budget`);
 });
+
+test('Inline Diff UX 5: window pointerover executes strictly 0 getComputedStyle and 0 getBoundingClientRect while prefetching conversation diff badges', async () => {
+  const { win, doc, body, makeNode } = createInlineDiffTestDom('zh-CN');
+  let gcsCalls = 0;
+  let rectCalls = 0;
+  let prefetchCalls = 0;
+
+  const origGcs = win.getComputedStyle;
+  win.getComputedStyle = (el) => {
+    gcsCalls++;
+    return origGcs(el);
+  };
+  const wrapRect = (el) => {
+    const orig = el.getBoundingClientRect;
+    el.getBoundingClientRect = () => {
+      rectCalls++;
+      return orig();
+    };
+    return el;
+  };
+
+  // Build 20-level deep ordinary prose outside diff rows
+  let cur = wrapRect(makeNode('div', { class: 'prose-root' }));
+  body.appendChild(cur);
+  for (let i = 0; i < 20; i++) {
+    const next = wrapRect(makeNode('div', { class: `nested-lvl-${i}` }));
+    cur.appendChild(next);
+    cur = next;
+  }
+  const deepSpan = wrapRect(makeNode('span'));
+  deepSpan.textContent = 'ordinary text';
+  cur.appendChild(deepSpan);
+
+  // Build real conversation diff row + diff-line-count badge
+  const conv = wrapRect(makeNode('div', { 'data-testid': 'conversation-view' }));
+  const row = wrapRect(makeNode('div', { class: 'group flex w-full', 'data-testid': 'tool-call-row', 'data-ag-diff-uri': 'file:///C:/repo/fast.js' }));
+  const badge = wrapRect(makeNode('span', { 'data-testid': 'diff-line-count' }));
+  badge.textContent = '+3 -1';
+  row.appendChild(badge);
+  conv.appendChild(row);
+  body.appendChild(conv);
+
+  win.__agPrismInlineDiffCall = (raw) => {
+    prefetchCalls++;
+    const req = JSON.parse(raw);
+    queueMicrotask(() => win.__agPrismInlineDiffResolve?.(req.id, { ok: true, mode: 'git-diff', fileName: 'fast.js', additions: 3, deletions: 1, totalLines: 1, lines: [] }));
+  };
+
+  const client = inlineDiff.createInlineDiffClient({ win, doc, getLang: () => 'zh-CN' });
+  try {
+    // Hover over 20-level deep ordinary prose repeatedly -> 0 getComputedStyle, 0 getBoundingClientRect, 0 prefetch
+    for (let i = 0; i < 10; i++) {
+      win.dispatchEvent({ type: 'pointerover', target: deepSpan });
+    }
+    await new Promise((r) => setTimeout(r, 120));
+    assert.equal(gcsCalls, 0, 'pointerover on deep prose must perform strictly 0 getComputedStyle calls');
+    assert.equal(rectCalls, 0, 'pointerover on deep prose must perform strictly 0 getBoundingClientRect calls');
+    assert.equal(prefetchCalls, 0, 'pointerover on ordinary prose must never trigger diff prefetch');
+
+    // Hover over genuine diff-line-count badge inside conversation -> still 0 getComputedStyle & 0 getBoundingClientRect, triggers prefetch
+    win.dispatchEvent({ type: 'pointerover', target: badge });
+    await new Promise((r) => setTimeout(r, 140));
+    assert.equal(gcsCalls, 0, 'pointerover on diff badge must perform strictly 0 getComputedStyle calls');
+    assert.equal(rectCalls, 0, 'pointerover on diff badge must perform strictly 0 getBoundingClientRect calls');
+    assert.equal(prefetchCalls, 1, 'pointerover on diff badge inside conversation must still prefetch diff payload');
+  } finally {
+    client.destroy();
+  }
+});

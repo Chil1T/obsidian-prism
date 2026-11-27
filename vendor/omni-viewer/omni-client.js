@@ -708,17 +708,10 @@
     let pathHighlight = null;
     let hoverTokenActive = false;
     let hoverTokenEl = null;
-    let pointerMoveRaf = null;
-    let pendingPointerTarget = null;
-    let pendingPointerX = 0;
-    let pendingPointerY = 0;
-
-    let domObserver = null;
-    let rootAttrObserver = null;
-    let scanTimer = null;
-    let textScanTimer = null;
-    const pendingScanRoots = new Set();
-    const pendingTextNodes = new Set();
+    let pointerMoveRaf = null, pendingPointerTarget = null, pendingPointerX = 0, pendingPointerY = 0;
+    let lastPtrEvalX = -9999, lastPtrEvalY = -9999, lastPtrEvalTarget = null, lastHitCache = null;
+    let domObserver = null, rootAttrObserver = null, scanTimer = null, textScanTimer = null, scanSliceTimer = null;
+    const pendingScanRoots = new Set(), pendingTextNodes = new Set(), scanWorkQueue = [];
 
     let activeMenuEl = null;
     let activeMenuItems = [];
@@ -1797,24 +1790,16 @@
       return null;
     }
 
-    function pointHitsRangeRects(range, clientX, clientY) {
-      if (!range || typeof range.getClientRects !== 'function') return true;
+    function findHitRangeRect(range, clientX, clientY) {
+      if (!range || typeof range.getClientRects !== 'function') return { hit: true, rect: null };
       const rects = range.getClientRects();
-      if (!rects || rects.length === 0) return true;
+      if (!rects || rects.length === 0) return { hit: true, rect: null };
       for (let i = 0; i < rects.length; i++) {
         const rc = rects[i];
-        if (
-          clientX >= rc.left - 2 &&
-          clientX <= rc.right + 2 &&
-          clientY >= rc.top - 2 &&
-          clientY <= rc.bottom + 2
-        ) {
-          return true;
-        }
+        if (clientX >= rc.left - 2 && clientX <= rc.right + 2 && clientY >= rc.top - 2 && clientY <= rc.bottom + 2) return { hit: true, rect: rc };
       }
-      return false;
+      return { hit: false, rect: null };
     }
-
     function hitTestHighlightedToken(clientX, clientY) {
       const pt = resolveCaretPoint(clientX, clientY);
       if (!pt || pt.node.nodeType !== 3) return null;
@@ -1822,16 +1807,9 @@
       if (!rec || !rec.spans.length) return null;
       for (let i = 0; i < rec.spans.length; i++) {
         const sp = rec.spans[i];
-        if (pt.offset >= sp.start && pt.offset <= sp.end && pointHitsRangeRects(sp.range, clientX, clientY)) {
-          return {
-            kind: sp.type,
-            url: sp.url || '',
-            filePath: sp.filePath || '',
-            lineStart: sp.lineStart,
-            lineEnd: sp.lineEnd,
-            text: sp.display,
-            element: pt.node.parentElement,
-          };
+        if (pt.offset >= sp.start && pt.offset <= sp.end) {
+          const rHit = findHitRangeRect(sp.range, clientX, clientY);
+          if (rHit.hit) return { kind: sp.type, url: sp.url || '', filePath: sp.filePath || '', lineStart: sp.lineStart, lineEnd: sp.lineEnd, text: sp.display, element: pt.node.parentElement, _node: pt.node, _rect: rHit.rect };
         }
       }
       return null;
@@ -1852,45 +1830,32 @@
 
     // Event Handlers
     function evalPointerHoverAt(rawTarget, x, y) {
-      if (!enabled || !urlHighlight || (!urlHighlight.size && !pathHighlight?.size)) {
-        if (hoverTokenActive) setHoverTokenCursor(false);
-        return;
-      }
+      if (!enabled || !urlHighlight || (!urlHighlight.size && !pathHighlight?.size)) { lastHitCache = null; if (hoverTokenActive) setHoverTokenCursor(false); return; }
       const el = rawTarget && rawTarget.nodeType === 1 ? rawTarget : rawTarget?.parentElement;
-      if (!el || !el.isConnected || !highlightedParentCount.get(el) || !findClosest(el, SCAN_CONTAINER_SELECTOR) || isExcludedElement(el)) {
-        if (hoverTokenActive) setHoverTokenCursor(false);
-        return;
+      if (!el || !el.isConnected || !highlightedParentCount.get(el) || !findClosest(el, SCAN_CONTAINER_SELECTOR) || isExcludedElement(el)) { lastHitCache = null; if (hoverTokenActive) setHoverTokenCursor(false); return; }
+      lastPtrEvalTarget = el; lastPtrEvalX = x; lastPtrEvalY = y;
+      if (lastHitCache && lastHitCache.el === el && lastHitCache.node?.isConnected && lastHitCache.rect) {
+        const rc = lastHitCache.rect;
+        if (x >= rc.left - 2 && x <= rc.right + 2 && y >= rc.top - 2 && y <= rc.bottom + 2) { setHoverTokenCursor(true, lastHitCache.hitEl || el); return; }
       }
       const hit = hitTestHighlightedToken(x, y);
+      lastHitCache = hit && hit._rect ? { el, node: hit._node, rect: hit._rect, hitEl: hit.element || el } : null;
       setHoverTokenCursor(Boolean(hit), hit ? (hit.element || el) : null);
     }
-
-    function flushPointerMove() {
-      pointerMoveRaf = null;
-      const target = pendingPointerTarget;
-      pendingPointerTarget = null;
-      evalPointerHoverAt(target, pendingPointerX, pendingPointerY);
-    }
-
+    function flushPointerMove() { pointerMoveRaf = null; const target = pendingPointerTarget; pendingPointerTarget = null; evalPointerHoverAt(target, pendingPointerX, pendingPointerY); }
     function onDocPointerMove(ev) {
-      if (!enabled || !urlHighlight || (!urlHighlight.size && !pathHighlight?.size)) {
-        if (hoverTokenActive) setHoverTokenCursor(false);
-        return;
-      }
-      const rawTarget = ev?.target || null;
-      const targetEl = rawTarget && rawTarget.nodeType === 1 ? rawTarget : rawTarget?.parentElement;
+      if (!enabled || !urlHighlight || (!urlHighlight.size && !pathHighlight?.size)) { if (hoverTokenActive) setHoverTokenCursor(false); return; }
+      const rawTarget = ev?.target || null, targetEl = rawTarget && rawTarget.nodeType === 1 ? rawTarget : rawTarget?.parentElement;
       if (!targetEl || !targetEl.isConnected || !highlightedParentCount.get(targetEl)) {
         if (pointerMoveRaf !== null) cancelPendingPointerRaf();
+        lastHitCache = null; lastPtrEvalTarget = null;
         if (hoverTokenActive) setHoverTokenCursor(false);
         return;
       }
+      if (targetEl === lastPtrEvalTarget && Math.abs(ev.clientX - lastPtrEvalX) < 3 && Math.abs(ev.clientY - lastPtrEvalY) < 3) return;
       if (typeof W?.requestAnimationFrame === 'function') {
-        pendingPointerTarget = targetEl;
-        pendingPointerX = ev.clientX;
-        pendingPointerY = ev.clientY;
-        if (pointerMoveRaf === null) {
-          pointerMoveRaf = W.requestAnimationFrame(flushPointerMove);
-        }
+        pendingPointerTarget = targetEl; pendingPointerX = ev.clientX; pendingPointerY = ev.clientY;
+        if (pointerMoveRaf === null) pointerMoveRaf = W.requestAnimationFrame(flushPointerMove);
         return;
       }
       evalPointerHoverAt(targetEl, ev.clientX, ev.clientY);
@@ -1898,51 +1863,27 @@
 
     function onDocClickCapture(ev) {
       if (!enabled) return;
-      if (activeMenuEl && !findClosest(ev.target, '.ag-omni-menu')) {
-        closeContextMenu();
-      }
+      if (activeMenuEl && !findClosest(ev.target, '.ag-omni-menu')) closeContextMenu();
       if (ev.button !== 0 || ev.defaultPrevented || ev.altKey || ev.shiftKey) return;
-
       const el = ev.target && ev.target.nodeType === 1 ? ev.target : ev.target?.parentElement;
-      if (!el) return;
-      if (findClosest(el, '[data-testid="agent-input-box"], [contenteditable="true"], .ag-omni-menu, [data-omni-ignore]')) {
-        return;
-      }
-
-      // 1. Check fallback `.ag-omni-autolink` span
+      if (!el || findClosest(el, '[data-testid="agent-input-box"], [contenteditable="true"], .ag-omni-menu, [data-omni-ignore]')) return;
       const autoSpan = findClosest(el, '.ag-omni-autolink');
       if (autoSpan) {
-        const autoUrl = autoSpan.getAttribute('data-omni-url');
-        const autoPath = autoSpan.getAttribute('data-omni-path');
-        if (autoUrl) {
-          ev.preventDefault();
-          ev.stopPropagation();
-          void openUrl(autoUrl, resolveEffectiveLinkMode(ev));
-          return;
-        }
+        const autoUrl = autoSpan.getAttribute('data-omni-url'), autoPath = autoSpan.getAttribute('data-omni-path');
+        if (autoUrl) { ev.preventDefault(); ev.stopPropagation(); void openUrl(autoUrl, resolveEffectiveLinkMode(ev)); return; }
         if (autoPath) {
-          ev.preventDefault();
-          ev.stopPropagation();
-          const ls = parseInt(autoSpan.getAttribute('data-omni-line-start') || '', 10);
-          const le = parseInt(autoSpan.getAttribute('data-omni-line-end') || '', 10);
-          void openFile(autoPath, {
-            mode: ev.ctrlKey || ev.metaKey ? 'external' : 'workbench',
-            lineStart: Number.isFinite(ls) ? ls : null,
-            lineEnd: Number.isFinite(le) ? le : null,
-          });
+          ev.preventDefault(); ev.stopPropagation();
+          const ls = parseInt(autoSpan.getAttribute('data-omni-line-start') || '', 10), le = parseInt(autoSpan.getAttribute('data-omni-line-end') || '', 10);
+          void openFile(autoPath, { mode: ev.ctrlKey || ev.metaKey ? 'external' : 'workbench', lineStart: Number.isFinite(ls) ? ls : null, lineEnd: Number.isFinite(le) ? le : null });
           return;
         }
       }
-
-      // 2. Yield host-native http(s) anchors to Antigravity's built-in link router; handle `.ag-prism-thought-overlay` anchors
       const anchor = findClosest(el, 'a[href]');
       if (anchor) {
         if (anchor.hasAttribute('download') || anchor.getAttribute('data-testid') === 'entity-pill') return;
         const href = String(anchor.getAttribute('href') || '').trim();
         if (!isHttpUrl(href) || !findClosest(anchor, '.ag-prism-thought-overlay')) return;
-        ev.preventDefault();
-        ev.stopPropagation();
-        void openUrl(href, resolveEffectiveLinkMode(ev));
+        ev.preventDefault(); ev.stopPropagation(); void openUrl(href, resolveEffectiveLinkMode(ev));
         return;
       }
 
@@ -2025,33 +1966,19 @@
     }
 
     function cancelPendingPointerRaf() {
-      if (pointerMoveRaf !== null) {
-        try { W?.cancelAnimationFrame?.(pointerMoveRaf); } catch (_) {}
-        pointerMoveRaf = null;
-      }
-      pendingPointerTarget = null;
+      if (pointerMoveRaf !== null) { try { W?.cancelAnimationFrame?.(pointerMoveRaf); } catch (_) {} pointerMoveRaf = null; }
+      pendingPointerTarget = null; lastHitCache = null; lastPtrEvalTarget = null; lastPtrEvalX = lastPtrEvalY = -9999;
     }
 
     function onWindowBlurOrScroll(ev) {
-      if (activeMenuEl) {
-        if (ev?.type === 'scroll' && findClosest(ev.target, '.ag-omni-menu')) return;
-        closeContextMenu();
-      }
-      cancelPendingPointerRaf();
-      if (hoverTokenActive) setHoverTokenCursor(false);
+      if (activeMenuEl) { if (ev?.type === 'scroll' && findClosest(ev.target, '.ag-omni-menu')) return; closeContextMenu(); }
+      cancelPendingPointerRaf(); if (hoverTokenActive) setHoverTokenCursor(false);
     }
-
-    // SEC-7: Strict origin + source window verification on incoming postMessage for inline Aux switchers
     function onWindowMessage(ev) {
-      if (!enabled || !ev || !ev.data || typeof ev.data !== 'object') return;
-      if (!serverMeta?.baseUrl || ev.origin !== serverMeta.baseUrl) return;
-      if (ev.data.type !== 'ag-prism-workbench-ready') return;
-
+      if (!enabled || !ev || !ev.data || typeof ev.data !== 'object' || !serverMeta?.baseUrl || ev.origin !== serverMeta.baseUrl || ev.data.type !== 'ag-prism-workbench-ready') return;
       for (const rec of mountedAuxSwitches) {
         if (rec.iframe && rec.iframe.isConnected && ev.source === rec.iframe.contentWindow) {
-          rec.iframe.setAttribute('data-wb-ready', '1');
-          pushWorkbenchSyncToIframe(rec.iframe, { filePath: rec.filePath });
-          return;
+          rec.iframe.setAttribute('data-wb-ready', '1'); pushWorkbenchSyncToIframe(rec.iframe, { filePath: rec.filePath }); return;
         }
       }
     }
@@ -2832,6 +2759,30 @@ cur = cur.parentElement;
 }
 return false;
 }
+function drainScanWorkQueue() {
+scanSliceTimer = null;
+if (!enabled) { scanWorkQueue.length = 0; return; }
+const nowFn = () => (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now());
+const t0 = nowFn();
+let scannedAuxSplit = false, processed = 0;
+while (scanWorkQueue.length > 0) {
+const r = scanWorkQueue.shift();
+if (!r || !r.isConnected) continue;
+if (findClosest(r, SCAN_CONTAINER_SELECTOR)) scanContainerForBareTokens(r);
+else if (typeof r.querySelectorAll === 'function') for (const c of r.querySelectorAll(SCAN_CONTAINER_SELECTOR)) scanContainerForBareTokens(c);
+decorateMermaidContainers(r);
+if (!findClosest(r, '[data-testid="conversation-view"]')) {
+const auxRoot = !scannedAuxSplit && (findClosest(r, '[data-testid="aux-pane-split"]') || r.querySelector?.('[data-testid="aux-pane-split"]'));
+if (auxRoot) { scannedAuxSplit = true; decorateAuxUnsupportedViews(auxRoot); }
+else if ((typeof r.matches === 'function' && r.matches(AUX_FILE_VIEW_SELECTOR)) || r.querySelector?.(AUX_FILE_VIEW_SELECTOR)) decorateAuxUnsupportedViews(r);
+}
+processed += 1;
+if (scanWorkQueue.length > 0 && nowFn() - t0 >= 6) {
+scanSliceTimer = setTimeout(drainScanWorkQueue, 0);
+return;
+}
+}
+}
 function scheduleIncrementalScan(node) {
 if (!enabled || !D) return;
 const el = node && node.nodeType === 1 ? node : node?.parentElement;
@@ -2840,38 +2791,15 @@ if (scanTimer) return;
 const delay = D.documentElement?.hasAttribute?.('data-ag-cs-stream-active') ? 280 : 60;
 scanTimer = setTimeout(() => {
 scanTimer = null;
-if (!enabled) {
-pendingScanRoots.clear();
-return;
-}
+if (!enabled) { pendingScanRoots.clear(); return; }
 pruneDisconnectedHighlights();
 const rootSet = new Set(pendingScanRoots);
 pendingScanRoots.clear();
-let scannedAuxSplit = false;
 for (const r of rootSet) {
-if (!r || !r.isConnected) continue;
-if (rootSet.size > 1 && hasPendingAncestor(r, rootSet)) continue;
-if (findClosest(r, SCAN_CONTAINER_SELECTOR)) {
-scanContainerForBareTokens(r);
-} else if (typeof r.querySelectorAll === 'function') {
-for (const c of r.querySelectorAll(SCAN_CONTAINER_SELECTOR)) {
-scanContainerForBareTokens(c);
+if (!r || !r.isConnected || (rootSet.size > 1 && hasPendingAncestor(r, rootSet))) continue;
+if (!scanWorkQueue.includes(r)) scanWorkQueue.push(r);
 }
-}
-decorateMermaidContainers(r);
-if (!findClosest(r, '[data-testid="conversation-view"]')) {
-const auxRoot = !scannedAuxSplit && (findClosest(r, '[data-testid="aux-pane-split"]') || r.querySelector?.('[data-testid="aux-pane-split"]'));
-if (auxRoot) {
-scannedAuxSplit = true;
-decorateAuxUnsupportedViews(auxRoot);
-} else if (
-(typeof r.matches === 'function' && r.matches(AUX_FILE_VIEW_SELECTOR)) ||
-r.querySelector?.(AUX_FILE_VIEW_SELECTOR)
-) {
-decorateAuxUnsupportedViews(r);
-}
-}
-}
+if (scanWorkQueue.length > 0 && !scanSliceTimer) drainScanWorkQueue();
 }, delay);
 }
 // Lifecycle & Zero-Residue Teardown
@@ -2886,70 +2814,35 @@ styleEl.textContent = OMNI_CSS;
 }
 }
 function unwrapAllModifications() {
-if (textScanTimer) {
-clearTimeout(textScanTimer);
-textScanTimer = null;
-}
-pendingTextNodes.clear();
-// 1. Clear CSS Custom Highlights (zero DOM changes needed)
-for (const tn of Array.from(trackedHighlightNodes)) {
-clearHighlightEntryForNode(tn);
-}
+if (textScanTimer) { clearTimeout(textScanTimer); textScanTimer = null; }
+pendingTextNodes.clear(); lastHitCache = null; lastPtrEvalTarget = null; lastPtrEvalX = lastPtrEvalY = -9999;
+for (const tn of Array.from(trackedHighlightNodes)) clearHighlightEntryForNode(tn);
 trackedHighlightNodes.clear();
-if (urlHighlight) {
-try { urlHighlight.clear(); } catch (_) {}
-urlHighlight = null;
-}
-if (pathHighlight) {
-try { pathHighlight.clear(); } catch (_) {}
-pathHighlight = null;
-}
-try {
-W?.CSS?.highlights?.delete?.(HL_URL_NAME);
-W?.CSS?.highlights?.delete?.(HL_PATH_NAME);
-} catch (_) {}
+if (urlHighlight) { try { urlHighlight.clear(); } catch (_) {} urlHighlight = null; }
+if (pathHighlight) { try { pathHighlight.clear(); } catch (_) {} pathHighlight = null; }
+try { W?.CSS?.highlights?.delete?.(HL_URL_NAME); W?.CSS?.highlights?.delete?.(HL_PATH_NAME); } catch (_) {}
 setHoverTokenCursor(false);
-// 2. Unwrap fallback autolink spans if any were created
 const parentsToNormalize = new Set();
 for (const span of Array.from(createdAutolinks)) {
 const p = span.parentNode;
-if (p && D) {
-const tn = D.createTextNode(span.textContent || '');
-p.replaceChild(tn, span);
-parentsToNormalize.add(p);
-} else {
-try { span.remove?.(); } catch (_) {}
-}
+if (p && D) { p.replaceChild(D.createTextNode(span.textContent || ''), span); parentsToNormalize.add(p); }
+else try { span.remove?.(); } catch (_) {}
 }
 createdAutolinks.clear();
-for (const p of parentsToNormalize) {
-try { p.normalize?.(); } catch (_) {}
-}
-// 3. Remove Mermaid zoom buttons
+for (const p of parentsToNormalize) try { p.normalize?.(); } catch (_) {}
 for (const box of Array.from(decoratedMermaidBoxes)) {
 box.querySelectorAll?.('.ag-omni-mermaid-zoom-btn').forEach((b) => b.remove());
-const origPos = box.getAttribute?.('data-omni-orig-pos') || '';
-if (box.style) box.style.position = origPos;
-box.removeAttribute?.('data-omni-orig-pos');
-box.removeAttribute?.('data-omni-mermaid-box');
+if (box.style) box.style.position = box.getAttribute?.('data-omni-orig-pos') || '';
+box.removeAttribute?.('data-omni-orig-pos'); box.removeAttribute?.('data-omni-mermaid-box');
 }
 decoratedMermaidBoxes.clear();
-// 4. Remove Aux view switchers & restore shell styles
-for (const rec of Array.from(mountedAuxSwitches)) {
-unmountSingleAuxSwitch(rec);
-}
+for (const rec of Array.from(mountedAuxSwitches)) unmountSingleAuxSwitch(rec);
 mountedAuxSwitches.clear();
 }
-function getDomBus() {
-return (W && (W.__agDomBus || W.__agPrismDomBus)) || null;
-}
+function getDomBus() { return (W && (W.__agDomBus || W.__agPrismDomBus)) || null; }
 function ensureRootAttrObserver() {
 if (!D?.documentElement || !W || rootAttrObserver) return;
-const rootAttrFilter = [
-'data-ag-cs-theme', 'data-ag-cs-palette', 'data-ag-cs-light-preset',
-'data-ag-cs-accent', 'data-ag-cs-corners', 'data-ag-cs-motion',
-'data-ag-cs-lang', 'data-ag-prism-omni', 'data-ag-prism-link-target',
-];
+const rootAttrFilter = ['data-ag-cs-theme', 'data-ag-cs-palette', 'data-ag-cs-light-preset', 'data-ag-cs-accent', 'data-ag-cs-corners', 'data-ag-cs-motion', 'data-ag-cs-lang', 'data-ag-prism-omni', 'data-ag-prism-link-target'];
 const onRootAttrs = (mutations) => {
 let needSync = false;
 for (const m of mutations) {
@@ -2961,19 +2854,13 @@ if (v === 'on' && !enabled) { sync({ omniModule: 'on' }); return; }
 } else if (attr === 'data-ag-prism-link-target') {
 const lt = D.documentElement.getAttribute('data-ag-prism-link-target');
 if (lt === 'builtin' || lt === 'external') linkTarget = lt;
-} else {
-needSync = true;
-}
+} else needSync = true;
 }
 if (needSync && enabled) broadcastThemeAndLocaleSync();
 };
 const bus = getDomBus();
 if (bus && typeof bus.subscribe === 'function') {
-const unsub = bus.subscribe('omni-root-attr', onRootAttrs, {
-doc: D, win: W, priority: 'high',
-observeOptions: { childList: false, subtree: false, attributes: true, attributeFilter: rootAttrFilter },
-});
-rootAttrObserver = { disconnect: unsub };
+rootAttrObserver = { disconnect: bus.subscribe('omni-root-attr', onRootAttrs, { doc: D, win: W, priority: 'high', observeOptions: { childList: false, subtree: false, attributes: true, attributeFilter: rootAttrFilter } }) };
 return;
 }
 if (typeof W.MutationObserver !== 'function') return;
@@ -2982,154 +2869,71 @@ rootAttrObserver.observe(D.documentElement, { attributes: true, attributeFilter:
 }
 function attachRuntime() {
 if (mounted || !D || !W) return;
-mounted = true;
-installRpcResolver();
-ensureStyleInjected();
-ensureRootAttrObserver();
-D.addEventListener('click', onDocClickCapture, true);
-D.addEventListener('contextmenu', onDocContextMenu, true);
-D.addEventListener('keydown', onDocKeyDown, true);
-D.addEventListener('mousemove', onDocPointerMove, { passive: true });
-D.addEventListener('visibilitychange', onWindowBlurOrScroll);
-D.addEventListener('scroll', onWindowBlurOrScroll, { capture: true, passive: true });
-W.addEventListener?.('blur', onWindowBlurOrScroll);
-W.addEventListener?.('resize', onWindowBlurOrScroll);
-W.addEventListener?.('message', onWindowMessage);
-const domAttrFilter = [
-'data-ag-cs-spark-streaming',
-'data-ag-cs-thought-streaming',
-'data-active-file-uri',
-'data-file-uri',
-'data-uri',
-'data-file-path',
-];
+mounted = true; installRpcResolver(); ensureStyleInjected(); ensureRootAttrObserver();
+D.addEventListener('click', onDocClickCapture, true); D.addEventListener('contextmenu', onDocContextMenu, true);
+D.addEventListener('keydown', onDocKeyDown, true); D.addEventListener('mousemove', onDocPointerMove, { passive: true });
+D.addEventListener('visibilitychange', onWindowBlurOrScroll); D.addEventListener('scroll', onWindowBlurOrScroll, { capture: true, passive: true });
+W.addEventListener?.('blur', onWindowBlurOrScroll); W.addEventListener?.('resize', onWindowBlurOrScroll); W.addEventListener?.('message', onWindowMessage);
+const domAttrFilter = ['data-ag-cs-spark-streaming', 'data-ag-cs-thought-streaming', 'data-active-file-uri', 'data-file-uri', 'data-uri', 'data-file-path'];
 const onDomMutations = (mutations) => {
 const batchIgnored = typeof WeakMap === 'function' ? new WeakMap() : null;
 for (let i = 0; i < mutations.length; i++) {
 const m = mutations[i];
 if (isIgnoredMutationTarget(m.target, batchIgnored)) continue;
 if (m.type === 'childList') {
-const useHl = supportsHighlightApi();
-let queuedTargetAux = false;
+const useHl = supportsHighlightApi(); let qAux = false;
 for (let j = 0; j < m.addedNodes.length; j++) {
 const n = m.addedNodes[j];
-if (n.nodeType !== 1 && n.nodeType !== 3) continue;
-if (isIgnoredMutationTarget(n, batchIgnored)) continue;
+if ((n.nodeType !== 1 && n.nodeType !== 3) || isIgnoredMutationTarget(n, batchIgnored)) continue;
 if (useHl && n.nodeType === 3) {
 scheduleTextNodeHighlight(n);
-if (!queuedTargetAux && mountedAuxSwitches.size > 0 && findClosest(m.target, '[data-testid="aux-pane-split"]')) {
-queuedTargetAux = true;
-scheduleIncrementalScan(m.target);
+if (!qAux && mountedAuxSwitches.size > 0 && findClosest(m.target, '[data-testid="aux-pane-split"]')) { qAux = true; scheduleIncrementalScan(m.target); }
+} else scheduleIncrementalScan(n);
 }
-} else {
-scheduleIncrementalScan(n);
-}
-}
-if (
-!queuedTargetAux &&
-m.removedNodes.length > 0 &&
-mountedAuxSwitches.size > 0 &&
-findClosest(m.target, '[data-testid="aux-pane-split"]')
-) {
-scheduleIncrementalScan(m.target);
-}
+if (!qAux && m.removedNodes.length > 0 && mountedAuxSwitches.size > 0 && findClosest(m.target, '[data-testid="aux-pane-split"]')) scheduleIncrementalScan(m.target);
 } else if (m.type === 'characterData' && m.target) {
 if (supportsHighlightApi() && m.target.nodeType === 3) {
 scheduleTextNodeHighlight(m.target);
-if (mountedAuxSwitches.size > 0 && findClosest(m.target, '[data-testid="aux-pane-split"]')) {
-scheduleIncrementalScan(m.target);
-}
-} else {
-scheduleIncrementalScan(m.target);
-}
+if (mountedAuxSwitches.size > 0 && findClosest(m.target, '[data-testid="aux-pane-split"]')) scheduleIncrementalScan(m.target);
+} else scheduleIncrementalScan(m.target);
 } else if (m.type === 'attributes') {
-const attrName = m.attributeName;
-if (
-(attrName === 'data-ag-cs-spark-streaming' || attrName === 'data-ag-cs-thought-streaming') &&
-m.target &&
-!m.target.hasAttribute?.(attrName)
-) {
-scheduleIncrementalScan(m.target);
-} else if (
-(attrName === 'data-active-file-uri' ||
-attrName === 'data-file-uri' ||
-attrName === 'data-uri' ||
-attrName === 'data-file-path') &&
-m.target &&
-findClosest(m.target, '[data-testid="aux-pane-split"]')
-) {
-scheduleIncrementalScan(m.target);
-}
+const a = m.attributeName;
+if ((a === 'data-ag-cs-spark-streaming' || a === 'data-ag-cs-thought-streaming') && m.target && !m.target.hasAttribute?.(a)) scheduleIncrementalScan(m.target);
+else if ((a === 'data-active-file-uri' || a === 'data-file-uri' || a === 'data-uri' || a === 'data-file-path') && m.target && findClosest(m.target, '[data-testid="aux-pane-split"]')) scheduleIncrementalScan(m.target);
 }
 }
 };
 const bus = getDomBus();
 if (bus && typeof bus.subscribe === 'function') {
-const unsubDom = bus.subscribe('omni-dom', onDomMutations, {
-doc: D, win: W, priority: 'low',
-observeOptions: { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: domAttrFilter },
-});
-domObserver = { disconnect: unsubDom };
+domObserver = { disconnect: bus.subscribe('omni-dom', onDomMutations, { doc: D, win: W, priority: 'low', observeOptions: { childList: true, subtree: true, attributes: true, attributeFilter: domAttrFilter } }) };
 } else if (typeof W.MutationObserver === 'function') {
 domObserver = new W.MutationObserver(onDomMutations);
 const obsRoot = D.body || D.documentElement;
-if (obsRoot) {
-domObserver.observe(obsRoot, {
-childList: true,
-subtree: true,
-characterData: true,
-attributes: true,
-attributeFilter: domAttrFilter,
-});
-}
+if (obsRoot) domObserver.observe(obsRoot, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: domAttrFilter });
 }
 runScanNow(D.body || D.documentElement);
 }
 function detachRuntime(removeRootAttrs = false) {
-if (scanTimer) {
-clearTimeout(scanTimer);
-scanTimer = null;
-}
-if (textScanTimer) {
-clearTimeout(textScanTimer);
-textScanTimer = null;
-}
+if (scanTimer) { clearTimeout(scanTimer); scanTimer = null; }
+if (scanSliceTimer) { clearTimeout(scanSliceTimer); scanSliceTimer = null; }
+if (textScanTimer) { clearTimeout(textScanTimer); textScanTimer = null; }
 cancelPendingPointerRaf();
-pendingScanRoots.clear();
-pendingTextNodes.clear();
-if (domObserver) {
-try { domObserver.disconnect(); } catch (_) {}
-domObserver = null;
-}
-if (removeRootAttrs && rootAttrObserver) {
-try { rootAttrObserver.disconnect(); } catch (_) {}
-rootAttrObserver = null;
-}
-closeContextMenu();
-purgeLegacyOmniDock();
-unwrapAllModifications();
+pendingScanRoots.clear(); scanWorkQueue.length = 0; pendingTextNodes.clear();
+if (domObserver) { try { domObserver.disconnect(); } catch (_) {} domObserver = null; }
+if (removeRootAttrs && rootAttrObserver) { try { rootAttrObserver.disconnect(); } catch (_) {} rootAttrObserver = null; }
+closeContextMenu(); purgeLegacyOmniDock(); unwrapAllModifications();
 if (D) {
-D.removeEventListener('click', onDocClickCapture, true);
-D.removeEventListener('contextmenu', onDocContextMenu, true);
-D.removeEventListener('keydown', onDocKeyDown, true);
-D.removeEventListener('mousemove', onDocPointerMove, { passive: true });
-D.removeEventListener('visibilitychange', onWindowBlurOrScroll);
-D.removeEventListener('scroll', onWindowBlurOrScroll, { capture: true, passive: true });
+D.removeEventListener('click', onDocClickCapture, true); D.removeEventListener('contextmenu', onDocContextMenu, true);
+D.removeEventListener('keydown', onDocKeyDown, true); D.removeEventListener('mousemove', onDocPointerMove, { passive: true });
+D.removeEventListener('visibilitychange', onWindowBlurOrScroll); D.removeEventListener('scroll', onWindowBlurOrScroll, { capture: true, passive: true });
 try { D.getElementById?.(STYLE_EL_ID)?.remove?.(); } catch (_) {}
 if (removeRootAttrs) { const pr = D.getElementById?.('ag-prism-overlay-portal'); if (pr && !pr.children?.length) try { pr.remove(); } catch (_) {} }
 if (D.documentElement) {
 D.documentElement.removeAttribute?.('data-ag-omni-hover-token');
-if (removeRootAttrs) {
-D.documentElement.removeAttribute?.('data-ag-prism-omni');
-D.documentElement.removeAttribute?.('data-ag-prism-link-target');
+if (removeRootAttrs) { D.documentElement.removeAttribute?.('data-ag-prism-omni'); D.documentElement.removeAttribute?.('data-ag-prism-link-target'); }
 }
 }
-}
-if (W) {
-W.removeEventListener?.('blur', onWindowBlurOrScroll);
-W.removeEventListener?.('resize', onWindowBlurOrScroll);
-W.removeEventListener?.('message', onWindowMessage);
-}
+if (W) { W.removeEventListener?.('blur', onWindowBlurOrScroll); W.removeEventListener?.('resize', onWindowBlurOrScroll); W.removeEventListener?.('message', onWindowMessage); }
 mounted = false;
 }
 function sync(cfg = null, incomingServerMeta = null) {

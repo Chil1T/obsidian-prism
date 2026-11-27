@@ -318,3 +318,139 @@ test('同一 surface-composer-card 节点圆角从 28px 切换为 10px/14px/6px 
     'ui-runtime.js 必须在 data-ag-prism-mode 或 data-ag-cs-corners 变更时立即调用 invRim()'
   );
 });
+
+test('prism-rim-canvas 事件驱动矩形与圆角缓存、setTimeout 限帧、空闲 display:none 消灭幽灵合成层', () => {
+  const { doc, boxes, makeEl } = createMockRimDom();
+  const prevDoc = globalThis.document;
+  const prevRaf = globalThis.requestAnimationFrame;
+  const prevCancel = globalThis.cancelAnimationFrame;
+  const prevPerf = globalThis.performance;
+  const prevGcs = globalThis.getComputedStyle;
+  const prevDpr = globalThis.devicePixelRatio;
+  const prevRo = globalThis.ResizeObserver;
+  const prevSetT = globalThis.setTimeout;
+  const prevClrT = globalThis.clearTimeout;
+
+  const rafs = [];
+  const timers = new Map();
+  let timerSeq = 1;
+  let now = 100;
+  let gcsCalls = 0;
+  let rectCalls = 0;
+  let curRadius = '16px';
+  let roCb = null;
+
+  globalThis.document = doc;
+  globalThis.requestAnimationFrame = (cb) => { rafs.push(cb); return rafs.length; };
+  globalThis.cancelAnimationFrame = () => {};
+  globalThis.performance = { now: () => now };
+  globalThis.devicePixelRatio = 1;
+  globalThis.getComputedStyle = () => { gcsCalls++; return { borderTopLeftRadius: curRadius }; };
+  globalThis.ResizeObserver = class {
+    constructor(cb) { roCb = cb; }
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  };
+  globalThis.setTimeout = (fn, ms) => { const id = timerSeq++; timers.set(id, { fn, ms }); return id; };
+  globalThis.clearTimeout = (id) => { timers.delete(id); };
+
+  const baseRect = { left: 100, top: 760, width: 420, height: 96, right: 520, bottom: 856 };
+  const composerCard = makeEl('div', { class: 'surface-composer-card', 'data-ag-cs-prism-box': '1' }, baseRect);
+  composerCard.getBoundingClientRect = () => { rectCalls++; return baseRect; };
+  boxes.push(composerCard);
+
+  let minGap = 0;
+  const ctl = createPrismRimCanvasController({
+    isDestroyed: () => false,
+    isDarkTheme: () => true,
+    motionReduced: () => false,
+    getMinFrameGapMs: () => minGap,
+    getAmbientIntensity: () => 1,
+    getAccentTone: () => 'default',
+    canMountRealCanvas: () => true,
+    setAttrIfChanged: (el, k, v) => { if (el.getAttribute(k) !== v) el.setAttribute(k, v); },
+    runGuardedMut: (fn) => fn(),
+  });
+
+  try {
+    // 1) 初始挂载 canvas 默认 display:none（0x0，绝不留幽灵合成层）
+    ctl.mountNewBoxes();
+    const cv = composerCard.querySelector('.ag-cs-prism-rim-cv');
+    assert.ok(cv);
+    assert.equal(cv.width, 0);
+    assert.equal(cv.style.display, 'none', 'Initial 0x0 rim canvas must start with display:none');
+
+    // 首次激活绘制恢复 display=''，仅读取 1 次 rect 与 1 次 borderRadius
+    ctl.onPointerMove({ clientX: 260, clientY: 770, target: composerCard });
+    while (rafs.length) rafs.shift()(now += 16);
+    assert.equal(cv.style.display, '', 'Active paint must restore display=""');
+    assert.ok(cv.width > 0 && cv.height > 0);
+    const rectAfterInit = rectCalls;
+    const gcsAfterInit = gcsCalls;
+
+    // 2) 有 ResizeObserver 时，盒内连续移动跨过 >64ms 不再触发定时 getBoundingClientRect 或重复 getComputedStyle
+    for (let i = 1; i <= 5; i++) {
+      now += 80;
+      ctl.onPointerMove({ clientX: 260 + i * 8, clientY: 770, target: composerCard });
+      while (rafs.length) rafs.shift()(now);
+    }
+    assert.equal(rectCalls, rectAfterInit, 'Timed 64ms getBoundingClientRect must stay disabled when ResizeObserver is active');
+    assert.equal(gcsCalls, gcsAfterInit, 'borderRadius must stay cached across frames without redundant getComputedStyle');
+
+    // 3) 限帧等待期间走 setTimeout，不空转 requestAnimationFrame
+    minGap = 20;
+    now += 4;
+    ctl.onPointerMove({ clientX: 330, clientY: 770, target: composerCard });
+    assert.equal(rafs.length, 1);
+    rafs.shift()(now); // < minGap -> schedules setTimeout, 0 extra rAF
+    assert.equal(rafs.length, 0, 'Throttled frame must NOT spin schedRaf()');
+    const gapEntry = [...timers.entries()].find(([, t]) => t.ms < 100);
+    assert.ok(gapEntry, 'Throttled wait must arm short setTimeout');
+    timers.delete(gapEntry[0]);
+    now += 22;
+    gapEntry[1].fn();
+    assert.equal(rafs.length, 1, 'Gap timer expiration schedules single repaint rAF');
+    rafs.shift()(now);
+    minGap = 0;
+
+    // 4) 移出远区并经历 1800ms 空闲收缩：0x0 清零并设 display:none，之后远区跨越 >1500ms 移动 0 rAF、0 rect
+    ctl.onPointerMove({ clientX: 10, clientY: 10, target: doc.documentElement });
+    while (rafs.length) rafs.shift()(now += 16);
+    const idleEntry = [...timers.entries()].find(([, t]) => t.ms === 1800);
+    assert.ok(idleEntry, 'Cleared rim must arm 1800ms VRAM reclamation timer');
+    timers.delete(idleEntry[0]);
+    idleEntry[1].fn();
+    assert.equal(cv.width, 0);
+    assert.equal(cv.height, 0);
+    assert.equal(cv.style.display, 'none', 'Idle 0x0 shrink must set display:none to eliminate ghost compositor layer');
+
+    now += 2500;
+    for (let i = 0; i < 6; i++) {
+      now += 400;
+      ctl.onPointerMove({ clientX: 10 + i * 5, clientY: 10, target: doc.documentElement });
+    }
+    assert.equal(rafs.length, 0, 'farIdle past 1500ms must schedule 0 rAF');
+    assert.equal(rectCalls, rectAfterInit, 'farIdle past 1500ms must trigger 0 getBoundingClientRect');
+
+    // 5) ResizeObserver 通知后失效圆角与矩形缓存，再次移入立刻恢复 display='' 并读取新圆角
+    curRadius = '12px';
+    roCb([]);
+    ctl.onPointerMove({ clientX: 280, clientY: 770, target: composerCard });
+    while (rafs.length) rafs.shift()(now += 16);
+    assert.equal(cv.style.display, '', 'Re-entering box after idle shrink must restore display=""');
+    assert.ok(gcsCalls > gcsAfterInit, 'ResizeObserver must refresh cached borderRadius');
+    assert.ok(rectCalls > rectAfterInit, 'ResizeObserver must refresh cached rect');
+  } finally {
+    ctl.teardown();
+    globalThis.document = prevDoc;
+    globalThis.requestAnimationFrame = prevRaf;
+    globalThis.cancelAnimationFrame = prevCancel;
+    globalThis.performance = prevPerf;
+    globalThis.getComputedStyle = prevGcs;
+    globalThis.devicePixelRatio = prevDpr;
+    globalThis.ResizeObserver = prevRo;
+    globalThis.setTimeout = prevSetT;
+    globalThis.clearTimeout = prevClrT;
+  }
+});

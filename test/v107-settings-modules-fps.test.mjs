@@ -608,34 +608,40 @@ test('prism-rim-canvas (1A & #8b): follows targetFps (native/180/120/60) without
   }
   assert.equal(strokeCount, 4, 'native targetFps (0ms) must draw every 240Hz frame without 16ms cap');
 
-  // 3b) 180Hz (gap=4.8ms): 3.5ms skips, next +2ms (5.5ms total) draws
+  // 3b) 180Hz (gap=4.8ms): 3.5ms skips via setTimeout (0 idle rAF spin), next +2ms (5.5ms total) draws
   gapMs = 4.8;
   strokeCount = 0;
   px += 12;
   ctl.onPointerMove({ clientX: px, clientY: 140 });
   clock.flushRafs(3.5);
   assert.equal(strokeCount, 0, '180Hz (4.8ms) must throttle 3.5ms interval');
-  clock.flushRafs(2.0);
+  assert.equal(clock.rafs.size, 0, 'Throttled wait must use setTimeout instead of spinning rAF');
+  clock.advanceTimers(2.0);
+  clock.flushRafs(0);
   assert.equal(strokeCount, 1, '180Hz (4.8ms) must draw once 5.5ms elapsed');
 
-  // 3c) 120Hz (gap=7.5ms): 6ms skips, +2.5ms (8.5ms total) draws
+  // 3c) 120Hz (gap=7.5ms): 6ms skips via setTimeout, +2.5ms (8.5ms total) draws
   gapMs = 7.5;
   strokeCount = 0;
   px += 12;
   ctl.onPointerMove({ clientX: px, clientY: 140 });
   clock.flushRafs(6.0);
   assert.equal(strokeCount, 0, '120Hz (7.5ms) must throttle 6ms interval');
-  clock.flushRafs(2.5);
+  assert.equal(clock.rafs.size, 0, '120Hz throttle must not spin empty rAF');
+  clock.advanceTimers(2.5);
+  clock.flushRafs(0);
   assert.equal(strokeCount, 1, '120Hz (7.5ms) must draw once 8.5ms elapsed');
 
-  // 3d) 60Hz (gap=15.2ms): 10ms skips, +6ms (16ms total) draws
+  // 3d) 60Hz (gap=15.2ms): 10ms skips via setTimeout, +6ms (16ms total) draws
   gapMs = 15.2;
   strokeCount = 0;
   px += 12;
   ctl.onPointerMove({ clientX: px, clientY: 140 });
   clock.flushRafs(10.0);
   assert.equal(strokeCount, 0, '60Hz (15.2ms) must throttle 10ms interval');
-  clock.flushRafs(6.0);
+  assert.equal(clock.rafs.size, 0, '60Hz throttle must not spin empty rAF');
+  clock.advanceTimers(6.0);
+  clock.flushRafs(0);
   assert.equal(strokeCount, 1, '60Hz (15.2ms) must draw once 16ms elapsed');
 
   // 3e) < 0.5px micro-jitter skips redraw while 1.0px fine move draws smoothly under native (0ms)

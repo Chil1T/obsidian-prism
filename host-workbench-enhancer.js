@@ -337,6 +337,8 @@
     const outlineItemBtnByIdx = new Map();
     let lastCascadeId = '';
     let hideOutlineTimer = 0;
+    let openOutlineRaf = 0;
+    let pendingOpenRail = null;
     let foldFeedbackTimer = 0;
     const sonarTimers = new Set();
 
@@ -1073,16 +1075,27 @@ return true;
       }
       const steps = getMountedUserTurns(conv);
       if (!total) total = steps.length;
-      const vr = findScrollViewport(conv)?.getBoundingClientRect?.(),
-        midY = vr && vr.height > 0 ? vr.top + vr.height * 0.35 : 240,
-        bus = getDomBus();
-      let actIdx = steps.length - 1;
-      for (let i = 0; i < steps.length; i++) {
-        if (bus?.isSkipped?.(steps[i])) continue;
-        const r = steps[i].getBoundingClientRect?.();
-        if (r && r.top <= midY) actIdx = i;
-      }
       const exact = steps.length > 0 && pd.length === steps.length && pd.every((d) => d.turn > 0);
+      let actIdx = steps.length - 1;
+      if (exact && actTurn > 0) {
+        const dotIdx = pd.findIndex((d) => d.turn === actTurn);
+        if (dotIdx >= 0) actIdx = dotIdx;
+      } else if (steps.length > 0) {
+        const vr = findScrollViewport(conv)?.getBoundingClientRect?.(),
+          midY = vr && vr.height > 0 ? vr.top + vr.height * 0.35 : 240,
+          bus = getDomBus();
+        const tops = [];
+        for (let i = 0; i < steps.length; i++) {
+          if (bus?.isSkipped?.(steps[i])) continue;
+          const r = steps[i].getBoundingClientRect?.();
+          if (!r) continue;
+          tops.push([i, r.top]);
+          if (r.top > midY) break;
+        }
+        for (let i = 0; i < tops.length; i++) {
+          if (tops[i][1] <= midY) actIdx = tops[i][0];
+        }
+      }
       let start = Math.max(1, total - steps.length + 1);
       if (!exact && actTurn > 0 && actIdx >= 0 && steps.length > 0) start = Math.max(1, Math.min(start, actTurn - actIdx));
       const items = steps.map((el, i) => ({
@@ -1094,20 +1107,16 @@ return true;
       return { totalTurns: Math.max(total, items.length), chapters, items };
     }
 
-    function cancelHideOutlineTimer() {
-      if (hideOutlineTimer) {
-        clearTimeout(hideOutlineTimer);
-        hideOutlineTimer = 0;
-      }
-    }
-
-    function scheduleHideOutline() {
+    function cancelOpenOutlineRaf() { if (openOutlineRaf) { try { win?.cancelAnimationFrame?.(openOutlineRaf); } catch {} openOutlineRaf = 0; } pendingOpenRail = null; }
+    function scheduleOpenNavOutline(rail) {
+      if (isDead() || !doc) return;
       cancelHideOutlineTimer();
-      hideOutlineTimer = setTimeout(() => {
-        hideOutlineTimer = 0;
-        closeNavOutline();
-      }, OUTLINE_HIDE_DELAY_MS);
+      if (typeof win?.requestAnimationFrame !== 'function') { openNavOutline(rail); return; }
+      pendingOpenRail = rail;
+      if (!openOutlineRaf) openOutlineRaf = win.requestAnimationFrame(() => { const r = pendingOpenRail; openOutlineRaf = 0; pendingOpenRail = null; if (!isDead()) openNavOutline(r); });
     }
+    function cancelHideOutlineTimer() { if (hideOutlineTimer) { clearTimeout(hideOutlineTimer); hideOutlineTimer = 0; } }
+    function scheduleHideOutline() { cancelOpenOutlineRaf(); cancelHideOutlineTimer(); hideOutlineTimer = setTimeout(() => { hideOutlineTimer = 0; closeNavOutline(); }, OUTLINE_HIDE_DELAY_MS); }
 
     function ensureOutlinePopover(hostParent) {
       if (outlinePopover && outlinePopover.parentElement === hostParent) return outlinePopover;
@@ -1145,59 +1154,25 @@ return true;
         }
       });
       const list = mk('div', 'ag-cs-nav-outline-list');
-      const pop = markNoTr(
-        mk(
-          'div',
-          'ag-cs-nav-outline-popover',
-          null,
-          mk('div', 'ag-cs-nav-outline-head', null, title, foldBtn),
-          mk('div', 'ag-cs-nav-outline-search-wrap', null, search),
-          list
-        )
-      );
-      sa(pop, 'role', 'region');
-      sa(pop, 'data-ag-no-i18n', '');
-      sa(pop, 'data-ag-owned', '1');
-      pop.hidden = true;
+      const pop = markNoTr(mk('div', 'ag-cs-nav-outline-popover', null, mk('div', 'ag-cs-nav-outline-head', null, title, foldBtn), mk('div', 'ag-cs-nav-outline-search-wrap', null, search), list));
+      sa(pop, 'role', 'region'); sa(pop, 'data-ag-no-i18n', ''); sa(pop, 'data-ag-owned', '1'); pop.hidden = true;
       pop.addEventListener('pointerenter', cancelHideOutlineTimer);
-      pop.addEventListener('pointerleave', () => {
-        if (doc.activeElement !== search) scheduleHideOutline();
-      });
+      pop.addEventListener('pointerleave', () => { if (doc.activeElement !== search) scheduleHideOutline(); });
       hostParent.appendChild(pop);
-      outlinePopover = pop;
-      outlineTitleEl = title;
-      outlineFoldBtn = foldBtn;
-      outlineSearchInput = search;
-      outlineListEl = list;
-      lastOutlineStructSig = '';
-      lastOutlineActiveIdx = -1;
-      activeOutlineBtn = null;
-      outlineItemBtnByIdx.clear();
+      outlinePopover = pop; outlineTitleEl = title; outlineFoldBtn = foldBtn; outlineSearchInput = search; outlineListEl = list;
+      lastOutlineStructSig = ''; lastOutlineActiveIdx = -1; activeOutlineBtn = null; outlineItemBtnByIdx.clear();
       return pop;
     }
-
     function readCurrentCascadeId(convOverride = null) {
       const cv = convOverride || cl(activeNavRail, S_CV) || findPrimaryConvView();
-      const id =
-        ga(cv, 'data-cascade-id') ||
-        ga(cl(cv, '[data-cascade-id]'), 'data-cascade-id') ||
-        ga(qs(cv, '[data-cascade-id]'), 'data-cascade-id') ||
-        ga(qs(doc, '[data-cascade-id]'), 'data-cascade-id') ||
-        '';
-      return String(id).trim();
+      return String(ga(cv, 'data-cascade-id') || ga(cl(cv, '[data-cascade-id]'), 'data-cascade-id') || ga(qs(cv, '[data-cascade-id]'), 'data-cascade-id') || ga(qs(doc, '[data-cascade-id]'), 'data-cascade-id') || '').trim();
     }
-
     function syncCascadeChange(closeIfOpen = true) {
       const nextCid = readCurrentCascadeId();
       if (nextCid === lastCascadeId) return false;
-      const hadPrev = Boolean(lastCascadeId);
-      lastCascadeId = nextCid;
+      const hadPrev = Boolean(lastCascadeId); lastCascadeId = nextCid;
       if (!hadPrev && !nextCid) return false;
-      lastOutlineStructSig = '';
-      lastOutlineActiveIdx = -1;
-      activeOutlineBtn = null;
-      outlineItemBtnByIdx.clear();
-      outlineFilterText = '';
+      lastOutlineStructSig = ''; lastOutlineActiveIdx = -1; activeOutlineBtn = null; outlineItemBtnByIdx.clear(); outlineFilterText = '';
       if (outlineSearchInput?.value) outlineSearchInput.value = '';
       if (closeIfOpen && outlineOpen) closeNavOutline();
       return true;
@@ -1320,6 +1295,7 @@ return true;
     }
 
     function openNavOutline(railOverride = null) {
+      cancelOpenOutlineRaf();
       if (isDead() || !doc || isHostGroupCardVisible()) return false;
       cancelHideOutlineTimer();
       const navRail = railOverride || qs(doc, '[data-testid="conversation-navigator"]');
@@ -1328,21 +1304,13 @@ return true;
       const pop = renderOutlinePopover();
       if (!pop) return false;
       outlineOpen = true;
-      mut(() => {
-        pop.hidden = false;
-        sa(pop, 'data-open', '1');
-      });
+      mut(() => { pop.hidden = false; sa(pop, 'data-open', '1'); });
       return true;
     }
-
     function closeNavOutline() {
-      cancelHideOutlineTimer();
-      outlineOpen = false;
+      cancelOpenOutlineRaf(); cancelHideOutlineTimer(); outlineOpen = false;
       if (!outlinePopover) return;
-      mut(() => {
-        ra(outlinePopover, 'data-open');
-        outlinePopover.hidden = true;
-      });
+      mut(() => { ra(outlinePopover, 'data-open'); outlinePopover.hidden = true; });
     }
 
     function syncNavRails() {
@@ -1361,7 +1329,7 @@ return true;
           sa(trigBtn, 'data-ag-owned', '1');
           sa(trigBtn, 'aria-label', getStrings().outlineBtn || 'Outline');
           sa(trigBtn, 'data-no-press-spring', '1');
-          trigBtn.addEventListener('pointerenter', () => openNavOutline(rail), PASSIVE_OPT);
+          trigBtn.addEventListener('pointerenter', () => scheduleOpenNavOutline(rail), PASSIVE_OPT);
           trigBtn.addEventListener('click', (ev) => {
             ev?.stopPropagation?.();
             outlineOpen ? closeNavOutline() : openNavOutline(rail);
@@ -1396,7 +1364,7 @@ return true;
           lastHoverTarget = tgt;
           lastHoverAt = now;
           if (isHostGroupCardVisible()) return;
-          openNavOutline(rail);
+          scheduleOpenNavOutline(rail);
         };
         const onLeave = () => {
           lastHoverTarget = null;
@@ -1956,6 +1924,7 @@ function destroy() {
 if (localDestroyed) return;
 localDestroyed = true;
 cancelFoldRaf();
+cancelOpenOutlineRaf();
 cancelHideOutlineTimer();
 cancelScrollGlide();
 if (foldFeedbackTimer) { clearTimeout(foldFeedbackTimer); foldFeedbackTimer = 0; }

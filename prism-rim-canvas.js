@@ -51,7 +51,7 @@
     onPointerActivity, onComposerRimUpdate,
   }) {
     const ptr = { x: -9999, y: -9999 };
-    let prismRaf = 0, idleT = 0, drawAt = 0, pDirty = true, cacheAt = 0, rectAt = 0;
+    let prismRaf = 0, idleT = 0, gapT = 0, drawAt = 0, pDirty = true, cacheAt = 0, rectAt = 0;
     let pBoxes = [], orchE = null, boxRo = null, spIoI = null, cSig = '0';
     const obsSet = new Set(), trkCvs = new Set(), spObs = new Set(), spVis = new Map(), spOn = new Set();
 
@@ -65,7 +65,7 @@
     const emitComp = (v) => {
       if (!isFn(onComposerRimUpdate)) return;
       const on = !!(v && v.strength > 0.015);
-      const sig = on ? `1|${Math.round(v.localX / 6)}|${Math.round(v.strength * 12)}|${v.toneKey}|${v.dark ? 1 : 0}` : '0';
+      const sig = on ? `1|${Math.round(v.localX / 24)}|${Math.round(v.strength * 6)}|${v.toneKey}|${v.dark ? 1 : 0}` : '0';
       if (sig === cSig) return;
       cSig = sig;
       try { onComposerRimUpdate(on ? { active: true, ...v } : { active: false, localX: -9999, strength: 0, toneKey: 'default', dark: true }); } catch {}
@@ -94,9 +94,13 @@
     const dragOff = () => { const h = getHtml(); return ga(h, 'data-ag-cs-resizing') === '1' || ga(h, 'data-ag-cs-mascot-drag') === '1'; };
     const canDraw = () => !isWB() && !dragOff() && isRimOn() && ptrIn();
     const wake = () => { if (canDraw()) { drawAt = 0; schedRaf(); } };
-    const clrIdle = () => { if (idleT) { isFn(G.clearTimeout) && clearTimeout(idleT); idleT = 0; } };
-    const zCv = (c) => { if (c && (c.width || c.height)) c.width = c.height = 0; };
+    const clrT = (id) => (id ? (isFn(G.clearTimeout) && clearTimeout(id), 0) : 0);
+    const clrIdle = () => { idleT = clrT(idleT); }, clrGap = () => { gapT = clrT(gapT); };
+    const zCv = (c) => { if (c) { if (c.width || c.height) c.width = c.height = 0; if (c.style) c.style.display = 'none'; } };
     const zEnt = (e, all) => { if (e && (all || e.cl)) { e._s = ''; e._gc = null; e.cl = true; zCv(e.cv); } };
+    const rstBr = () => { for (const e of pBoxes) e.br = -1; };
+    const offRim = () => { clrRaf(); clrAll(1); };
+    const hidRim = () => { clrRaf(); shrinkRims(1); };
     const cGrad = (e, slot, key, build) => {
       let c = e._gc;
       if (!c) c = e._gc = Object.create(null);
@@ -119,7 +123,7 @@
       }
     };
     const armIdle = () => {
-      if (isDestroyed() || typeof setTimeout !== 'function') return;
+      if (isDestroyed() || !isFn(G.setTimeout)) return;
       const ok = (e) => e?.cl && e.cv && (e.cv.width > 0 || e.cv.height > 0);
       if (!ok(orchE) && !pBoxes.some(ok)) return clrIdle();
       if (!idleT) idleT = setTimeout(() => shrinkRims(0), 1800);
@@ -206,6 +210,7 @@
           for (const p of 'position:absolute|inset:0|width:100%|height:100%|pointer-events:none'.split('|')) { const [k, v] = p.split(':'); st.setProperty(k, v); }
           for (const k of ['margin', 'padding', 'border']) st.setProperty(k, '0', 'important');
         }
+        if (st) st.display = 'none';
         hostEl.appendChild(cv);
       }
       trkCvs.add(cv);
@@ -263,7 +268,9 @@
       const cssR = e.br >= 0 ? e.br : 10;
       const effA = mx(0, mn(1, amb * (!isM && toneKey === 'mono' ? 0.58 : 1)));
       const sig = `${w}|${h}|${radius}|${dark ? 1 : 0}|${isM ? 'm' : toneKey}|${isRB ? 'b' : ''}|${effA.toFixed(3)}|${cssR}|${ip}`;
-      if (!e.cl && e.cv.width === w && e.cv.height === h && e._s === sig && Math.abs(lx - e._x) < 0.5 && Math.abs(ly - e._y) < 0.5) return true;
+      const stC = e.cv.style, hCv = stC && stC.display === 'none';
+      if (!e.cl && !hCv && e.cv.width === w && e.cv.height === h && e._s === sig && Math.abs(lx - e._x) < 0.5 && Math.abs(ly - e._y) < 0.5) return true;
+      if (hCv) stC.display = '';
       if (e.cv.width !== w || e.cv.height !== h) { e.cv.width = w; e.cv.height = h; }
       e.cl = false; e._s = sig; e._x = lx; e._y = ly;
       const ctx = e.ctx;
@@ -332,18 +339,18 @@
     const busOf = () => G.__agDomBus || G.__agPrismDomBus || (typeof window !== 'undefined' && (window.__agDomBus || window.__agPrismDomBus)) || null;
     const szOffs = new Map(), visOffs = new Map();
     const onResize = () => {
-      pDirty = true; rectAt = 0;
+      pDirty = true; rectAt = 0; rstBr();
       if (!isDestroyed() && !prismRaf && isFn(G.requestAnimationFrame) && hasLitRim()) wake();
     };
     const ensureRo = () => {
       if (busOf()?.observeSize) return null;
-      if (boxRo || typeof ResizeObserver !== 'function') return boxRo;
+      if (boxRo || !isFn(G.ResizeObserver)) return boxRo;
       boxRo = new ResizeObserver(onResize);
       return boxRo;
     };
 
     const readRad = (el, fb) => {
-      if (!el || typeof getComputedStyle !== 'function') return fb;
+      if (!el || !isFn(G.getComputedStyle)) return fb;
       try { const v = parseFloat(getComputedStyle(el).borderTopLeftRadius || ''); return Number.isFinite(v) && v >= 0 ? v : fb; } catch { return fb; }
     };
 
@@ -351,7 +358,7 @@
     const inVp = (r) => !!(r && r.width >= 4 && r.height >= 4 && r.bottom > 0 && r.right > 0 && r.top < (G.innerHeight || 900) && r.left < (G.innerWidth || 1440));
     const spIo = () => {
       if (busOf()?.observeVisibility) return null;
-      if (spIoI || typeof IntersectionObserver !== 'function') return spIoI;
+      if (spIoI || !isFn(G.IntersectionObserver)) return spIoI;
       try {
         spIoI = new IntersectionObserver((es) => {
           if (isDestroyed()) return;
@@ -432,7 +439,8 @@
       let nextO = null;
       const pre = bList.map((box) => {
         const prev = prevM.get(box), sk = !!bus?.isSkipped?.(box);
-        return [box, prev, readRad(box, 10), sk ? null : (sp.rcs.get(box) || (allowRd && box.getBoundingClientRect ? box.getBoundingClientRect() : null))];
+        const br = prev && prev.br >= 0 ? prev.br : readRad(box, 10);
+        return [box, prev, br, sk ? null : (sp.rcs.get(box) || (allowRd && box.getBoundingClientRect ? box.getBoundingClientRect() : null))];
       });
       const oRect = trk && allowRd && !bus?.isSkipped?.(trk) && trk.getBoundingClientRect ? trk.getBoundingClientRect() : null;
       const mkEntry = (box, rect, prev, ip, br, mm = false, rb = false) => {
@@ -484,21 +492,16 @@
       }
       const now = typeof rafNow === 'number' && rafNow > 0 ? rafNow : performance.now();
       const minGap = mx(0, Number(getMinFrameGapMs?.() ?? 0) || 0);
-      if (minGap > 0 && drawAt > 0 && now - drawAt < minGap) { schedRaf(); return; }
-      drawAt = now;
-      const { x, y } = ptr, allowRd = ptrIn(), bus = busOf();
-      const hasRo = !!(boxRo || szOffs.size > 0);
-      const trk = getActiveCrystalTrack ? getActiveCrystalTrack() : null;
-      if (
-        pDirty || !pBoxes.length || (!hasRo && now - cacheAt > 2500) || now - cacheAt > 8000 ||
-        trk !== (orchE ? orchE.box : null) ||
-        pBoxes.some((e) => dis(e.box) || (e.cv && e.cv.isConnected === false) || e.br < 0 || (allowRd && !e.rect && !bus?.isSkipped?.(e.box)))
-      ) {
-        rfBox(now, allowRd);
-        rectAt = allowRd ? now : 0;
-      } else if (allowRd && (!rectAt || now - rectAt >= 64)) {
-        rdRec(now);
+      if (minGap > 0 && drawAt > 0 && now - drawAt < minGap) {
+        if (isFn(G.setTimeout)) { if (!gapT) gapT = setTimeout(() => { gapT = 0; if (!isDestroyed() && canDraw()) schedRaf(); }, mx(1, Math.ceil(minGap - (now - drawAt)))); }
+        else schedRaf();
+        return;
       }
+      clrGap(); drawAt = now;
+      const { x, y } = ptr, allowRd = ptrIn(), bus = busOf(), hasRo = !!(boxRo || szOffs.size > 0), trk = getActiveCrystalTrack ? getActiveCrystalTrack() : null;
+      if (pDirty || !pBoxes.length || (!hasRo && now - cacheAt > 2500) || trk !== (orchE ? orchE.box : null) || pBoxes.some((e) => dis(e.box) || (e.cv && e.cv.isConnected === false) || e.br < 0 || (allowRd && !e.rect && !bus?.isSkipped?.(e.box)))) {
+        rfBox(now, allowRd); rectAt = allowRd ? now : 0;
+      } else if (allowRd && (!rectAt || (!hasRo && now - rectAt >= 64))) rdRec(now);
       const dark = isDarkTheme(), tk = toneKeyOf(dark);
       let compRim = null;
       const drawEntry = (e, maxR, gradR, vx, vy, minW) => {
@@ -527,8 +530,8 @@
       armIdle();
     };
 
-    const schedRaf = () => { if (!prismRaf && typeof requestAnimationFrame === 'function') prismRaf = requestAnimationFrame(flushPtr); };
-    const clrRaf = () => { if (prismRaf) { typeof cancelAnimationFrame === 'function' && cancelAnimationFrame(prismRaf); prismRaf = 0; } };
+    const schedRaf = () => { if (!prismRaf && !gapT && isFn(G.requestAnimationFrame)) prismRaf = requestAnimationFrame(flushPtr); };
+    const clrRaf = () => { clrGap(); if (prismRaf) { isFn(G.cancelAnimationFrame) && cancelAnimationFrame(prismRaf); prismRaf = 0; } };
 
     const SB_SEL = 'aside,[data-testid="sidebar-split"]>div:first-child,[data-testid="conversation-row-sidebar"],[data-testid="project-header"],[data-hover-card-popup]';
     let sbT = null, sbR = false, sbAt = 0;
@@ -552,8 +555,8 @@
         return;
       }
       if (rimOn && !prismRaf) {
-        const far = (e, d) => { const r = e.rect; return e.cl && r && (r.width < 4 || r.height < 4 || x < r.left - d || x > r.right + d || y < r.top - d || y > r.bottom + d); };
-        const farIdle = !pDirty && pBoxes.length > 0 && now - cacheAt <= 6000 && rectAt > 0 && now - rectAt < 1500 && pBoxes.every((e) => far(e, 360)) && (!orchE || far(orchE, 200));
+        const far = (e, d) => { const r = e.rect; return e.cl && !dis(e.box) && r && (r.width < 4 || r.height < 4 || x < r.left - d || x > r.right + d || y < r.top - d || y > r.bottom + d); };
+        const farIdle = !pDirty && pBoxes.length > 0 && rectAt > 0 && pBoxes.every((e) => far(e, 360)) && (!orchE || far(orchE, 200));
         if (!farIdle) schedRaf();
       }
       onPointerActivity?.(now);
@@ -562,7 +565,7 @@
     const onLeave = () => { if (!isDestroyed() && !isWB()) { ptr.x = ptr.y = -9999; schedRaf(); } };
     const onVis = () => {
       if (isDestroyed()) return;
-      if (isH()) { clrRaf(); shrinkRims(1); }
+      if (isH()) hidRim();
       else if (!isWB() && isRimOn() && ptrIn()) { drawAt = 0; schedRaf(); }
     };
     const onWinBlur = () => { if (!isDestroyed()) { clrRaf(); clrAll(); } };
@@ -594,27 +597,22 @@
       if (w?.[m]) {
         w[m]('blur', onWinBlur);
         w[m]('scroll', onScroll, CAP);
+        w[m]('resize', onResize, CAP);
       }
     };
     bindEv('addEventListener');
 
     const invalidateMetrics = () => {
-      pDirty = true; rectAt = 0;
-      for (const e of pBoxes) e.br = -1;
+      pDirty = true; rectAt = 0; rstBr();
       if (isDestroyed()) return;
-      runGuardedMut(() => {
-        prOrp();
-        if (isH()) { clrRaf(); shrinkRims(1); }
-        else if (!isRimOn()) { clrRaf(); clrAll(true); }
-        else wake();
-      });
+      runGuardedMut(() => { prOrp(); if (isH()) hidRim(); else if (!isRimOn()) offRim(); else wake(); });
     };
 
     const mountNewBoxes = () => {
       pDirty = true; rectAt = 0;
       if (isDestroyed()) return;
-      if (isH()) { clrRaf(); shrinkRims(1); return; }
-      if (!isRimOn()) { runGuardedMut(() => { clrRaf(); clrAll(true); }); return; }
+      if (isH()) return hidRim();
+      if (!isRimOn()) return runGuardedMut(offRim);
       runGuardedMut(() => {
         for (const box of qsa(`[${PB}="1"]`)) if (!dis(box) && ga(box, CV_A) !== '1') ensureCv(box);
         if (!isWB() && !dragOff()) { drawAt = 0; schedRaf(); }
@@ -624,8 +622,8 @@
     const rescanNow = () => {
       pDirty = true; rectAt = 0; sbT = null; sbAt = 0;
       if (isDestroyed()) return;
-      if (isH()) { clrRaf(); shrinkRims(1); return; }
-      if (!isRimOn()) { runGuardedMut(() => { prOrp(false); clrRaf(); clrAll(true); }); return; }
+      if (isH()) return hidRim();
+      if (!isRimOn()) return runGuardedMut(() => { prOrp(false); offRim(); });
       const now = performance.now();
       rfBox(now, ptrIn());
       rectAt = ptrIn() ? now : 0;
@@ -633,13 +631,10 @@
     };
 
     const markDirty = () => {
-      pDirty = true; sbT = null; sbAt = 0;
+      pDirty = true; sbT = null; sbAt = 0; rstBr();
       if (isDestroyed()) return;
       syncSp(0);
-      runGuardedMut(() => {
-        prOrp(false);
-        if (!isRimOn()) { clrRaf(); clrAll(true); }
-      });
+      runGuardedMut(() => { prOrp(false); if (!isRimOn()) offRim(); });
     };
 
     const teardown = () => {

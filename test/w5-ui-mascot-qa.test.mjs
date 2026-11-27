@@ -755,15 +755,30 @@ test('5) prism-rim-canvas: 0-lag scroll/transitionend/animationend & 64ms rect s
     assert.ok(glowMicro, '0.8px slow pointer movement must redraw instead of sticking on legacy 1.5px deadzone');
     assert.ok(Math.abs(glowMicro.x0 - 120.8) < 1e-6);
 
-    // 4) Chat stream push without scroll or RO: >= 64ms hover re-measures synchronously on the SAME frame (no 5000ms lag, no bus.measure 1-frame delay)
+    // 4) Event-driven rect cache when dom-bus observeSize is active: pure pointer move past 64ms skips timed getBoundingClientRect reflow; markDirty() immediately realigns on the same frame
     log.radials.length = 0;
+    let rectReadsDuringHover = 0;
+    const origGetRect = mirrorPanel.getBoundingClientRect;
+    mirrorPanel.getBoundingClientRect = () => { rectReadsDuringHover++; return origGetRect.call(mirrorPanel); };
     mirrorPanel._rect = { left: 100, top: 180, right: 1000, bottom: 780, width: 900, height: 600 };
     ctl.onPointerMove({ clientX: 222, clientY: 400 });
     env.flushRaf(70);
-    const glow64 = log.radials.find((r) => r.r1 === 210);
-    assert.ok(glow64, 'Hover move after >=64ms must redraw');
-    assert.equal(glow64.x0, 122);
-    assert.equal(glow64.y0, 220, '64ms sync re-measure must apply new rect.top=180 on the exact same frame (localY=220)');
+    const glowHoverCached = log.radials.find((r) => r.r1 === 210);
+    assert.ok(glowHoverCached, 'Hover move after >=64ms must still redraw using cached rect');
+    assert.equal(rectReadsDuringHover, 0, 'With observeSize active, pure pointer move past 64ms must perform 0 timed getBoundingClientRect reflows');
+    assert.equal(glowHoverCached.x0, 122);
+    assert.equal(glowHoverCached.y0, 80, 'Cached rect keeps prior top=320 until structural/scroll/resize invalidation');
+
+    // Structural change (e.g. chat stream push) signals markDirty() -> next frame synchronously realigns to top=180 (localY=220)
+    log.radials.length = 0;
+    ctl.markDirty();
+    ctl.onPointerMove({ clientX: 224, clientY: 400 });
+    env.flushRaf(16);
+    mirrorPanel.getBoundingClientRect = origGetRect;
+    const glowDirty = log.radials.find((r) => r.r1 === 210);
+    assert.ok(glowDirty, 'Move after markDirty() must redraw');
+    assert.equal(glowDirty.x0, 124);
+    assert.equal(glowDirty.y0, 220, 'markDirty() invalidation must apply new rect.top=180 on the exact same frame (localY=220)');
 
     // 5) Entrance transform transitionend (on child) & animationend (on ancestor wrapper) realign on first frame without moving pointer
     log.radials.length = 0;

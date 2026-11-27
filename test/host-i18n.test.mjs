@@ -4060,3 +4060,72 @@ test('External localization auto-yield for agy-powertools (__agyLocalization): a
   instOn.destroy();
   assert.equal(btnOn.textContent, 'Save');
 });
+
+test('domBus omits global characterData:true and capture pointerenter O(1) skips ordinary prose while still translating trigger tooltips', () => {
+  const dict = { exact: { Copy: '复制', Settings: '设置' }, patterns: [] };
+  const env = createTestEnv(1000);
+  const subscriptions = [];
+  env.win.__agDomBus = {
+    subscribe(id, cb, opts) {
+      subscriptions.push({ id, cb, opts });
+      return () => {};
+    },
+    runChunked(items, fn) {
+      for (let i = 0; i < items.length; i++) fn(items[i], i);
+      return Promise.resolve();
+    },
+  };
+
+  const proseWrap = env.makeEl('div', { className: 'markdown-body' });
+  const proseP = env.makeEl('p', { text: 'Streaming plain paragraph content' });
+  const proseSpan = env.makeEl('span', { text: 'Inline prose word' });
+  proseP.append(proseSpan);
+  proseWrap.append(proseP);
+
+  const triggerBtn = env.makeEl('button', { text: 'Settings' });
+  const tipHost = env.makeEl('span', { attrs: { 'data-tooltip-id': 'tip-copy' }, text: 'Copy' });
+  env.doc.body.append(proseWrap, triggerBtn, tipHost);
+
+  const inst = runtime.mountHostI18n({
+    root: env.win,
+    doc: env.doc,
+    dict,
+    mode: 'on',
+    nowFn: env.nowFn,
+    setTimeoutFn: env.setTimeoutFn,
+    clearTimeoutFn: env.clearTimeoutFn,
+    rafFn: env.rafFn,
+    cancelRafFn: env.cancelRafFn,
+  });
+
+  try {
+    // 1) domBus subscription must NOT subscribe global characterData:true
+    const domSub = subscriptions.find((s) => s.id === 'host-i18n-dom');
+    assert.ok(domSub, 'host-i18n must subscribe via __agDomBus when available');
+    assert.notEqual(domSub.opts?.observeOptions?.characterData, true, 'host-i18n-dom must not enable global characterData:true on domBus');
+    assert.notEqual(domSub.opts?.characterData, true, 'host-i18n-dom opts.characterData must not be true');
+
+    // Clear initial timers after mount
+    env.advanceTime(1500);
+    assert.equal(env.timers.size, 0);
+
+    // 2) Hovering plain prose elements must O(1) bail out with 0 timers scheduled
+    for (const plain of [proseWrap, proseP, proseSpan]) {
+      env.doc.dispatchEvent({ type: 'pointerenter', target: plain });
+    }
+    assert.equal(env.timers.size, 0, 'pointerenter over plain prose div/p/span must O(1) bail out with 0 hover timers');
+
+    // 3) Hovering real trigger (<button> or [data-tooltip-id]) still schedules delayed tooltip translation
+    const lateTip = env.makeEl('div', { attrs: { role: 'tooltip' }, text: 'Copy' });
+    env.doc.body.childNodes.push(lateTip);
+    lateTip.parentNode = env.doc.body;
+    lateTip.parentElement = env.doc.body;
+
+    env.doc.dispatchEvent({ type: 'pointerenter', target: triggerBtn });
+    assert.ok(env.timers.size >= 1, 'Hovering interactive button must still schedule trailing tooltip scan');
+    env.advanceTime(200);
+    assert.equal(lateTip.textContent, '复制', 'Trailing scan from interactive trigger must translate delayed tooltip');
+  } finally {
+    inst.destroy();
+  }
+});

@@ -2053,3 +2053,53 @@ test('smooth-caret hardens inline chip guards: inside-chip closest alignment, pr
     globalThis.requestAnimationFrame = prevRaf;
   }
 });
+
+test('bindMicroInteractions pointerover WeakSet negative cache short-circuits repeated hovers on ordinary buttons without animated icons', () => {
+  const prevDoc = globalThis.document;
+  const prevMatch = globalThis.matchMedia;
+  const html = createTestElement('html', { 'data-ag-cs-motion': 'ultra' });
+  globalThis.document = { documentElement: html };
+  globalThis.matchMedia = () => ({ matches: false });
+
+  const root = createTestElement('div');
+  const plainBtn = createTestElement('button');
+  const plainLabel = createTestElement('span');
+  plainBtn.appendChild(plainLabel);
+  root.appendChild(plainBtn);
+
+  let closestCalls = 0;
+  let qsCalls = 0;
+  const origBtnClosest = plainBtn.closest;
+  const origBtnQs = plainBtn.querySelector;
+  const origLblClosest = plainLabel.closest;
+  plainBtn.closest = (s) => { closestCalls++; return origBtnClosest.call(plainBtn, s); };
+  plainBtn.querySelector = (s) => { qsCalls++; return origBtnQs.call(plainBtn, s); };
+  plainLabel.closest = (s) => { closestCalls++; return origLblClosest.call(plainLabel, s); };
+
+  const binding = motionEngine.bindMicroInteractions(root);
+  try {
+    // First hover populates WeakSet negative cache
+    root.dispatch('pointerover', { target: plainLabel, relatedTarget: root });
+    assert.ok(closestCalls >= 1, 'First hover should inspect target once');
+    const cAfterFirst = closestCalls;
+    const qAfterFirst = qsCalls;
+
+    // 10 repeated hovers on the same non-animated node hit WeakSet negative cache with 0 extra DOM walks
+    for (let i = 0; i < 10; i++) {
+      root.dispatch('pointerover', { target: plainLabel, relatedTarget: root });
+    }
+    assert.equal(closestCalls, cAfterFirst, 'Repeated pointerover on non-animated node must hit WeakSet negative cache (0 closest calls)');
+    assert.equal(qsCalls, qAfterFirst, 'Repeated pointerover on non-animated node must hit WeakSet negative cache (0 querySelector calls)');
+
+    // invalidateExclusionCache() clears negative cache so dynamically added animated icon works immediately
+    const dynSvg = createTestElement('svg', { 'data-anim-icon': 'custom-test-icon', class: 'ag-anim-icon' });
+    plainBtn.appendChild(dynSvg);
+    motionEngine.invalidateExclusionCache();
+    root.dispatch('pointerover', { target: plainLabel, relatedTarget: root });
+    assert.equal(dynSvg.animateCalls.length, 1, 'After invalidateExclusionCache(), newly attached animated icon must animate on hover');
+  } finally {
+    binding.unbind();
+    globalThis.document = prevDoc;
+    globalThis.matchMedia = prevMatch;
+  }
+});

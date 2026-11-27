@@ -1566,12 +1566,7 @@
     let lastMiniDisplay = null;
     const rim = { on: false, x: -9999, s: 0, t: 'default', d: true };
     let rimSig = '0';
-    const perfStats = {
-      canvasDraws: 0,
-      canvasSkips: 0,
-      domTransformWrites: 0,
-      domTransformSkips: 0,
-    };
+    const perfStats = { canvasDraws: 0, canvasSkips: 0, domTransformWrites: 0, domTransformSkips: 0 };
 
     const CANVAS_W = 96, CANVAS_H = 84, OX = 8, OY = 17, PEEK_Y = 7, MINI_PEEK_Y = 2;
     if (isFn(hostEl.replaceChildren)) hostEl.replaceChildren();
@@ -1672,11 +1667,17 @@
     habitatEl.setAttribute('aria-hidden', 'true');
     if (habitatEl.style) Object.assign(habitatEl.style, { position: 'absolute', right: '28px', bottom: '2px', width: '24px', height: '30px', pointerEvents: 'none', overflow: 'visible', zIndex: '14', imageRendering: 'pixelated', backgroundRepeat: 'no-repeat', backgroundSize: '24px 30px' });
     hostEl.appendChild(habitatEl);
-    let habitatPreview = 'auto', scheduleWatchUntil = 0, lastHabitatKey = '';
+    let habitatPreview = 'auto', scheduleWatchUntil = 0, lastHabitatKey = '', habModeC = '', habModeAt = -1, habCheckTick = -10;
     const habitatSeed = isFin(options.habitatSeed) ? floor(Number(options.habitatSeed)) : floor(random() * 60);
     const getWallNow = isFn(options.getNow) ? options.getNow : () => Date.now();
     const habSvgCache = {};
-    const resolveHabitatMode = () => (habitatPreview !== 'auto' ? habitatPreview : resolveHabitatModeForTime(getWallNow(), habitatSeed, scheduleWatchUntil));
+    const resolveHabitatMode = (force = false) => {
+      if (habitatPreview !== 'auto') return habitatPreview;
+      const wNow = getWallNow();
+      if (!force && habModeC && abs(wNow - habModeAt) < 1000) return habModeC;
+      habModeAt = wNow;
+      return (habModeC = resolveHabitatModeForTime(wNow, habitatSeed, scheduleWatchUntil));
+    };
     const isLightTheme = () => doc?.documentElement?.getAttribute?.('data-ag-cs-theme') === 'light';
     const resolveHabitatToneKey = (lightKind, dark) => {
       if (lightKind === 'warm') return 'amber';
@@ -1685,15 +1686,17 @@
       const pal = r?.getAttribute?.('data-ag-cs-palette') || 'obsidian';
       return pal === 'warm' || pal === 'claude' || (!dark && pal === 'obsidian' && r?.getAttribute?.('data-ag-cs-light-preset') === 'alabaster') ? 'warm' : 'default';
     };
-    const evalActorHabLight = (a, mode = resolveHabitatMode()) => {
-      const lightKind = HABITAT_LIGHT_KIND[mode] || null;
-      if (!a || !lightKind) return { lv: 0, dir: 0, tone: 'amber', dark: true, strength: 0 };
-      const habX = max(24, readStageWidth() - 40), dxH = getEntWorldCx(a) - habX;
-      const fy = a.stackedOn ? computeWorldFootY(a) : (a.y || 0);
-      const dist = max(0, 1 - abs(dxH) / 240), vert = max(0, 1 - abs(fy) / 56), dark = !isLightTheme();
-      const strength = dist * (0.45 + 0.55 * dist) * vert * (dark ? 1 : 0.55);
-      const lv = round(strength * 10);
-      return { lv, dir: lv > 0 ? clamp(round(-dxH / 42), -2, 2) : 0, tone: resolveHabitatToneKey(lightKind, dark), dark, strength: round(strength * 100) / 100 };
+    const evalActorHabLight = (a, mode = resolveHabitatMode(), save = false) => {
+      const lk = HABITAT_LIGHT_KIND[mode] || null;
+      if (!a || !lk) return { lv: 0, dir: 0, tone: 'amber', dark: true, strength: 0 };
+      const sw = readStageWidth(), cx = getEntWorldCx(a), fy = a.stackedOn ? computeWorldFootY(a) : (a.y || 0), dk = !isLightTheme();
+      const tn = resolveHabitatToneKey(lk, dk), k = `${mode}|${sw}|${round(cx)}|${round(fy)}|${tn}|${dk ? 1 : 0}`;
+      if (save && a._habK === k && a._habL) return a._habL;
+      const dxH = cx - max(24, sw - 40), dist = max(0, 1 - abs(dxH) / 240), vert = max(0, 1 - abs(fy) / 56);
+      const str = dist * (0.45 + 0.55 * dist) * vert * (dk ? 1 : 0.55), lv = round(str * 10);
+      const res = { lv, dir: lv > 0 ? clamp(round(-dxH / 42), -2, 2) : 0, tone: tn, dark: dk, strength: round(str * 100) / 100 };
+      if (save) { a._habK = k; a._habL = res; }
+      return res;
     };
     const buildHabitatSvgUri = (mode) => {
       if (habSvgCache[mode]) return habSvgCache[mode];
@@ -1715,7 +1718,9 @@
     };
     const renderHabitatProp = (force = false) => {
       if (isVramSleepState()) return;
-      const mode = resolveHabitatMode();
+      if (!force && tickIdx - habCheckTick < 10 && lastHabitatKey) return;
+      habCheckTick = tickIdx;
+      const mode = resolveHabitatMode(force);
       if (!force && mode === lastHabitatKey) return;
       lastHabitatKey = mode;
       const uri = buildHabitatSvgUri(mode);
@@ -2722,21 +2727,26 @@
     };
 
     let lastChromaStepTick = -1;
+    const evalRimQ = (a) => {
+      if (!rim.on || !a) return [0, 0];
+      const dx = getEntWorldCx(a) - rim.x, fy = a.stackedOn ? computeWorldFootY(a) : (a.y || 0);
+      const lv = round(rim.s * max(0, 1 - abs(dx) / 240) * max(0, 1 - abs(fy) / 48) * 5);
+      return [lv, lv > 0 ? clamp(round(-dx / 75), -2, 2) : 0];
+    };
     const renderAllFrames = (now = nowMs()) => {
-      if (isVramSleepState()) {
-        reclaimStageVram();
-        return;
-      }
+      if (isVramSleepState()) { reclaimStageVram(); return; }
       restoreStageVram();
       syncStageDpr();
       renderHabitatProp(false);
+      const curHabMode = resolveHabitatMode(false);
       if (prismaticCoat && !reducedMotion && !dozing && lastChromaStepTick !== tickIdx) {
         lastChromaStepTick = tickIdx;
-        if (tickIdx % 3 === 0) {
-          chromaPhase = (chromaPhase + 1 / 12) % 1;
-        }
+        if (tickIdx % 3 === 0) chromaPhase = (chromaPhase + 1 / 12) % 1;
       }
-      syncAllStackedFollowers();
+      const mains = activeMainActors();
+      const hasStack = mains.some((e) => e.stackedOn) || (miniPileEnabled && miniCrabs.some((e) => e.stackedOn));
+      if (hasStack) syncAllStackedFollowers();
+      let movedAny = false;
 
       for (const id of activeMainIds()) {
         const a = actors[id];
@@ -2746,11 +2756,11 @@
 
         // 待机巡逻位移（每拍定步推进，底下散步时稳稳驮着头顶整串伙伴同步移动）
         if (pose === 'walk' && !a.dragging && !a.stackedOn && !a.leap && now < a.overrideUntil && !reducedMotion && a.walkStepTick !== tickIdx) {
-          a.walkStepTick = tickIdx;
+          a.walkStepTick = tickIdx; movedAny = true;
           const stepPx = now < a.passBoostUntil ? 1.4 * 1.55 : 1.4;
           a.x = clampActorX(a.x + a.patrolDir * stepPx);
           if (a.x <= 12 || a.x >= clampActorX(9999) - 2) a.patrolDir *= -1;
-          syncAllStackedFollowers();
+          if (hasStack) syncAllStackedFollowers();
         }
 
         // 自动搭便车超时后轻巧侧跳落地
@@ -2864,14 +2874,8 @@
 
         const flip = inspectState ? inspectState.mirror : !!a.mirror;
         const rulerOn = !!(inspectState?.ruler);
-        let bLv = 0, bDir = 0;
-        if (!inspectState && rim.on) {
-          const dx = getEntWorldCx(a) - rim.x;
-          const fy = a.stackedOn ? computeWorldFootY(a) : (a.y || 0);
-          bLv = round(rim.s * max(0, 1 - abs(dx) / 240) * max(0, 1 - abs(fy) / 48) * 12);
-          if (bLv > 0) bDir = clamp(round(-dx / 55), -2, 2);
-        }
-        const hL = inspectState ? null : a.dragging || a.ballisticActive ? (a._habL || null) : (a._habL = evalActorHabLight(a, resolveHabitatMode()));
+        const [bLv, bDir] = inspectState ? [0, 0] : evalRimQ(a);
+        const hL = inspectState ? null : a.dragging || a.ballisticActive ? (a._habL || null) : evalActorHabLight(a, curHabMode, true);
         const hLv = hL ? hL.lv : 0, hDir = hL ? hL.dir : 0, hTone = hL ? hL.tone : 'amber', hDark = hL ? hL.dark : true;
         const tintState = `${a.kind}:${crystalActive ? 1 : 0}:${rulerOn ? 1 : 0}:${isChromaCat ? `p${phaseBucket}_${earSparkPhase}` : '0'}${bLv ? `:r${bLv}_${bDir}_${rim.t}_${rim.d ? 1 : 0}` : ''}${hLv ? `:h${hLv}_${hDir}_${hTone}_${hDark ? 1 : 0}` : ''}`;
         const snappedTy = round(Number(nodOffset || 0) / PX) * PX;
@@ -2907,7 +2911,7 @@
                 c2.save();
                 c2.globalCompositeOperation = 'source-atop';
                 if (bLv > 0) {
-                  const p = RIM_PALS[rim.t] || RIM_PALS.default, o = rim.d ? 0 : 2, lv = (bLv / 12) * (rim.d ? 1 : 0.65), gx = (oxG + 8) * pxS + bDir * 9;
+                  const p = RIM_PALS[rim.t] || RIM_PALS.default, o = rim.d ? 0 : 2, lv = (bLv / 5) * (rim.d ? 1 : 0.65), gx = (oxG + 8) * pxS + bDir * 9;
                   const paint = (yy, r, h, s0, s1) => {
                     const g = c2.createRadialGradient(gx, yy, 0, gx, yy, r);
                     g.addColorStop(0, s0);
@@ -3031,9 +3035,11 @@
         miniCrabs.forEach((mc) => { mc.act = mc.stackedOn = null; mc.dragging = mc.ballisticActive = false; mc.rot = mc.y = 0; });
         syncMascotDragRootAttr();
       }
-      const draggingMain = activeMainActors().find((a) => a.dragging);
-      enforceGroundSeparation(draggingMain ? draggingMain.id : (miniCrabs.find((m) => m.dragging) || {}).id || null);
-      for (const a of activeMainActors()) applyActorTransform(a, now);
+      const draggingMain = mains.find((a) => a.dragging);
+      if (movedAny || draggingMain || hasStack || miniPileEnabled || mains.some((a) => a.leap || a.ballisticActive)) {
+        enforceGroundSeparation(draggingMain ? draggingMain.id : (miniCrabs.find((m) => m.dragging) || {}).id || null);
+      }
+      for (const a of mains) applyActorTransform(a, now);
       if (miniPileEnabled) {
         const miniPeekY = yieldMode === 'peek' ? MINI_PEEK_Y : 0;
         for (const mc of miniCrabs) {
@@ -3043,7 +3049,7 @@
           }
         }
       }
-      stepAndPaintChromaFx();
+      if (chromaSparks.length || !fxCanvasCleared) stepAndPaintChromaFx();
     };
 
     const startClip = (actor, pose, durationMs, opts = {}) => {
@@ -3927,105 +3933,48 @@
     const onHeartbeat = () => {
       if (disposed) return;
       const now = nowMs();
-      if (
-        isHostDetached() ||
-        parked ||
-        isDocHidden() ||
-        isHostSleeping() ||
-        isPpOpen() ||
-        (isWindowBlurred() && (dozing || !inTrans())) ||
-        (reducedMotion && !inTrans())
-      ) {
-        syncHeartbeat(now);
-        if (isVramSleepState()) reclaimStageVram();
-        return;
+      if (isHostDetached() || parked || isDocHidden() || isHostSleeping() || isPpOpen() || (isWindowBlurred() && (dozing || !inTrans())) || (reducedMotion && !inTrans())) {
+        syncHeartbeat(now); if (isVramSleepState()) reclaimStageVram(); return;
       }
-      tickIdx += 1;
-      updateBalance();
-      ecoTick(now);
-      renderAllFrames(now);
-      syncHeartbeat(now);
+      tickIdx += 1; updateBalance(); ecoTick(now); renderAllFrames(now); syncHeartbeat(now);
     };
-
     function syncHeartbeat(now = nowMs()) {
       let targetMs = TICK;
-      if (
-        disposed ||
-        isHostDetached() ||
-        parked ||
-        isDocHidden() ||
-        isHostSleeping() ||
-        isPpOpen() ||
-        (isWindowBlurred() && (dozing || !inTrans())) ||
-        (reducedMotion && !inTrans())
-      ) {
-        targetMs = 0;
-      } else if (dozing && !stageBusy() && !hasDozeTransition(now)) {
-        targetMs = DOZE_TICK;
-      }
-      if (targetMs === 0 || dozing || reducedMotion) {
-        clearTimeout(theaterTimer);
-        theaterTimer = 0;
-      } else if (!theaterTimer) {
-        scheduleTheater();
-      }
+      if (disposed || isHostDetached() || parked || isDocHidden() || isHostSleeping() || isPpOpen() || (isWindowBlurred() && (dozing || !inTrans())) || (reducedMotion && !inTrans())) targetMs = 0;
+      else if (dozing && !stageBusy() && !hasDozeTransition(now)) targetMs = DOZE_TICK;
+      if (targetMs === 0 || dozing || reducedMotion) { clearTimeout(theaterTimer); theaterTimer = 0; }
+      else if (!theaterTimer) scheduleTheater();
       if (isVramSleepState()) reclaimStageVram();
       if (targetMs === currentTickMs) return;
-      if (tickTimer !== null) {
-        clearInterval(tickTimer);
-        tickTimer = null;
-      }
+      if (tickTimer !== null) { clearInterval(tickTimer); tickTimer = null; }
       currentTickMs = targetMs;
-      if (targetMs > 0) {
-        tickTimer = setInterval(onHeartbeat, targetMs);
-        if (tickTimer && isFn(tickTimer.unref)) tickTimer.unref();
-      }
+      if (targetMs > 0) { tickTimer = setInterval(onHeartbeat, targetMs); if (tickTimer && isFn(tickTimer.unref)) tickTimer.unref(); }
     }
-
     function wakeUp() {
       if (!dozing) return;
-      dozing = false;
-      lastActivityAt = nowMs();
-      syncHeartbeat();
-      // 伸懒腰醒来（复用 stretch 姿态，各宠错峰 2 拍）
-      const mains = activeMainActors();
-      mains.forEach((a, i) => {
-        const go = () => {
-          if (!dozing && actors[a.id] === a) {
-            startClip(a, a.kind === 'whale' ? 'whaleSpout' : 'stretch', a.kind === 'whale' ? 1200 : 1100);
-          }
-        };
+      dozing = false; lastActivityAt = nowMs(); syncHeartbeat();
+      activeMainActors().forEach((a, i) => {
+        const go = () => { if (!dozing && actors[a.id] === a) startClip(a, a.kind === 'whale' ? 'whaleSpout' : 'stretch', a.kind === 'whale' ? 1200 : 1100); };
         if (!i) go(); else later(TICK * 2 * i, go);
       });
       renderAllFrames();
     }
-
     function markActivity() {
       if (!isAttrB()) wb = false;
       lastActivityAt = nowMs();
-      if (dozing && !isHostSleeping() && !isWindowBlurred()) wakeUp();
-      else syncHeartbeat();
+      if (dozing && !isHostSleeping() && !isWindowBlurred()) wakeUp(); else syncHeartbeat();
     }
-
-    // 进入打盹：先打哈欠（错峰 0.4s），哈欠结束后由 resolvePoseFor 接管为 sleep 并拉宽至 400ms
     function startDoze(skipYawn) {
       if (dozing) return;
       dozing = true;
-      for (const a of activeMainActors()) {
-        if (a.overridePose && a.overridePose !== 'dangle') a.overrideUntil = 0;
-        a.eyeScan = 0;
-      }
+      for (const a of activeMainActors()) { if (a.overridePose && a.overridePose !== 'dangle') a.overrideUntil = 0; a.eyeScan = 0; }
       if (!skipYawn) {
-        const prePose = isLateNight() ? 'nightSip' : 'yawn';
-        const preMs = isLateNight() ? 1800 : 1200;
+        const prePose = isLateNight() ? 'nightSip' : 'yawn', preMs = isLateNight() ? 1800 : 1200;
         activeMainActors().forEach((a, idx) => {
-          if (!idx) startClip(a, prePose, preMs);
-          else later(400 * idx, () => { if (dozing) startClip(a, prePose, preMs); });
+          if (!idx) startClip(a, prePose, preMs); else later(400 * idx, () => { if (dozing) startClip(a, prePose, preMs); });
         });
       }
-      const now = nowMs();
-      renderAllFrames(now);
-      syncHeartbeat(now);
+      const now = nowMs(); renderAllFrames(now); syncHeartbeat(now);
     }
 
     const bumpSeq = (p) => [['squash', 1, 2, -1, 0], [p, 2, -1, 1, -2], ['idle', 1, 1, -1, 0]];
@@ -4364,7 +4313,7 @@
       if (event === 'activity') { if (wasDozing) renderAllFrames(); return; }
       fn(pl); renderAllFrames();
     };
-    const onApproach = () => { if (yieldMode !== 'peek') markActivity(); };
+    const onApproach = () => { if (yieldMode !== 'peek' && (dozing || nowMs() - lastActivityAt >= 1000)) markActivity(); };
     if (isFn(hostEl.addEventListener)) {
       hostEl.addEventListener('pointerenter', onApproach, { passive: true });
       hostEl.addEventListener('pointermove', onApproach, { passive: true });
@@ -4654,50 +4603,31 @@
       },
       setRimLight(n = null) {
         if (disposed) return;
-        const on = Boolean(n?.active && Number(n.strength) > 0.015);
-        const x = on ? Number(n.localX) || 0 : -9999;
-        const s = on ? max(0, min(1, Number(n.strength) || 0)) : 0;
-        const t = on && RIM_PALS[n.toneKey] ? n.toneKey : 'default';
-        const d = on ? n.dark !== false : true;
-        const sig = on ? `1|${round(x / 6)}|${round(s * 12)}|${t}|${d ? 1 : 0}` : '0';
+        const on = Boolean(n?.active && Number(n.strength) > 0.015), x = on ? Number(n.localX) || 0 : -9999;
+        const s = on ? max(0, min(1, Number(n.strength) || 0)) : 0, t = on && RIM_PALS[n.toneKey] ? n.toneKey : 'default', d = on ? n.dark !== false : true;
+        const sig = on ? `1|${round(x / 24)}|${round(s * 6)}|${t}|${d ? 1 : 0}` : '0';
         if (sig === rimSig) return;
-        rimSig = sig;
-        rim.on = on;
-        rim.x = x;
-        rim.s = s;
-        rim.t = t;
-        rim.d = d;
-        if (!isVramSleepState() && !isWindowBlurred() && !isPpOpen()) renderAllFrames();
+        const mains = activeMainActors(), prevQ = mains.map((a) => evalRimQ(a).join(','));
+        const prevT = rim.t, prevD = rim.d;
+        rimSig = sig; rim.on = on; rim.x = x; rim.s = s; rim.t = t; rim.d = d;
+        const changed = mains.some((a, i) => {
+          const nq = evalRimQ(a);
+          return `${nq[0]},${nq[1]}` !== prevQ[i] || (nq[0] > 0 && (t !== prevT || d !== prevD));
+        });
+        if (!changed || isVramSleepState() || isWindowBlurred() || isPpOpen()) return;
+        renderAllFrames();
       },
       getLayoutSnapshot() {
-        const now = nowMs();
-        const habMode = resolveHabitatMode(), habActor = actors.clawd || activeMainActors()[0] || null;
-        const habLight = evalActorHabLight(habActor, habMode);
+        const now = nowMs(), habMode = resolveHabitatMode(), habLight = evalActorHabLight(actors.clawd || activeMainActors()[0] || null, habMode);
         return {
           camp, mascot: mascotSpec, roster: { ...roster }, miniPileEnabled, quadEnabled, reducedMotion, yieldMode, dozing, orchestrator,
           rimLight: { active: rim.on, strength: round(rim.s * 100) / 100, toneKey: rim.t },
-          habitat: {
-            mode: habMode,
-            lightKind: HABITAT_LIGHT_KIND[habMode] || null,
-            poolSize: HABITAT_MODES.length,
-            clawdLightStrength: habLight.strength,
-            scheduleActive: getWallNow() < scheduleWatchUntil,
-          },
+          habitat: { mode: habMode, lightKind: HABITAT_LIGHT_KIND[habMode] || null, poolSize: HABITAT_MODES.length, clawdLightStrength: habLight.strength, scheduleActive: getWallNow() < scheduleWatchUntil },
           towers: listAllTowers(),
           chromaResonance: { active: prismaticCoat, tuned: chromaGates.tuned, forged: chromaGates.forged, sparkCount: chromaSparks.length },
-          perf: {
-            timerIntervalMs: currentTickMs,
-            timerPaused: isHostDetached() || parked || isWindowBlurred() || isHostSleeping() || currentTickMs === 0,
-            vramReclaimed,
-            canvasDraws: perfStats.canvasDraws, canvasSkips: perfStats.canvasSkips,
-            domTransformWrites: perfStats.domTransformWrites, domTransformSkips: perfStats.domTransformSkips,
-          },
+          perf: { timerIntervalMs: currentTickMs, timerPaused: isHostDetached() || parked || isWindowBlurred() || isHostSleeping() || currentTickMs === 0, vramReclaimed, canvasDraws: perfStats.canvasDraws, canvasSkips: perfStats.canvasSkips, domTransformWrites: perfStats.domTransformWrites, domTransformSkips: perfStats.domTransformSkips },
           lastInteraction: { ...lastInteraction },
-          minis: miniCrabs.map((mc) => ({
-            id: mc.id, act: mc.act && tickIdx >= mc.act.start ? mc.act.type : null, x: round(mc.lastX),
-            y: round(mc.stackedOn ? computeWorldFootY(mc) : mc.y || 0), worldCx: round(getEntWorldCx(mc)),
-            dir: mc.dir, stackedOn: mc.stackedOn, leap: !!mc.leap,
-          })),
+          minis: miniCrabs.map((mc) => ({ id: mc.id, act: mc.act && tickIdx >= mc.act.start ? mc.act.type : null, x: round(mc.lastX), y: round(mc.stackedOn ? computeWorldFootY(mc) : mc.y || 0), worldCx: round(getEntWorldCx(mc)), dir: mc.dir, stackedOn: mc.stackedOn, leap: !!mc.leap })),
           actors: activeMainIds().map((id) => {
             const a = actors[id], rect = a.el ? a.el.getBoundingClientRect() : null, fx = a.lastFx || {};
             return {
@@ -4707,55 +4637,30 @@
               rect: rect ? { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom } : null,
               squash: a.lastSq ? { ...a.lastSq } : { w: 0, h: 0 }, blinkStage: fx.blinkStage || null, breath: !!fx.breath,
               earTwitch: fx.earTwitch || null, clawSnap: fx.clawSnap || null, glance: fx.glance || 0, tick: tickIdx,
-              renderCache: {
-                poseKey: a.lastRender.poseKey, frameIdx: a.lastRender.frameIdx, flip: a.lastRender.flip,
-                tintState: a.lastRender.tintState, lastX: a.lastDomX, lastY: a.lastDomY, lastRot: a.lastRender.lastRot,
-              },
+              renderCache: { poseKey: a.lastRender.poseKey, frameIdx: a.lastRender.frameIdx, flip: a.lastRender.flip, tintState: a.lastRender.tintState, lastX: a.lastDomX, lastY: a.lastDomY, lastRot: a.lastRender.lastRot },
             };
           }),
         };
       },
-      getDebugState() {
-        const snap = this.getLayoutSnapshot();
-        return { ...snap, habitat: { ...snap.habitat, preview: habitatPreview } };
-      },
-      park(on = true) {
-        if (disposed) return;
-        parked = !!on;
-        syncHeartbeat();
-        if (parked) reclaimStageVram();
-        else if (!isVramSleepState() && !isWindowBlurred()) renderAllFrames();
-      },
-      resume() {
-        if (disposed) return;
-        parked = false;
-        syncHeartbeat();
-        if (!isVramSleepState() && !isWindowBlurred() && !isPpOpen()) renderAllFrames();
-      },
-      syncPowerState: syncPwr,
-      getHopBridge: getHopApi,
-      destroy() { this.dispose(); },
+      getDebugState() { const snap = this.getLayoutSnapshot(); return { ...snap, habitat: { ...snap.habitat, preview: habitatPreview } }; },
+      park(on = true) { if (disposed) return; parked = !!on; syncHeartbeat(); if (parked) reclaimStageVram(); else if (!isVramSleepState() && !isWindowBlurred()) renderAllFrames(); },
+      resume() { if (disposed) return; parked = false; syncHeartbeat(); if (!isVramSleepState() && !isWindowBlurred() && !isPpOpen()) renderAllFrames(); },
+      syncPowerState: syncPwr, getHopBridge: getHopApi, destroy() { this.dispose(); },
       dispose() {
-        disposed = true;
-        rim.on = false; rim.s = 0; rimSig = '0';
+        disposed = true; rim.on = false; rim.s = 0; rimSig = '0';
         try { getHopApi()?.cancelForStage?.(hostEl); } catch {}
         const liveMains = activeMainActors();
         for (const e of [...liveMains, ...miniCrabs]) if (e) { e.dragging = e.ballisticActive = false; e.rot = 0; }
         syncMascotDragRootAttr();
         if (tickTimer !== null) { clearInterval(tickTimer); tickTimer = null; }
         currentTickMs = 0;
-        if (dragRafId && cAF) { try { cAF(dragRafId); } catch {} dragRafId = 0; }
-        if (typeRaf && cAF) { try { cAF(typeRaf); } catch {} typeRaf = 0; }
-        dragRafPending = false;
-        if (resizeRaf && cAF) { try { cAF(resizeRaf); } catch {} resizeRaf = 0; }
+        for (const id of [dragRafId, typeRaf, resizeRaf]) if (id && cAF) try { cAF(id); } catch {}
+        dragRafId = typeRaf = resizeRaf = 0; dragRafPending = false;
         clearTimeout(pauseTimer); clearTimeout(theaterTimer);
         pendingTimers.forEach((t) => clearTimeout(t)); pendingTimers.clear();
         try { reducedMq?.removeEventListener?.('change', onReducedChange) ?? reducedMq?.removeListener?.(onReducedChange); } catch {}
         pairCooldowns.clear();
-        try {
-          reclaimStageVram(); zeroCv(fxCanvas, 1);
-          for (const e of [...liveMains, ...miniCrabs]) if (e) { e._ctx = null; zeroCv(e.canvas, 1); }
-        } catch {}
+        try { reclaimStageVram(); zeroCv(fxCanvas, 1); for (const e of [...liveMains, ...miniCrabs]) if (e) { e._ctx = null; zeroCv(e.canvas, 1); } } catch {}
         cleanups.forEach((fn) => fn());
         for (const n of [miniGroupEl, ...liveMains.map((a) => a.el), fxCanvas, habitatEl]) rmNode(n);
         releaseHabitatStyle(doc, habStyleTok);
