@@ -1,8 +1,9 @@
 // Obsidian Prism DOM 观察总线、三档调度器、零回流观察与双拍 Batcher
 (function (root, factory) {
   const api = factory(root);
-  if (root) { root.__agPrismDomBus = root.__agDomBus = api; root.__agPrismPerfCaps = api.getPerfCaps; }
-  if (typeof window !== 'undefined' && window && window !== root) { window.__agPrismDomBus = window.__agDomBus = api; window.__agPrismPerfCaps = api.getPerfCaps; }
+  const bind = (t) => { if (t) { t.__agPrismDomBus = t.__agDomBus = api; t.__agPrismPerfCaps = api.getPerfCaps; } };
+  bind(root);
+  if (typeof window !== 'undefined' && window !== root) bind(window);
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : typeof window !== 'undefined' ? window : this, function (G) {
   'use strict';
@@ -14,10 +15,12 @@
   const MOTION_OFF_SCOPED_CSS =
     OFF_P + 'button,[role="button"],[role="menuitem"],[role="option"],[role="tab"],[role="switch"],div[role="dialog"],.agy-overlay,.agy-overlay-item,.agy-fastpick,.agy-selection-pill,.agy-toast,.surface-composer-card,.agy-composer-footer,.ag-cs-home-panel,.ag-cs-ctx-menu,.ag-cs-ctx-toast,.ag-cs-model-glyph,.ag-cs-thinking-spark,.ag-cs-smooth-caret,.ag-cs-stream-chunk,.ag-cs-thought-chunk,.ag-cs-code-scan,.ag-prism-thought-chunk,.ag-cs-liftoff-veil,.ag-cs-liftoff-ring,[data-testid="conversation-row-sidebar"],[data-testid="conversation-row-history"],[data-testid="step-plan"],[data-testid="step-plan-item"],[data-testid="queued-messages-card"],[data-testid="interaction-takeover-card"],[data-ag-cs-overview-shell="1"],[data-ag-row-stagger="1"],[data-ag-cs-sonar="1"],' + OFF_PS + '),' +
     OFF_P + OFF_PS + ')::before,' + OFF_P + OFF_PS + ')::after{animation:none!important;transition:none!important}';
+  const mkCap = (mode, maxFps, minFrameGapMs, maxDpr, disableHeavyBlur, lowPriorityThrottleMs, chunkBudgetMs) =>
+    Object.freeze({ mode, maxFps, minFrameGapMs, maxDpr, disableHeavyBlur, lowPriorityThrottleMs, chunkBudgetMs });
   const PERF_CAPS_TABLE = Object.freeze({
-    performance: Object.freeze({ mode: 'performance', maxFps: 60, minFrameGapMs: 14.5, maxDpr: 1, disableHeavyBlur: true, lowPriorityThrottleMs: 200, chunkBudgetMs: 2.5 }),
-    balanced: Object.freeze({ mode: 'balanced', maxFps: 180, minFrameGapMs: 0, maxDpr: 1.5, disableHeavyBlur: false, lowPriorityThrottleMs: 180, chunkBudgetMs: 3.5 }),
-    quality: Object.freeze({ mode: 'quality', maxFps: 0, minFrameGapMs: 0, maxDpr: 2, disableHeavyBlur: false, lowPriorityThrottleMs: 160, chunkBudgetMs: 4.5 }),
+    performance: mkCap('performance', 60, 14.5, 1, true, 200, 2.5),
+    balanced: mkCap('balanced', 180, 0, 1.5, false, 180, 3.5),
+    quality: mkCap('quality', 0, 0, 2, false, 160, 4.5),
   });
   const SW_RE = /swiftshader|llvmpipe|softpipe|microsoft basic render|software rasterizer|mesa offscreen/i;
   const PM_RE = /^(?:performance|eco|balanced|quality)$/;
@@ -59,8 +62,9 @@
   }
 
   function createDomBus(envDoc, envWin) {
-    let bDoc = envDoc || null, bWin = envWin || null, rootMo = null, obsTgt = null, obsKey = '', subSeq = 0;
+    let bDoc = envDoc || null, bWin = envWin || null, subSeq = 0;
     const subs = new Map(), mQ = new Map(), wQ = new Map(), tasks = new Map(), szCbs = new Map(), vMap = new Map(), ioPools = new Map();
+    const slots = [0, 1, 1].map((f) => ({ m: null, t: null, k: '', cb: (r) => dispatchMo(r, !!f) }));
     let szCache = new WeakMap(), skEls = new WeakSet(), ioSkEls = new WeakSet();
     let szRo = null, dvOn = false, dvTgt = null, lastVEv = null;
     let bSeq = 0, tSeq = 0, bSched = false, bRaf = 0, bTmr = 0, bFlush = false;
@@ -72,8 +76,8 @@
     const getWin = (o, d) => o || bWin || d?.defaultView || (typeof window !== 'undefined' ? window : G);
     const getHtml = (o) => getDoc(o)?.documentElement || null;
     const gFn = (k, w) => { const win = w || getWin(); return (isF(win?.[k]) && win[k]) || (isF(G?.[k]) && G[k]) || null; };
-    const setA = (h, k, v) => h && T(() => { if (isF(h.setAttribute) && (!isF(h.getAttribute) || h.getAttribute(k) !== v)) h.setAttribute(k, v); });
-    const rmA = (h, k) => h && T(() => { if (isF(h.removeAttribute) && (!isF(h.hasAttribute) || h.hasAttribute(k))) h.removeAttribute(k); });
+    const setA = (h, k, v) => h && T(() => { if (v === null) { if (isF(h.removeAttribute) && (!isF(h.hasAttribute) || h.hasAttribute(k))) h.removeAttribute(k); } else if (isF(h.setAttribute) && (!isF(h.getAttribute) || h.getAttribute(k) !== v)) h.setAttribute(k, v); });
+    const rmA = (h, k) => setA(h, k, null);
     const cancelBRaf = (wo) => { if (!bRaf) return; T(() => gFn('cancelAnimationFrame', getWin(wo))?.(bRaf)); bRaf = 0; };
     const evPair = (tg, add, e1, f1, e2, f2, opt) => {
       const m = add ? 'addEventListener' : 'removeEventListener';
@@ -81,50 +85,49 @@
       return !!T(() => { tg[m](e1, f1, opt); tg[m](e2, f2, opt); return true; });
     };
 
+    const parseA = (a1, a2, a3, strObj) => {
+      if (isF(a1)) return ['', a1, isO(a2) ? a2 : {}];
+      if (strObj && isO(a1) && isF(a2)) return ['', a2, a1];
+      return [isS(a1) ? a1 : String(a1 || ''), a2, isO(a3) ? a3 : {}];
+    };
     const isStr = (o) => stBusy || getHtml(o)?.getAttribute?.(STREAM_ATTR) === '1';
-    const syncBusy = (o) => { const h = getHtml(o); if (h) { if (scBusy || stBusy || mUntil > nowMs()) setA(h, BUSY_ATTR, '1'); else rmA(h, BUSY_ATTR); } };
-    function bumpSc(ms) {
-      const d = isN(ms) && ms >= 0 ? ms : 200;
-      scBusy = true; syncBusy();
-      scTmr = clrT(scTmr);
-      scTmr = setTimeout(() => { scTmr = 0; scBusy = false; syncBusy(); }, d);
-    }
+    function bumpSc(ms) { scBusy = true; scTmr = clrT(scTmr); scTmr = setTimeout(() => { scTmr = 0; scBusy = false; }, isN(ms) && ms >= 0 ? ms : 200); }
     const onScroll = () => bumpSc(200);
     function toggleLs(on, dO, wO) {
       if (on) { if (dO) bDoc = dO; if (wO) bWin = wO; }
       if (on === lsOn) return;
-      const d = getDoc(), w = getWin(null, d), m = on ? 'addEventListener' : 'removeEventListener', tg = isF(w?.[m]) ? w : d;
+      const d = getDoc(), w = getWin(null, d), tg = isF(w?.[on ? 'addEventListener' : 'removeEventListener']) ? w : d;
       if (evPair(tg, on, 'scroll', onScroll, 'wheel', onScroll, PASSIVE_CAP)) lsOn = on;
       else if (!on) lsOn = false;
     }
     const att = (d, w) => { toggleLs(true, d, w); attachDv(d); };
     const detach = () => { toggleLs(false); detachDv(); };
-    const setStr = (a) => { stBusy = !!a; syncBusy(); };
+    const setStr = (a) => { stBusy = !!a; };
     function bumpB(ms) {
       const d = isN(ms) && ms > 0 ? ms : 200, u = nowMs() + d;
       if (u > mUntil) mUntil = u;
-      syncBusy();
       mTmr = clrT(mTmr);
-      mTmr = setTimeout(() => { mTmr = 0; if (nowMs() >= mUntil) { mUntil = 0; syncBusy(); } }, d + 4);
+      mTmr = setTimeout(() => { mTmr = 0; if (nowMs() >= mUntil) mUntil = 0; }, d + 4);
     }
     const isBsy = () => scBusy || isStr() || mUntil > nowMs();
 
-    function calcMoOpts() {
-      let cL = false, sb = false, at = false, cd = false, allF = true;
+    function calcMoOpts(isRa, bodyOnly) {
+      let cL = 0, sb = 0, at = 0, cd = 0, allF = 1, cnt = 0;
       const as = new Set();
       for (const s of subs.values()) {
+        if (s.ra !== isRa || (bodyOnly && !s.wB)) continue;
+        cnt++;
         const o = s.o;
-        if (o.childList !== false) cL = true;
-        if (o.subtree !== false) sb = true;
+        if (!isRa) { cL |= o.childList !== false; sb |= o.subtree !== false; cd |= !!o.characterData; }
         if (o.attributes) {
-          at = true;
+          at = 1;
           if (isA(o.attributeFilter) && o.attributeFilter.length) for (const a of o.attributeFilter) as.add(a);
-          else allF = false;
+          else allF = 0;
         }
-        if (o.characterData) cd = true;
       }
-      const m = { childList: cL, subtree: sb };
-      if (at) { m.attributes = true; if (allF && as.size) m.attributeFilter = Array.from(as).sort(); }
+      if (!cnt) return null;
+      const m = { childList: !!cL, subtree: !!sb };
+      if (at) { m.attributes = true; if (allF && as.size) m.attributeFilter = [...as].sort(); }
       if (cd) m.characterData = true;
       return m;
     }
@@ -132,7 +135,10 @@
       if (!m) return false;
       const t = m.type;
       if (t === 'childList' ? !s.wC : t === 'characterData' ? !s.wD : t === 'attributes' && (!s.wA || (s.aS && m.attributeName && !s.aS.has(m.attributeName)))) return false;
-      if (s.rO && m.target && obsTgt && m.target !== obsTgt) return false;
+      if (s.rO && m.target) {
+        const rt = s.ra ? slots[1].t : slots[0].t;
+        if (rt && m.target !== rt && !(s.wB && slots[2].t && m.target === slots[2].t)) return false;
+      }
       return s.f ? !!s.f(m) : true;
     }
     function flushSub(s) {
@@ -142,13 +148,14 @@
       s.at = nowMs();
       T(() => s.h(b));
     }
-    function dispatchMo(muts) {
+    function dispatchMo(muts, isRa) {
       if (!muts?.length || !subs.size) return;
       const hi = isStr() || scBusy, caps = gCaps(), now = nowMs();
       for (const s of subs.values()) {
+        if (isRa !== undefined && s.ra !== isRa) continue;
         let hit = null;
         if (s.pa) hit = muts;
-        else for (let i = 0; i < muts.length; i++) if (matchRec(s, muts[i])) (hit || (hit = [])).push(muts[i]);
+        else for (const m of muts) if (matchRec(s, m)) (hit || (hit = [])).push(m);
         if (!hit?.length) continue;
         if (s.p === 'low' && (hi || s.th > 0)) {
           const wMs = hi ? Math.max(s.th || 0, caps.lowPriorityThrottleMs || 180) : s.th;
@@ -160,27 +167,34 @@
         else { s.at = now; T(() => s.h(hit)); }
       }
     }
-    function drainM() {
-      if (!isF(rootMo?.takeRecords)) return [];
-      const r = T(() => rootMo.takeRecords() || []) || [];
-      if (r.length) dispatchMo(r);
-      return r;
+    const takeAll = (disp) => {
+      let out = [];
+      for (let i = 0; i < 3; i++) {
+        const m = slots[i].m, r = isF(m?.takeRecords) ? T(() => m.takeRecords()) : null;
+        if (r?.length) { if (disp) dispatchMo(r, i > 0); out = out.length ? out.concat(r) : r; }
+      }
+      return out;
+    };
+    const drainM = () => takeAll(1), discardM = () => takeAll(0);
+    const dropSl = (sl) => { if (sl.m) { T(() => sl.m.disconnect()); sl.m = null; } sl.t = null; sl.k = ''; };
+    function syncSl(sl, tg, opts, MO) {
+      if (!opts || !tg) return dropSl(sl);
+      const k = JSON.stringify(opts);
+      if (sl.m && sl.t === tg && sl.k === k) return;
+      if (sl.m) T(() => sl.m.disconnect());
+      sl.m = new MO(sl.cb); sl.t = tg; sl.k = k;
+      T(() => sl.m.observe(tg, opts));
     }
     function reconcileMo() {
-      if (!subs.size) { if (rootMo) { T(() => rootMo.disconnect()); rootMo = null; } obsTgt = null; obsKey = ''; return; }
+      if (!subs.size) { for (let i = 0; i < 3; i++) dropSl(slots[i]); return; }
       const d = getDoc(), w = getWin(null, d), tg = getHtml(d) || d?.body || null, MO = gFn('MutationObserver', w);
       if (!tg || !MO) return;
-      const opts = calcMoOpts(), key = JSON.stringify(opts);
-      if (rootMo && obsTgt === tg && obsKey === key) return;
-      if (rootMo) T(() => rootMo.disconnect());
-      rootMo = new MO(dispatchMo); obsTgt = tg; obsKey = key;
-      T(() => rootMo.observe(tg, opts));
+      syncSl(slots[0], tg, calcMoOpts(false, false), MO);
+      syncSl(slots[1], tg, calcMoOpts(true, false), MO);
+      syncSl(slots[2], d?.body && d.body !== tg ? d.body : null, calcMoOpts(true, true), MO);
     }
     function sub(a1, a2, a3) {
-      let id = '', h = null, o = {};
-      if (isF(a1)) { h = a1; o = isO(a2) ? a2 : {}; }
-      else if (isS(a1) && isF(a2)) { id = a1; h = a2; o = isO(a3) ? a3 : {}; }
-      else if (isO(a1) && isF(a2)) { o = a1; h = a2; }
+      let [id, h, o] = parseA(a1, a2, a3, 1);
       if (!isF(h)) return noop;
       id = id || o.id || 'sub-' + ++subSeq;
       if (o.doc) bDoc = o.doc;
@@ -190,8 +204,8 @@
       const mo = isO(o.observeOptions) ? o.observeOptions : { childList: true, subtree: true, attributes: !!o.attributes, attributeFilter: o.attributeFilter };
       const wC = mo.childList !== false, wD = !!mo.characterData, wA = !!mo.attributes;
       const aS = wA && isA(mo.attributeFilter) && mo.attributeFilter.length ? new Set(mo.attributeFilter) : null;
-      const rO = mo.subtree === false, f = isF(o.filter) ? o.filter : null;
-      const en = { id, h, p: o.priority === 'high' || o.priority === 'low' ? o.priority : 'normal', f, th: isN(o.throttleMs) && o.throttleMs > 0 ? o.throttleMs : 0, o: mo, wC, wD, wA, aS, rO, pa: !f && !rO && wC && wD && wA && !aS, q: [], tm: 0, at: 0 };
+      const rO = mo.subtree === false, ra = rO && !wC && !wD && wA, wB = !!(ra && o.observeBody), f = isF(o.filter) ? o.filter : null;
+      const en = { id, h, p: o.priority === 'high' || o.priority === 'low' ? o.priority : 'normal', f, th: isN(o.throttleMs) && o.throttleMs > 0 ? o.throttleMs : 0, o: mo, wC, wD, wA, aS, rO, ra, wB, pa: !f && !rO && wC && wD && wA && !aS, q: [], tm: 0, at: 0 };
       subs.set(id, en);
       att(); reconcileMo();
       return () => { const c = subs.get(id); if (c !== en) return; c.tm = clrT(c.tm); c.q.length = 0; subs.delete(id); reconcileMo(); };
@@ -202,7 +216,7 @@
       if (bFlush) return;
       bFlush = true;
       try {
-        for (const q of [mQ, wQ]) { const ls = Array.from(q.values()); q.clear(); for (let i = 0; i < ls.length; i++) T(ls[i]); }
+        for (const q of [mQ, wQ]) { const ls = [...q.values()]; q.clear(); for (const f of ls) T(f); }
       } finally { bFlush = false; if (mQ.size || wQ.size) schedBatch(); }
     }
     function schedBatch() {
@@ -234,8 +248,9 @@
       r.g++;
     }
     const finT = (r) => { if (tasks.get(r.k) === r) tasks.delete(r.k); r.d = true; };
+    const isAb = (r) => !!(r.x || r.d || r.c?.signal?.aborted);
     function runFb(r) {
-      if (r.x || r.d || r.c?.signal?.aborted) { finT(r); r.rs(undefined); return; }
+      if (isAb(r)) { finT(r); r.rs(undefined); return; }
       finT(r);
       try { r.rs(r.f()); } catch (e) { r.rj(e); }
     }
@@ -263,7 +278,7 @@
       if (!isS(pf) || !pf) return 0;
       const ks = [];
       for (const k of tasks.keys()) if (k === pf || k.startsWith(pf)) ks.push(k);
-      for (let i = 0; i < ks.length; i++) cTask(ks[i]);
+      for (const k of ks) cTask(k);
       return ks.length;
     }
     function repriTask(k, np) {
@@ -275,9 +290,7 @@
       return false;
     }
     function schTask(a1, a2, a3) {
-      let k = '', f = null, o = {};
-      if (isF(a1)) { f = a1; o = isO(a2) ? a2 : {}; }
-      else { k = String(a1 || ''); f = a2; o = isO(a3) ? a3 : {}; }
+      let [k, f, o] = parseA(a1, a2, a3, 0);
       if (!isF(f)) return Promise.resolve(undefined);
       k = k || 'task-' + ++tSeq;
       cTask(k);
@@ -295,9 +308,9 @@
           const po = dl > 0 ? { delay: dl } : {};
           if (TC) { r.c = new TC({ priority: p }); po.signal = r.c.signal; }
           else { po.priority = p; if (AC) { r.c = new AC(); po.signal = r.c.signal; } }
-          Promise.resolve(sc.postTask(() => { if (r.x || r.d || r.c?.signal?.aborted) { finT(r); return undefined; } finT(r); return r.f(); }, po)).then(
+          Promise.resolve(sc.postTask(() => { if (isAb(r)) { finT(r); return undefined; } finT(r); return r.f(); }, po)).then(
             (v) => { finT(r); rs(v); },
-            (e) => { finT(r); if (r.x || r.c?.signal?.aborted || e?.name === 'AbortError') rs(undefined); else rj(e); }
+            (e) => { finT(r); if (isAb(r) || e?.name === 'AbortError') rs(undefined); else rj(e); }
           );
           return true;
         });
@@ -309,7 +322,7 @@
       return bind();
     }
     async function runChk(items, fn, o) {
-      const ls = items ? (isA(items) ? items : Array.from(items)) : [];
+      const ls = items ? (isA(items) ? items : [...items]) : [];
       if (!ls.length || !isF(fn)) return { processed: 0, slices: 0, aborted: false };
       const cfg = isO(o) ? o : {}, bud = isN(cfg.budgetMs) && cfg.budgetMs > 0 ? cfg.budgetMs : gCaps().chunkBudgetMs || 3.5;
       const sig = cfg.signal || null, ep = chkEp;
@@ -331,8 +344,8 @@
       const RO = gFn('ResizeObserver');
       if (!RO) return null;
       szRo = T(() => new RO((es) => {
-        for (let i = 0; es && i < es.length; i++) {
-          const en = es[i], el = en?.target, sz = el ? rdBox(en) : null;
+        for (const en of es || []) {
+          const el = en?.target, sz = el ? rdBox(en) : null;
           if (!sz) continue;
           szCache.set(el, sz);
           const st = szCbs.get(el);
@@ -373,17 +386,14 @@
       if (bm) { skEls.delete(t); ioSkEls.delete(t); emitVis(t, true, BM_EV, ev); }
       else { const sk = !!ev.skipped; if (sk) skEls.add(t); else skEls.delete(t); emitVis(t, !sk, 'content-visibility', ev); }
     };
-    const onCv = (ev) => handleVis(ev, false), onBm = (ev) => handleVis(ev, true);
-    function attachDv(dO) {
-      if (dvOn) return;
-      const d = getDoc(dO);
-      if (evPair(d, true, CV_EV, onCv, BM_EV, onBm, PASSIVE_CAP)) { dvOn = true; dvTgt = d; }
+    const onCv = (ev) => handleVis(ev, 0), onBm = (ev) => handleVis(ev, 1);
+    function toggleDv(on, dO) {
+      if (on === dvOn) return;
+      const d = on ? getDoc(dO) : dvTgt || getDoc();
+      if (evPair(d, on, CV_EV, onCv, BM_EV, onBm, PASSIVE_CAP)) { dvOn = on; dvTgt = on ? d : null; }
+      else if (!on) { dvOn = false; dvTgt = null; }
     }
-    function detachDv() {
-      if (!dvOn) return;
-      evPair(dvTgt || getDoc(), false, CV_EV, onCv, BM_EV, onBm, PASSIVE_CAP);
-      dvOn = false; dvTgt = null;
-    }
+    const attachDv = (dO) => toggleDv(true, dO), detachDv = () => toggleDv(false);
     function ensureIo(rm) {
       const k = isS(rm) && rm ? rm : '250px 0px';
       let pl = ioPools.get(k);
@@ -392,8 +402,8 @@
       if (!IO) return null;
       return T(() => {
         const io = new IO((es) => {
-          for (let i = 0; es && i < es.length; i++) {
-            const en = es[i], t = en?.target;
+          for (const en of es || []) {
+            const t = en?.target;
             if (!t) continue;
             if (en.isIntersecting) ioSkEls.delete(t); else ioSkEls.add(t);
             emitVis(t, !!en.isIntersecting && !skEls.has(t), 'io', en);
@@ -437,7 +447,7 @@
       if (!el || !isF(cb)) return noop;
       const c = isO(o) ? o : {};
       let pv = null;
-      return obsVis(el, (i) => { const v = !!i?.visible; if (v !== pv) { pv = v; cb(v, i); } }, { doc: c.doc, io: true, rootMargin: isS(c.rootMargin) && c.rootMargin ? c.rootMargin : '0px' });
+      return obsVis(el, (i) => { const v = !!i?.visible; if (v !== pv) cb(pv = v, i); }, { doc: c.doc, io: true, rootMargin: (isS(c.rootMargin) && c.rootMargin) || '0px' });
     }
     function isSk(el) {
       if (!el) return false;
@@ -486,12 +496,10 @@
 
     function dispose(dO, wO) {
       chkEp++;
-      for (const k of Array.from(tasks.keys())) cTask(k);
-      tasks.clear();
+      for (const k of [...tasks.keys()]) cTask(k);
       for (const s of subs.values()) { s.tm = clrT(s.tm); s.q.length = 0; }
       subs.clear();
-      if (rootMo) { T(() => rootMo.disconnect()); rootMo = null; }
-      obsTgt = null; obsKey = '';
+      for (let i = 0; i < 3; i++) dropSl(slots[i]);
       if (szRo) { T(() => szRo.disconnect()); szRo = null; }
       szCbs.clear(); szCache = new WeakMap();
       for (const r of vMap.values()) if (r.u) T(r.u);
@@ -500,28 +508,26 @@
       ioPools.clear();
       skEls = new WeakSet(); ioSkEls = new WeakSet(); lastVEv = null;
       cancelBRaf(wO);
-      bTmr = clrT(bTmr);
-      bSched = false; mQ.clear(); wQ.clear();
-      scTmr = clrT(scTmr);
-      mTmr = clrT(mTmr);
-      scBusy = stBusy = false; mUntil = 0; curPerf = '';
+      bTmr = clrT(bTmr); scTmr = clrT(scTmr); mTmr = clrT(mTmr);
+      bSched = scBusy = stBusy = false; mUntil = 0; curPerf = '';
+      mQ.clear(); wQ.clear();
       detach();
       while (mcQ.length) T(() => mcQ.shift()());
       if (mc) { T(() => { mc.port1.onmessage = null; mc.port1.close?.(); mc.port2.close?.(); }); mc = null; }
       const h = getHtml(dO);
-      if (h) { rmA(h, BUSY_ATTR); rmA(h, PERF_MODE_ATTR); T(() => { if (h.dataset && 'agCsPerfMode' in h.dataset) delete h.dataset.agCsPerfMode; }); }
+      if (h) { rmA(h, BUSY_ATTR); rmA(h, PERF_MODE_ATTR); T(() => { if (h.dataset) delete h.dataset.agCsPerfMode; }); }
     }
 
     return {
       BUSY_ATTR, PERF_MODE_ATTR, STREAM_ATTR, MOTION_OFF_SCOPED_CSS, PERF_CAPS_TABLE,
-      attach: att, subscribe: sub, drainMutations: drainM, measure: meas, mutate: mut, flushNow: flushN,
+      attach: att, subscribe: sub, drainMutations: drainM, discardMutations: discardM, measure: meas, mutate: mut, flushNow: flushN,
       scheduleTask: schTask, cancelTask: cTask, cancelGroup: cGrp, reprioritizeTask: repriTask, yieldSlice: ySlice, runChunked: runChk,
       observeSize: obsSz, getSize: getSz, readBoxSize: rdBox, observeVisibility: obsVis, observeViewportVisibility: obsVpVis, isSkipped: isSk,
-      setStreaming: setStr, bumpBusy: bumpB, bumpScrollBusy: bumpSc, isBusy: isBsy, isStreaming: isStr,
+      setStreaming: setStr, bumpBusy: bumpB, bumpScrollBusy: bumpSc, isBusy: isBsy, isPerfBusy: isBsy, isStreaming: isStr,
       detectLowEndHardware: isLowEnd, resolveEffectivePerformanceMode: resEffPm, resolveAutoBootPerfMode: resAutoPm, getAdaptiveDprCap: gDprCap,
       normalizePerformanceMode: normPm, applyPerformanceMode: applyPm, getPerfCaps: gCaps,
       getDebugState: () => ({
-        subscriberCount: subs.size, observing: !!rootMo, listenersAttached: lsOn,
+        subscriberCount: subs.size, observing: !!(slots[0].m || slots[1].m || slots[2].m), listenersAttached: lsOn,
         scrollBusy: scBusy, streamBusy: stBusy, busy: isBsy(), perfMode: gCaps().mode,
         pendingMeasures: mQ.size, pendingMutates: wQ.size, pendingTasks: tasks.size,
         sizeObservedCount: szCbs.size, visibilityObservedCount: vMap.size,

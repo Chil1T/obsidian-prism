@@ -10,7 +10,7 @@
   const PP_OPEN = 'data-ag-pp-open';
   const SB = 'aside,[data-side-panel-body]', GCLS = 'ag-cs-brand-glow', GTID = 'onboarding-brand-glow', RCLS = 'ag-cs-ripple-canvas';
   const CP = { subtle: [0.6, 0.4, 0.45, 0.55, 32, 340, 72, 196, 0.62, 0.28, 0.72], medium: [0.85, 0.75, 0.75, 0.82, 22, 270, 54, 215, 0.85, 0.34, 0.88], full: [1, 1, 1, 1, 16, 220, 42, 230, 1, 0.4, 1] };
-  const isF = (v) => typeof v === 'function', ga = (e, k) => e?.getAttribute?.(k), T = (f) => { try { return f(); } catch {} };
+  const isF = (v) => typeof v === 'function', ga = (e, k) => e?.getAttribute?.(k), T = (f) => { try { return f(); } catch {} }, gbr = (e) => e?.getBoundingClientRect?.();
   const ra = (e, k) => { if (e?.hasAttribute?.(k)) e.removeAttribute(k); };
   const hasH = (e) => ga(e, HA) === 'true' || ga(e, DHA) === 'true';
   const docOf = () => (typeof document !== 'undefined' ? document : null), winOf = () => (typeof window !== 'undefined' ? window : null);
@@ -19,17 +19,17 @@
   const cAF = (id) => { if (id && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(id); return 0; };
   const rAF = (fn) => (hasRaf() ? requestAnimationFrame(fn) : 0);
   const cT = (id) => { if (id) clearTimeout(id); return 0; };
-  const N = () => {}, NF = () => false;
+  const N = () => {}, NF = () => false, isST = () => typeof setTimeout === 'function';
   const NOOP_F = { mode: 'none', dispose: N, invalidate: N, draw: N, needsDraw: NF, busy: NF };
   const NOOP_G = { mode: 'none', resize: N, draw: N, clear: N, dispose: N };
-  const pAmb = (r) => G.__agPrismRipple?.parseAmbientScale ? G.__agPrismRipple.parseAmbientScale(r) : r == null || r === '' ? 1 : cl(Number(r) > 1 ? Number(r) / 100 : Number.isFinite(Number(r)) ? Number(r) : 1, 0, 1);
+  const pAmb = (r) => G.__agPrismRipple?.parseAmbientScale ? G.__agPrismRipple.parseAmbientScale(r) : r == null || r === '' ? 1 : cl(+r > 1 ? +r / 100 : Number.isFinite(+r) ? +r : 1, 0, 1);
 
   function createHomeRippleController({ rippleCore: rc, isDestroyed: isD, isAllowed, isConvAllowed, getConvLevel, isConvRunning, isDarkTheme, motionReduced: mRed, getMinFrameGapMs, getAmbientIntensity, getAccentTone, setAttrIfChanged: sa, onPointerPressMascot }) {
     let rm = null, cHost = null, timer = 0, rRaf = 0, recT = 0, recRaf = 0, rzT = 0, mAt = 0, tideAt = 0, ro = null, unWin = null, syncMFn = null, strChk = null, refLv = null;
-    const html = () => docOf()?.documentElement || null, rw = () => G.__agPrismRippleWorker || null;
-    const pMode = () => String(html()?.dataset?.agCsPerfMode || ga(html(), PMA) || '').trim().toLowerCase();
+    const html = () => docOf()?.documentElement || null, rw = () => G.__agPrismRippleWorker || null, gH = (k) => ga(html(), k);
+    const pMode = () => String(html()?.dataset?.agCsPerfMode || gH(PMA) || '').trim().toLowerCase();
     const setCS = (on, el) => { const h = html(); if (h) on ? sa(h, CA, '1') : ra(h, CA); if (cHost && cHost !== el) ra(cHost, HHA); cHost = on && el ? el : null; if (cHost) sa(cHost, HHA, '1'); };
-    const isCB = () => { const d = docOf(), h = d?.documentElement; return Boolean(mRed() || ga(h, 'data-ag-cs-motion') === 'off' || ga(h, 'data-ag-prism-wallpaper') === 'on' || hasH(h) || hasH(d?.body) || d?.querySelector?.('[data-has-browser-hole="true"],[data-has-drawer-browser-hole="true"]')); };
+    const isCB = () => { const d = docOf(); return !!(mRed() || gH('data-ag-cs-motion') === 'off' || gH('data-ag-prism-wallpaper') === 'on' || hasH(html()) || hasH(d?.body) || d?.querySelector?.(`[${HA}="true"],[${DHA}="true"]`)); };
     const convLv = () => { if (isF(isConvAllowed) && !isConvAllowed()) return 'off'; if (isF(getConvLevel)) { const v = getConvLevel(); return v === true || v === 'true' || v === 'on' ? 'medium' : v === 'subtle' || v === 'medium' || v === 'full' ? v : 'off'; } return isF(isConvAllowed) && isConvAllowed() ? 'medium' : 'off'; };
 
     function resolveTarget() {
@@ -41,7 +41,7 @@
       if (lv === 'off' || isCB() || !isF(d.querySelectorAll)) return null;
       const vs = Array.from(d.querySelectorAll('[data-testid="conversation-view"]')).filter((v) => !v.hidden && v.style?.display !== 'none' && v.style?.visibility !== 'hidden' && !v.closest?.('[data-testid="subagent-tab-conversation"]'));
       if (!vs.length) return null;
-      const ok = (el) => Boolean(el && el !== d.documentElement && el !== d.body && ga(el, 'data-testid') !== 'conversation-view' && !hasH(el) && !el.closest?.(SB) && !el.querySelector?.(SB + ',[data-testid="sidebar-split"]>div:first-child') && vs.every((v) => !isF(el.contains) || el.contains(v)));
+      const ok = (el) => !!(el && el !== d.documentElement && el !== d.body && ga(el, 'data-testid') !== 'conversation-view' && !hasH(el) && !el.closest?.(SB) && !el.querySelector?.(SB + ',[data-testid="sidebar-split"]>div:first-child') && vs.every((v) => !isF(el.contains) || el.contains(v)));
       const v0 = vs[0];
       for (const s of ['[data-main-content-body]', '.agy-sheet', '[data-split-panes]', '.agy-inset-shell']) {
         const c = v0.closest?.(s);
@@ -53,13 +53,13 @@
       return ok(p) ? { mode: 'conv', root: p, level: lv } : null;
     }
 
-    const ambScale = () => pAmb(isF(getAmbientIntensity) ? getAmbientIntensity() : ga(html(), 'data-ag-cs-ambient'));
+    const ambScale = () => pAmb(isF(getAmbientIntensity) ? getAmbientIntensity() : gH('data-ag-cs-ambient'));
 
     function specMode(dark) {
-      const h = html(), t = (isF(getAccentTone) ? getAccentTone() : null) || ga(h, 'data-ag-cs-accent') || 'follow';
+      const t = (isF(getAccentTone) ? getAccentTone() : null) || gH('data-ag-cs-accent') || 'follow';
       if (t === 'mono' || t === 'cobalt' || t === 'iris' || t === 'amber') return t;
-      const pal = ga(h, 'data-ag-cs-palette') || 'obsidian';
-      return pal === 'warm' || pal === 'claude' || (!dark && pal === 'obsidian' && ga(h, 'data-ag-cs-light-preset') === 'alabaster') ? 'warm' : 'default';
+      const pal = gH('data-ag-cs-palette') || 'obsidian';
+      return pal === 'warm' || pal === 'claude' || (!dark && pal === 'obsidian' && gH('data-ag-cs-light-preset') === 'alabaster') ? 'warm' : 'default';
     }
 
     const defTok = (dark, sp) => ({ ink: dark ? [146, 148, 156] : [104, 114, 134], wave: dark ? [214, 218, 228] : sp === 'mono' ? [51, 65, 85] : sp === 'iris' ? [124, 58, 237] : sp === 'amber' ? [217, 119, 6] : sp === 'warm' ? [194, 89, 52] : [37, 99, 235], dark, fontFamily: 'ui-monospace, Consolas, monospace' });
@@ -73,7 +73,7 @@
     }
     function buildPal(tok, as, now, aRaw, sp, mode, lv) {
       const t = tok || defTok(isDarkTheme(), sp), amb = cl(Number.isFinite(aRaw) ? aRaw : 1, 0, 1);
-      const c = mode === 'conv', cp = c ? CP[lv] || CP.medium : null, rad = cp ? cp[7] : 230, fd = as?.f ?? 1, on = Boolean(as?.active && fd > 0.005 && !mRed() && amb > 0.001);
+      const c = mode === 'conv', cp = c ? CP[lv] || CP.medium : null, rad = cp ? cp[7] : 230, fd = as?.f ?? 1, on = !!(as?.active && fd > 0.005 && !mRed() && amb > 0.001);
       return {
         ink: t.ink, wave: t.wave, dark: t.dark, fontFamily: t.fontFamily, conv: c,
         alphaScale: cp ? (amb <= 0.001 ? 0 : cp[0]) : 1, nebulaLiftScale: cp ? cp[1] : 1, auraLiftScale: cp ? cp[2] : 1,
@@ -111,7 +111,7 @@
       if (t.closest(SB + ',.agy-overlay,.aux-drawer-popup')) return true;
       const role = ga(t.closest('[role]'), 'role') || '';
       if (role === 'dialog') return true;
-      return Boolean(press && (/^(?:button|textbox|menu|listbox|menuitem|tab|switch)$/.test(role) || t.closest('button,a,input,textarea,select,label,summary,[contenteditable="true"],[data-testid="agent-input-box"],.surface-composer-card,.monaco-editor')));
+      return !!(press && (/^(?:button|textbox|menu|listbox|menuitem|tab|switch)$/.test(role) || t.closest('button,a,input,textarea,select,label,summary,[contenteditable="true"],[data-testid="agent-input-box"],.surface-composer-card,.monaco-editor')));
     }
 
     function mountR(m, mode, tr) {
@@ -141,9 +141,9 @@
       }
 
       const d = docOf();
-      const mkEl = (tag, cls) => { const el = d.createElement(tag); el.className = cls; el.setAttribute('aria-hidden', 'true'); return el; };
+      const mkEl = (tag, cls) => { const el = d.createElement(tag); el.className = cls; sa(el, 'aria-hidden', 'true'); return el; };
       const host = mkEl('div', 'ag-cs-ripple-host');
-      host.setAttribute('data-ripple-mode', mode); host.setAttribute(LA, lv);
+      sa(host, 'data-ripple-mode', mode); sa(host, LA, lv);
       let cv = mkEl('canvas', RCLS); host.appendChild(cv);
 
       const as = { x: 0, y: 0, active: false };
@@ -161,15 +161,15 @@
       const { cellWidth: CW, cellHeight: CH } = rc.RIPPLE;
       const dead = () => isD() || st.parked, hasDim = () => st.width > 0 && st.height > 0;
       const isPerf = (m = pMode()) => m === 'performance' || m === 'eco';
-      const isAB = () => ga(html(), WB) === '1', isPp = () => ga(html(), PP_OPEN) === '1' && (st.mode !== 'conv' || isPerf()), isRz = () => ga(html(), RZA) === '1';
-      const isStr = () => st.mode === 'conv' && isF(isConvRunning) && Boolean(isConvRunning());
-      const hP = () => Boolean(d.hidden || wb || isAB() || isPp() || (st.mode === 'conv' && isCB()));
-      const hasSz = (c) => Boolean(c && c.width > 0 && c.height > 0), isW = (i) => i?.mode === 'worker-webgl2';
-      const hasBuf = (c, i) => Boolean(c && (isW(i) ? i.getBufferSize?.().width > 0 && i.getBufferSize?.().height > 0 : hasSz(c)));
+      const isAB = () => gH(WB) === '1', isPp = () => gH(PP_OPEN) === '1' && (st.mode !== 'conv' || isPerf()), isRz = () => gH(RZA) === '1';
+      const isStr = () => st.mode === 'conv' && isF(isConvRunning) && !!isConvRunning();
+      const hP = () => !!(d.hidden || wb || isAB() || isPp() || (st.mode === 'conv' && isCB()));
+      const hasSz = (c) => !!(c && c.width > 0 && c.height > 0), isW = (i) => i?.mode === 'worker-webgl2';
+      const hasBuf = (c, i) => !!(c && (isW(i) ? i.getBufferSize?.().width > 0 && i.getBufferSize?.().height > 0 : hasSz(c)));
       const hasFSz = () => hasBuf(cv, st.field), hasGSz = () => hasBuf(st.glowCanvas, st.glow);
       const invAll = () => { st.field?.invalidate?.(); st.glow?.invalidate?.(); };
       const setV = (el, on) => { if (el?.style) el.style.display = on ? '' : 'none'; };
-      const isLost = (c, i) => Boolean(i?.isContextLost?.() || (i?.mode !== '2d' && !isW(i) && c?.getContext?.('webgl2')?.isContextLost?.()));
+      const isLost = (c, i) => !!(i?.isContextLost?.() || (i?.mode !== '2d' && !isW(i) && c?.getContext?.('webgl2')?.isContextLost?.()));
       const hasG = isF(rc.mountBrandHorizonGlow), rawDpr = () => winOf()?.devicePixelRatio || 1;
       const gridOf = (w = st.width, h = st.height) => [M.ceil(w / CW), M.ceil(h / CH)];
       const rDpr = () => { const r = rawDpr(), m = pMode(); return rw()?.resolveRippleDpr?.(r, d) ?? M.min(r, isPerf(m) ? 1 : m === 'balanced' ? 1.5 : 2); };
@@ -178,7 +178,7 @@
 
       function swapCv(o, cls, tid, bf) {
         const n = mkEl('canvas', cls);
-        if (tid) n.setAttribute('data-testid', tid);
+        if (tid) sa(n, 'data-testid', tid);
         o?.replaceWith ? o.replaceWith(n) : o?.parentNode?.replaceChild ? o.parentNode.replaceChild(n, o) : (o?.remove?.(), bf && host.insertBefore ? host.insertBefore(n, cv) : host.appendChild(n));
         return n;
       }
@@ -193,7 +193,7 @@
         if (isF0) { fLost = true; setV(cv, 0); } else { gLost = true; setV(st.glowCanvas, 0); }
         if (recN >= 3 || recT || recRaf) return;
         const run = () => { recT = recRaf = 0; recoverLost(); };
-        const tid = typeof setTimeout === 'function' ? setTimeout(run, 32) : 0;
+        const tid = isST() ? setTimeout(run, 32) : 0;
         if (tid) recT = tid; else if (hasRaf()) recRaf = rAF(run); else run();
       }
 
@@ -262,7 +262,7 @@
       syncMFn = (nm) => {
         if (nm === 'conv') { gLost = false; T(() => st.glow?.dispose?.()); st.glow = null; st.glowCanvas?.remove?.(); st.glowCanvas = null; tideAt = 0; }
         else if (!st.glowCanvas) {
-          const gc = mkEl('canvas', GCLS); gc.setAttribute('data-testid', GTID);
+          const gc = mkEl('canvas', GCLS); sa(gc, 'data-testid', GTID);
           host.insertBefore ? host.insertBefore(gc, st.canvas) : host.appendChild(gc);
           st.glowCanvas = gc; mountGlow(0, 0);
         }
@@ -296,8 +296,8 @@
         if (!cur || !st.field?.setCalmZones) return;
         const gr = st.mode === 'home' ? cur.querySelector('[data-testid="home-greeting"]') : null;
         if (!gr) return st.field.setCalmZones([]);
-        const c = cv.getBoundingClientRect(); cRect = c; cRectAt = nowOf();
-        const g = gr.getBoundingClientRect();
+        const c = gbr(cv); cRect = c; cRectAt = nowOf();
+        const g = gbr(gr);
         if (c.width && g.width) st.field.setCalmZones([{ x: g.left - c.left - 28, y: g.top - c.top - 14, w: g.width + 56, h: g.height + 28 }]);
       }
 
@@ -305,7 +305,7 @@
         const cur = st.root;
         if (!cur) return;
         if (d.hidden) return reclaim();
-        const w = M.max(0, Number(cur.clientWidth) || 0), h = M.max(0, Number(cur.clientHeight) || 0);
+        const w = M.max(0, +cur.clientWidth || 0), h = M.max(0, +cur.clientHeight || 0);
         const dpr = rDpr(), pm = pMode(), gc = st.glowCanvas, lostF = fLost || isLost(cv, st.field);
         const pChg = pm !== lastPM; lastPM = pm;
         if (w === st.width && h === st.height && dpr === st.dpr && !lostF && !pChg) {
@@ -361,11 +361,11 @@
         if (str) as.active = false;
         const still = mRed() || str, vsDt = lastTs > 0 && now > lastTs ? now - lastTs : now - lastDraw;
         lastTs = now;
-        const rawGap = M.max(pGap(), Number(getMinFrameGapMs?.() ?? 0) || 0);
+        const rawGap = M.max(pGap(), +(getMinFrameGapMs?.() || 0) || 0);
         const minGap = (st.mode === 'home' || st.convLevel === 'full') && (st.waves?.active?.() || (as.active && lsa > 0 && now - lsa < 650) || (tideAt > 0 && now - tideAt < 480)) ? rawGap : M.max(33, rawGap);
         if (!still && drawn && !f1 && minGap > 0 && lastDraw > 0 && now - lastDraw < minGap && !hP()) {
           const rem = minGap - (now - lastDraw);
-          if (typeof setTimeout === 'function' && rem > M.max(8, vsDt + 2)) { timer = cT(timer); timer = setTimeout(() => { timer = 0; wake(); }, M.max(4, M.ceil(rem))); }
+          if (isST() && rem > M.max(8, vsDt + 2)) { timer = cT(timer); timer = setTimeout(() => { timer = 0; wake(); }, M.max(4, M.ceil(rem))); }
           else wake();
           return;
         }
@@ -387,8 +387,8 @@
         }
         const aRec = !str && amb > 0.001 && as.active && lsa > 0 && now - lsa < IDLE_MS;
         const inI = st.mode === 'home' && !still && amb > 0.001 && now - mAt < INTRO_MS;
-        const busy = !str && Boolean(st.field?.busy?.());
-        const need = f1 || !drawn || aSet || (Boolean(st.glowCanvas) && amb <= 0.001 && !gZero) || inT || inI || aRec || (!str && Boolean(st.field?.needsDraw(aT, still)));
+        const busy = !str && !!st.field?.busy?.();
+        const need = f1 || !drawn || aSet || (!!st.glowCanvas && amb <= 0.001 && !gZero) || inT || inI || aRec || (!str && !!st.field?.needsDraw(aT, still));
 
         if (hasFSz() && need) {
           f1 = false;
@@ -418,7 +418,7 @@
         if (hP() || isStr()) return;
         const c = st.mode === 'conv', cp = c ? CP[st.convLevel] || CP.medium : null, nr = nowOf();
         if (c) { if ((lcma > 0 && nr - lcma < cp[4]) || isIgnC(ev.target, false)) return; lcma = nr; }
-        if (!cRect || nr - cRectAt > 1500) { cRect = cv.getBoundingClientRect(); cRectAt = nr; }
+        if (!cRect || nr - cRectAt > 1500) { cRect = gbr(cv); cRectAt = nr; }
         const x = ev.clientX - cRect.left, y = ev.clientY - cRect.top;
         if (x < 0 || y < 0 || x > cRect.width || y > cRect.height) { lx = ly = null; carry = 0; if (as.active) { as.active = false; f1 = true; invNG(); wake(); } return; }
         const now = nowOf();
@@ -438,7 +438,7 @@
         if (ev.button !== 0 || mRed() || ambScale() <= 0.001 || hP() || isStr()) return;
         const c = st.mode === 'conv';
         if (c && isIgnC(ev.target, true)) return;
-        const cp = c ? CP[st.convLevel] || CP.medium : null, r = cv.getBoundingClientRect();
+        const cp = c ? CP[st.convLevel] || CP.medium : null, r = gbr(cv);
         cRect = r; cRectAt = nowOf();
         if (st.sleeping) prev = cRectAt;
         st.waves.disturb(M.floor((ev.clientX - r.left) / CW), M.floor((ev.clientY - r.top) / CH), cp && st.convLevel !== 'full' ? { amplitudeScale: cp[3], radiusScale: 0.72 + 0.28 * cp[3], duration: cp[9], loadWeight: cp[10] } : undefined);
@@ -458,15 +458,14 @@
         else enterIdleSleep();
       };
       const onBlur = () => { wb = true; enterIdleSleep(); }, onFocus = () => { wb = false; onVis(); };
-      d.addEventListener('visibilitychange', onVis);
-      const wRef = winOf();
-      wRef?.addEventListener?.('blur', onBlur); wRef?.addEventListener?.('focus', onFocus);
+      const wRef = winOf(), wEv = (add) => { const m = add ? 'addEventListener' : 'removeEventListener'; d[m]('visibilitychange', onVis); wRef?.[m]?.('blur', onBlur); wRef?.[m]?.('focus', onFocus); };
+      wEv(1);
       const mos = [], unsubs = [], hA = [WB, PP_OPEN, PMA, 'data-ag-prism-wallpaper', HA, DHA, 'data-ag-cs-motion'];
       const onAttr = () => { if (!isAB()) wb = false; onVis(); };
       const dBus = wRef && (wRef.__agDomBus || wRef.__agPrismDomBus);
-      if (dBus?.subscribe) T(() => unsubs.push(dBus.subscribe('home-ripple-root', onAttr, { priority: 'high', attributes: true, attributeFilter: hA, filter: (m) => m?.type === 'attributes' && (m.target === html() || m.target === d.body) && hA.includes(m.attributeName), observeOptions: { childList: false, subtree: true, attributes: true, attributeFilter: hA } })));
+      if (dBus?.subscribe) T(() => unsubs.push(dBus.subscribe('home-ripple-root', onAttr, { priority: 'high', observeBody: true, observeOptions: { childList: false, subtree: false, attributes: true, attributeFilter: hA } })));
       if (!unsubs.length && typeof MutationObserver === 'function') for (const [el, af] of [[html(), hA], [d.body, [HA, DHA]]]) if (el) T(() => { const mo = new MutationObserver(onAttr); mo.observe(el, { attributes: true, attributeFilter: af }); mos.push(mo); });
-      unWin = () => { rRaf = cAF(rRaf); rzT = cT(rzT); rzPend = false; d.removeEventListener('visibilitychange', onVis); wRef?.removeEventListener?.('blur', onBlur); wRef?.removeEventListener?.('focus', onFocus); unsubs.forEach((u) => u?.()); mos.forEach((mo) => mo.disconnect()); };
+      unWin = () => { rRaf = cAF(rRaf); rzT = cT(rzT); rzPend = false; wEv(0); unsubs.forEach((u) => u?.()); mos.forEach((mo) => mo.disconnect()); };
 
       if (typeof ResizeObserver === 'function') {
         const applyLay = (wakeIdle) => {
@@ -500,7 +499,7 @@
     function refreshTheme() { rm?.refreshTheme?.(); }
     function triggerLiftoffBurst(cr) {
       if (!rm || rm.mode !== 'home' || !isF(rm.field?.triggerLiftoffBurst)) return;
-      const r = rm.canvas?.getBoundingClientRect?.(), ok = cr && r?.width > 0 && r?.height > 0;
+      const r = gbr(rm.canvas), ok = cr && r?.width > 0 && r?.height > 0;
       const nx = ok ? cl((cr.left + cr.width * 0.5 - r.left) / r.width, 0.05, 0.95) : 0.5, ny = ok ? cl((cr.top + cr.height * 0.5 - r.top) / r.height, 0.05, 0.95) : 0.62;
       T(() => { rm.field.triggerLiftoffBurst(nx, ny); rm.field.invalidate?.(); rm.wake?.(); });
     }

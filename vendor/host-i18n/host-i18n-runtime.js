@@ -162,6 +162,16 @@
  }
  return false;
  }
+ function isOnlyIgnoredElemChildren(el) {
+ var ch = firstElemChild(el);
+ if (!ch) return true;
+ var n = 0;
+ while (ch) {
+ if (++n > 6 || !isDirectIgnoredSelf(ch)) return false;
+ ch = nextElemSib(ch);
+ }
+ return true;
+ }
  function isChatProseSelf(el, preTokens, preTid) {
  if (!el || el.nodeType !== 1) return false;
  var tid = preTid !== undefined ? preTid : getAttr(el, 'data-testid');
@@ -2786,7 +2796,7 @@
  } else { textUntranslatedCache.set(node, original); }
  return;
  }
- if (nodeCtx && nodeCtx.inStep && !nodeCtx.inStepControl && !isStepPlainTextAllowed(trimmed)) return;
+ if (nodeCtx && nodeCtx.inStep && !nodeCtx.inStepControl && !isStepPlainTextAllowed(trimmed)) { textUntranslatedCache.set(node, original); return; }
  if (trimmed === '.' && node.previousSibling && ZH_CHAR_RE.test(node.previousSibling.textContent || '')) {
  applyTextWrite(node, original, original.replace('.', '。'));
  return;
@@ -3515,6 +3525,7 @@ if (targetIsHoverCard) {
 if (!pausedNow && added && added.length > 0) scheduleHoverCardNode(targetEl);
  continue;
  }
+if (isChatProseSelf(targetEl) || isDirectIgnoredSelf(targetEl)) continue;
 var targetBound = getCachedBoundary(targetEl);
 if (targetBound.blocked && !targetBound.canDescendConv) continue;
 if (!pausedNow && !targetBound.blocked && checkChildListConflict(targetEl)) {
@@ -3528,7 +3539,7 @@ if (!addedNode || addedNode.isConnected === false) continue;
 if (addedNode.nodeType === 3) {
 if (targetBound.blocked || exemptNodes.has(addedNode)) continue;
 } else if (addedNode.nodeType === 1) {
-if (exemptElements.has(addedNode) || isDirectIgnoredSelf(addedNode) || isFocusGuard(addedNode)) continue;
+if (exemptElements.has(addedNode) || isChatProseSelf(addedNode) || isDirectIgnoredSelf(addedNode) || isFocusGuard(addedNode)) continue;
 if (isHoverCardPortalOrSelf(addedNode)) {
 if (!pausedNow) scheduleHoverCardNode(addedNode);
  continue;
@@ -3536,7 +3547,7 @@ if (!pausedNow) scheduleHoverCardNode(addedNode);
  if (
 targetBound.canDescendConv &&
 !isInteractiveChatChromeSelf(addedNode, true) &&
-!hasElementChild(addedNode)
+isOnlyIgnoredElemChildren(addedNode)
  ) {
  continue;
  }
@@ -3565,6 +3576,7 @@ if (isHoverCardPortalOrSelf(parent)) {
 if (!pausedNow) scheduleHoverCardNode(parent);
  continue;
  }
+if (isChatProseSelf(parent) || isDirectIgnoredSelf(parent)) continue;
 var snap = textSnapshots.get(target);
 if (snap && snap.expected === target.nodeValue) continue;
 var parentBound = getCachedBoundary(parent);
@@ -3595,9 +3607,11 @@ cvRevealHandler = function (e) {
 if (!state.active || state.destroyed || !e || e.skipped) return;
 var t = e.target;
 if (!t || t.nodeType !== 1 || t.isConnected === false || exemptElements.has(t)) return;
+if (isChatProseSelf(t) || isDirectIgnoredSelf(t)) return;
 if (isPaused()) { missedWhilePaused = true; return; }
 var b = measureSafeBoundaryDepth(t);
 if (!b || b.state === -1) return;
+if (b.canDescendConv && !isInteractiveChatChromeSelf(t, true) && isOnlyIgnoredElemChildren(t)) return;
 enqueueNode(t);
 scheduleFlush();
 };

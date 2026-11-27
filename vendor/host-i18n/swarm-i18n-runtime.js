@@ -233,37 +233,20 @@
     protectedUiKeys[pKeys[j]] = String(srcProt[pKeys[j]]);
   }
   }
+    var missCache = Object.create(null), missCount = 0;
     function translateCore(rawText, allowOptionPatterns) {
-   if (typeof rawText !== 'string' || !rawText) return null;
-   var leadMatch = /^(\s*)/.exec(rawText);
-   var trailMatch = /(\s*)$/.exec(rawText);
-   var lead = leadMatch ? leadMatch[1] : '';
-   var trail = trailMatch ? trailMatch[1] : '';
-   var trimmed = rawText.trim();
-   if (!trimmed) return null;
-   if (hasOwn.call(exact, trimmed)) {
-    var hit = exact[trimmed];
-    if (hit === trimmed) return null;
-    return lead + hit + trail;
-  }
-      if (allowOptionPatterns) {
-    for (var o = 0; o < optionPatterns.length; o++) {
-     var op = optionPatterns[o];
-     if (op.re.test(trimmed)) {
-      var oRes = trimmed.replace(op.re, op.rep);
-      if (oRes !== trimmed) return lead + oRes + trail;
-  }
-  }
-  }
-      for (var p = 0; p < patterns.length; p++) {
-    var pat = patterns[p];
-    if (pat.re.test(trimmed)) {
-     var pRes = trimmed.replace(pat.re, pat.rep);
-     if (pRes !== trimmed) return lead + pRes + trail;
-  }
-  }
+      if (typeof rawText !== 'string' || !rawText) return null;
+      var lM = /^(\s*)/.exec(rawText), tM = /(\s*)$/.exec(rawText), lead = lM ? lM[1] : '', trail = tM ? tM[1] : '', trimmed = rawText.trim();
+      if (!trimmed) return null;
+      if (hasOwn.call(exact, trimmed)) { var hit = exact[trimmed]; return hit === trimmed ? null : lead + hit + trail; }
+      var mk = (allowOptionPatterns ? '1:' : '0:') + trimmed.length + ':' + trimmed;
+      if (missCache[mk]) return null;
+      if (allowOptionPatterns) for (var o = 0; o < optionPatterns.length; o++) { var op = optionPatterns[o]; if (op.re.test(trimmed)) { var oRes = trimmed.replace(op.re, op.rep); if (oRes !== trimmed) return lead + oRes + trail; } }
+      for (var p = 0; p < patterns.length; p++) { var pat = patterns[p]; if (pat.re.test(trimmed)) { var pRes = trimmed.replace(pat.re, pat.rep); if (pRes !== trimmed) return lead + pRes + trail; } }
+      if (missCount >= 512) { missCache = Object.create(null); missCount = 0; }
+      missCache[mk] = 1; missCount++;
       return null;
-  }
+    }
     return {
    translate: function (rawText) {
     return translateCore(rawText, false);
@@ -551,8 +534,7 @@
    return makeInactive(true, 'yielded', extReason);
   }
   var engine = createSwarmI18nEngine(dict);
-  var origTextByNode = new WeakMap();
-  var origAttrsByEl = new WeakMap();
+  var origTextByNode = new WeakMap(), origAttrsByEl = new WeakMap(), missTextByNode = new WeakMap();
   var trackedTextNodes = [];
   var trackedAttrEls = [];
   var destroyed = false;
@@ -643,14 +625,15 @@
    var trimmed = val.trim();
    if (!trimmed) return;
    var existing = origTextByNode.get(node);
-   if (existing && existing.translated === val) {
-    return;
-  }
+   if (existing && existing.translated === val) return;
+   var mk = val.length + ':' + val;
+   if (!existing && missTextByNode.get(node) === mk) return;
    if (isProtectedByViewCopy(parent, trimmed, customUi)) return;
    var check = canTranslateTextUnderElement(parent, trimmed);
    if (!check.allow) return;
    var translated = check.isOption ? engine.translateOption(val) : engine.translate(val);
-   if (!translated || translated === val) return;
+   if (!translated || translated === val) { if (!existing) missTextByNode.set(node, mk); return; }
+   missTextByNode.delete(node);
    if (!existing) {
     origTextByNode.set(node, {
      orig: val,
@@ -868,6 +851,7 @@
         trackedAttrEls = [];
     translatedNodeCount = 0;
     translatedAttrCount = 0;
+    missTextByNode = new WeakMap();
    } finally {
     isApplying = false;
   }

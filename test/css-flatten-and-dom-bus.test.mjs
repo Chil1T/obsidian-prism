@@ -293,18 +293,22 @@ test('dom-bus.js Single Root Observer, streaming low-priority throttling (160-20
     assert.equal(l.opts?.capture, true, `${l.type} listener must be capture: true`);
   }
 
-  // Trigger scroll -> immediate data-ag-perf-busy="1", still busy at 90ms, released after ~200ms
+  // Trigger scroll -> immediate in-memory isBusy()/isPerfBusy() without writing data-ag-perf-busy onto <html>
   win.dispatchEvent({ type: 'scroll' });
-  assert.equal(html.getAttribute('data-ag-perf-busy'), '1');
+  assert.equal(html.hasAttribute('data-ag-perf-busy'), false, 'Scroll busy must remain pure in-memory and never mutate <html> attribute');
   assert.equal(bus.isBusy(), true);
+  assert.equal(bus.isPerfBusy(), true);
   await new Promise((r) => setTimeout(r, 90));
-  assert.equal(html.getAttribute('data-ag-perf-busy'), '1', 'Busy flag must remain held before 200ms idle');
+  assert.equal(bus.isBusy(), true, 'Busy flag must remain held before 200ms idle');
+  assert.equal(html.hasAttribute('data-ag-perf-busy'), false);
   await new Promise((r) => setTimeout(r, 150));
-  assert.equal(html.hasAttribute('data-ag-perf-busy'), false, 'Busy flag must auto-release 200ms after scroll stops');
+  assert.equal(bus.isBusy(), false, 'Busy flag must auto-release 200ms after scroll stops');
+  assert.equal(html.hasAttribute('data-ag-perf-busy'), false);
 
-  // Streaming active -> sets busy, high-priority delivers synchronously, low-priority throttles (~180ms)
+  // Streaming active -> sets in-memory busy, high-priority delivers synchronously, low-priority throttles (~180ms)
   bus.setStreaming(true);
-  assert.equal(html.getAttribute('data-ag-perf-busy'), '1');
+  assert.equal(bus.isBusy(), true);
+  assert.equal(html.hasAttribute('data-ag-perf-busy'), false, 'Streaming busy must not mutate <html> data-ag-perf-busy');
   const rootMo = observers[observers.length - 1];
   rootMo.emit([{ type: 'childList' }]); // first low-priority executes (elapsed > waitMs since 0)
   const lowAfterFirst = lowBatches.length;
@@ -317,7 +321,8 @@ test('dom-bus.js Single Root Observer, streaming low-priority throttling (160-20
   assert.equal(lowBatches[lowBatches.length - 1], 3, 'Coalesced low-priority batch must contain all 3 queued mutations');
 
   bus.setStreaming(false);
-  assert.equal(html.hasAttribute('data-ag-perf-busy'), false, 'Clearing streaming releases data-ag-perf-busy');
+  assert.equal(bus.isBusy(), false, 'Clearing streaming releases in-memory busy state');
+  assert.equal(html.hasAttribute('data-ag-perf-busy'), false);
 
   // Unsubscribing all disconnects root observer
   unsubHigh();

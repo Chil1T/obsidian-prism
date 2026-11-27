@@ -655,7 +655,7 @@
   const OMNI_CSS = [
     ':root::highlight(ag-omni-url){color:var(--link,var(--ag-cs-accent,var(--primary,#669DF6)));text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--ag-cs-accent,var(--primary,#669DF6)) 46%,transparent)}',
     ':root::highlight(ag-omni-path){color:var(--ag-cs-accent,var(--primary,#669DF6));background-color:color-mix(in srgb,var(--ag-cs-accent,var(--primary,#669DF6)) 12%,transparent);text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--ag-cs-accent,var(--primary,#669DF6)) 36%,transparent)}',
-    'html[data-ag-omni-hover-token="1"],html[data-ag-omni-hover-token="1"] body{cursor:pointer}',
+    '[data-ag-omni-hover-token="1"]{cursor:pointer}',
     '.ag-omni-autolink{cursor:pointer;color:var(--link,var(--ag-cs-accent,var(--primary,#669DF6)));text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--ag-cs-accent,var(--primary,#669DF6)) 44%,transparent);text-underline-offset:3px;border-radius:var(--ag-cs-r-sm,4px);transition:color .12s ease,background-color .12s ease,text-decoration-color .12s ease}',
     '.ag-omni-autolink[data-omni-path]{font-family:var(--ag-cs-mono-stack,var(--font-mono,ui-monospace,SFMono-Regular,Menlo,Consolas,monospace));font-size:.92em;padding:0 3px;background:color-mix(in srgb,var(--ag-cs-accent,var(--primary,#669DF6)) 9%,transparent);text-decoration:none;border:1px solid color-mix(in srgb,var(--ag-cs-accent,var(--primary,#669DF6)) 22%,transparent)}',
     '.ag-omni-autolink:hover{background:color-mix(in srgb,var(--ag-cs-accent,var(--primary,#669DF6)) 16%,transparent);text-decoration-color:var(--ag-cs-accent,var(--primary,#669DF6))}',
@@ -707,6 +707,7 @@
     let urlHighlight = null;
     let pathHighlight = null;
     let hoverTokenActive = false;
+    let hoverTokenEl = null;
     let pointerMoveRaf = null;
     let pendingPointerTarget = null;
     let pendingPointerX = 0;
@@ -1836,13 +1837,17 @@
       return null;
     }
 
-    function setHoverTokenCursor(active) {
-      if (hoverTokenActive === active) return;
-      hoverTokenActive = active;
-      const rootEl = D?.documentElement;
-      if (!rootEl) return;
-      if (active) rootEl.setAttribute('data-ag-omni-hover-token', '1');
-      else rootEl.removeAttribute('data-ag-omni-hover-token');
+    function setHoverTokenCursor(active, targetEl) {
+      const nextEl = active && targetEl && targetEl.nodeType === 1 && targetEl !== D?.documentElement ? targetEl : null;
+      if (hoverTokenEl === nextEl) return;
+      if (hoverTokenEl) {
+        try { hoverTokenEl.removeAttribute?.('data-ag-omni-hover-token'); } catch (_) {}
+      }
+      hoverTokenEl = nextEl;
+      hoverTokenActive = Boolean(nextEl);
+      if (nextEl) {
+        try { nextEl.setAttribute?.('data-ag-omni-hover-token', '1'); } catch (_) {}
+      }
     }
 
     // Event Handlers
@@ -1857,7 +1862,7 @@
         return;
       }
       const hit = hitTestHighlightedToken(x, y);
-      setHoverTokenCursor(Boolean(hit));
+      setHoverTokenCursor(Boolean(hit), hit ? (hit.element || el) : null);
     }
 
     function flushPointerMove() {
