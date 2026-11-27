@@ -18,33 +18,44 @@
   const HIGHLIGHT_NAMES = [0, 1, 2, 3, 4].map((i) => 'ag-stream-f' + i);
   const TABLE_TAGS = new Set('TABLE|THEAD|TBODY|TFOOT|TR|TH|TD'.split('|'));
   const INLINE_TAGS = new Set('SPAN|STRONG|EM|B|I|A|CODE|MARK|DEL|SUB|SUP'.split('|'));
-  const K_PE = 'parentElement';
-  const K_CL = 'classList';
-  const K_IC = 'isConnected';
+  const K_PE = 'parentElement', K_CL = 'classList', K_IC = 'isConnected';
+  const A_TID = 'data-testid', A_EXP = 'aria-expanded', A_SB = 'data-ag-cs-sidebar', A_RR = 'data-ag-cs-row-running';
+  const A_AU = 'data-ag-cs-auto-unfolded', A_OO = 'data-ag-cs-outer-open', A_TS = 'data-ag-cs-thought-streaming';
+  const S_SUB = '[data-testid="subagent-tab-conversation"]', S_CV = '[data-testid="conversation-view"]', S_TKT = '[data-testid="thinking-collapsible-trigger"]';
+  const S_WF = '[data-testid="worked-for-collapsible"]', S_SBR = '[data-testid="conversation-row-sidebar"]', S_IB = '[data-testid="agent-input-box"]';
 
-  const isEl = (n) => Boolean(n && (n.nodeType === 1 || (n.nodeType === undefined && typeof n.tagName === 'string')));
+  const isEl = (n) => !!(n && (n.nodeType === 1 || (n.nodeType === undefined && typeof n.tagName === 'string')));
   const tagOf = (n) => String(n?.tagName || '').toUpperCase();
   const peOf = (n) => n?.[K_PE] || null;
-  const clHas = (e, c) => Boolean(e?.[K_CL]?.contains?.(c));
+  const clHas = (e, c) => !!(e?.[K_CL]?.contains?.(c));
   const clRm = (e, c) => e?.[K_CL]?.remove?.(c);
   const isConn = (e) => !!(e && e[K_IC] !== false);
   const ga = (e, k) => e?.getAttribute?.(k);
   const sa = (e, k, v) => e?.setAttribute?.(k, v);
   const ra = (e, k) => e?.removeAttribute?.(k);
-  const ha = (e, k) => Boolean(e?.hasAttribute?.(k));
+  const ha = (e, k) => !!(e?.hasAttribute?.(k));
   const qs = (e, s) => e?.querySelector?.(s) || null;
   const qsa = (e, s) => e?.querySelectorAll?.(s) || [];
   const closestOf = (e, s) => e?.closest?.(s) || null;
-  const rectOf = (e) => (typeof e?.getBoundingClientRect === 'function' ? e.getBoundingClientRect() : null);
+  const isF = (v) => typeof v === 'function', T = (f) => { try { return f(); } catch {} };
+  const rectOf = (e) => (isF(e?.getBoundingClientRect) ? e.getBoundingClientRect() : null);
   const setProp = (e, k, v) => e?.style?.setProperty?.(k, v);
   const docOf = () => (typeof document !== 'undefined' ? document : null);
-  const nowOf = () => (typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now());
+  const nowOf = () => (typeof performance !== 'undefined' && isF(performance.now) ? performance.now() : Date.now());
   const rAF = (fn) => (typeof requestAnimationFrame === 'function' ? requestAnimationFrame(fn) : 0);
-  const cAF = (id) => {
-    if (id && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(id);
+  const cAF = (id) => { if (id && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(id); return 0; };
+  const ST = (fn, ms) => setTimeout(fn, ms), CT = (id) => clearTimeout(id), cT = (id) => { if (id) clearTimeout(id); return 0; }, AF = Array.from, isFin = Number.isFinite;
+  const PO = 'ag-prism-overlay-portal';
+  const mkOv = (d, c) => { const e = d.createElement('div'); if (c) { e.className = c; sa(e, 'aria-hidden', 'true'); } sa(e, 'data-ag-owned', '1'); sa(e, 'data-ag-no-i18n', ''); return e; };
+  const portalOf = (d) => {
+    let p = d?.getElementById?.(PO);
+    if (!p && d?.body) {
+      p = mkOv(d); p.id = PO; sa(p, 'translate', 'no'); sa(p, 'data-no-translate', 'true');
+      if (p.style) p.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:9990;contain:layout style';
+      d.body.appendChild(p);
+    }
+    return p || d?.body;
   };
-  const ST = (fn, ms) => setTimeout(fn, ms);
-  const CT = (id) => clearTimeout(id), AF = Array.from, isFin = Number.isFinite;
 
   const createStreamChoreographyController = ({
     motionEngine,
@@ -124,182 +135,90 @@
     let sweepTimer = 0;
 
     const guardMut = (fn) => {
-      const p = streamMutating;
-      streamMutating = true;
-      try { return typeof runGuardedMut === 'function' ? runGuardedMut(fn) : fn(); } finally {
-        if (!p && streamObs?.takeRecords) try { streamObs.takeRecords(); } catch {}
+      const p = streamMutating; streamMutating = true;
+      try { return isF(runGuardedMut) ? runGuardedMut(fn) : fn(); } finally {
+        if (!p && streamObs?.takeRecords) T(() => streamObs.takeRecords());
         streamMutating = p;
       }
     };
 
-    const canStreamMotion = () => {
-      const d = docOf();
-      if (ga(d?.documentElement, 'data-ag-cs-motion') === 'off') return false;
-      return typeof isMotionStandardOrUltra === 'function' ? Boolean(isMotionStandardOrUltra()) : Boolean(isMotionUltra());
-    };
+    const canStreamMotion = () => ga(docOf()?.documentElement, 'data-ag-cs-motion') !== 'off' && !!(isF(isMotionStandardOrUltra) ? isMotionStandardOrUltra() : isMotionUltra());
+    const tA = (e, k, on) => { if (on) setAttrIfChanged(e, k, '1'); else if (ha(e, k)) ra(e, k); };
 
     const getHlBuckets = () => {
-      const cssObj = typeof CSS !== 'undefined' ? CSS : G.CSS;
-      const HlCtor = typeof Highlight === 'function' ? Highlight : G.Highlight;
-      const d = docOf();
-      if (!cssObj?.highlights?.set || typeof HlCtor !== 'function' || typeof d?.createRange !== 'function') return null;
-      if (!hlBuckets) {
-        hlBuckets = HIGHLIGHT_NAMES.map((n) => {
-          const h = cssObj.highlights.get?.(n) || new HlCtor();
-          cssObj.highlights.set(n, h);
-          return h;
-        });
-      } else {
-        for (let i = 0; i < 5; i++) {
-          const n = HIGHLIGHT_NAMES[i];
-          const cur = cssObj.highlights.get?.(n);
-          if (cur && cur !== hlBuckets[i]) hlBuckets[i] = cur;
-          else if (!cur) cssObj.highlights.set(n, hlBuckets[i]);
-        }
-      }
+      const cssObj = typeof CSS !== 'undefined' ? CSS : G.CSS, HlCtor = typeof Highlight === 'function' ? Highlight : G.Highlight, d = docOf();
+      if (!cssObj?.highlights?.set || !isF(HlCtor) || !isF(d?.createRange)) return null;
+      if (!hlBuckets) hlBuckets = HIGHLIGHT_NAMES.map((n) => { const h = cssObj.highlights.get?.(n) || new HlCtor(); cssObj.highlights.set(n, h); return h; });
+      else for (let i = 0; i < 5; i++) { const n = HIGHLIGHT_NAMES[i], cur = cssObj.highlights.get?.(n); if (cur && cur !== hlBuckets[i]) hlBuckets[i] = cur; else if (!cur) cssObj.highlights.set(n, hlBuckets[i]); }
       return hlBuckets;
     };
 
-    const dropBucketItem = (it) => {
-      if (hlBuckets && it.b >= 0 && it.b < 5) {
-        try {
-          hlBuckets[it.b].delete(it.r);
-        } catch {}
-      }
-      it.b = -1;
-    };
-
-    const clearFadeTimer = () => {
-      if (fadeTimer) {
-        CT(fadeTimer);
-        fadeTimer = 0;
-      }
-    };
+    const dropBucketItem = (it) => { if (hlBuckets && it.b >= 0 && it.b < 5) T(() => hlBuckets[it.b].delete(it.r)); it.b = -1; };
+    const clearFadeTimer = () => { fadeTimer = cT(fadeTimer); };
 
     const clearHighlightFade = () => {
-      clearFadeTimer();
-      cAF(fadeRaf);
-      fadeRaf = 0;
-      nextFadeDueAt = 0;
-      for (let i = 0; i < fadeItems.length; i++) dropBucketItem(fadeItems[i]);
+      clearFadeTimer(); fadeRaf = cAF(fadeRaf); nextFadeDueAt = 0;
+      for (const it of fadeItems) dropBucketItem(it);
       fadeItems.length = 0;
     };
 
     const scheduleFadeStep = (now, useTimer) => {
-      if (isDestroyed() || fadeItems.length === 0) return;
-      if (docOf()?.hidden) {
-        clearHighlightFade();
-        return;
-      }
+      if (isDestroyed() || !fadeItems.length) return;
+      if (docOf()?.hidden) return clearHighlightFade();
       if (fadeRaf) return;
       const delay = nextFadeDueAt > 0 ? nextFadeDueAt - now : 0;
       if (useTimer && delay > 18 && typeof setTimeout === 'function') {
         if (fadeTimer) return;
         fadeTimer = ST(() => {
           fadeTimer = 0;
-          if (isDestroyed() || !canStreamMotion() || fadeItems.length === 0 || docOf()?.hidden) {
-            clearHighlightFade();
-            return;
-          }
-          if (!fadeRaf) {
-            fadeRaf = rAF(stepHighlightFade);
-            if (!fadeRaf) clearHighlightFade();
-          }
+          if (isDestroyed() || !canStreamMotion() || !fadeItems.length || docOf()?.hidden) return clearHighlightFade();
+          if (!fadeRaf && !(fadeRaf = rAF(stepHighlightFade))) clearHighlightFade();
         }, M.max(8, M.round(delay - 6)));
         return;
       }
       clearFadeTimer();
-      fadeRaf = rAF(stepHighlightFade);
-      if (!fadeRaf) clearHighlightFade();
+      if (!(fadeRaf = rAF(stepHighlightFade))) clearHighlightFade();
     };
 
     function stepHighlightFade(ts) {
-      clearFadeTimer();
-      fadeRaf = 0;
-      if (isDestroyed() || !canStreamMotion() || fadeItems.length === 0 || docOf()?.hidden) {
-        clearHighlightFade();
-        return;
-      }
+      clearFadeTimer(); fadeRaf = 0;
+      if (isDestroyed() || !canStreamMotion() || !fadeItems.length || docOf()?.hidden) return clearHighlightFade();
       const now = typeof ts === 'number' && isFin(ts) ? ts : nowOf();
-      if (nextFadeDueAt > 0 && now < nextFadeDueAt - 1) {
-        scheduleFadeStep(now, true);
-        return;
-      }
+      if (nextFadeDueAt > 0 && now < nextFadeDueAt - 1) return scheduleFadeStep(now, true);
       const buckets = getHlBuckets();
-      if (!buckets) {
-        clearHighlightFade();
-        return;
-      }
-      let w = 0;
-      let earliestDue = Infinity;
-      for (let i = 0; i < fadeItems.length; i++) {
-        const it = fadeItems[i];
-        const tn = it.n;
-        const val = tn ? tn.data ?? tn.nodeValue ?? '' : '';
-        const age = M.max(0, now - it.t);
-        if (!isConn(tn) || val.length < it.e || age >= STREAM_FADE_MS) {
-          dropBucketItem(it);
-          continue;
-        }
+      if (!buckets) return clearHighlightFade();
+      let w = 0, earliestDue = Infinity;
+      for (const it of fadeItems) {
+        const tn = it.n, val = tn ? tn.data ?? tn.nodeValue ?? '' : '', age = M.max(0, now - it.t);
+        if (!isConn(tn) || val.length < it.e || age >= STREAM_FADE_MS) { dropBucketItem(it); continue; }
         const nb = M.min(4, (age / STREAM_FADE_STEP_MS) | 0);
-        if (it.b !== nb) {
-          dropBucketItem(it);
-          try {
-            buckets[nb].add(it.r);
-            it.b = nb;
-          } catch {
-            continue;
-          }
-        }
+        if (it.b !== nb) { dropBucketItem(it); try { buckets[nb].add(it.r); it.b = nb; } catch { continue; } }
         const due = it.t + (it.b + 1) * STREAM_FADE_STEP_MS;
         if (due < earliestDue) earliestDue = due;
         fadeItems[w++] = it;
       }
       fadeItems.length = w;
-      if (w > 0) {
-        nextFadeDueAt = isFin(earliestDue) ? earliestDue : 0;
-        scheduleFadeStep(now, false);
-      } else {
-        clearHighlightFade();
-      }
+      if (w > 0) { nextFadeDueAt = isFin(earliestDue) ? earliestDue : 0; scheduleFadeStep(now, false); }
+      else clearHighlightFade();
     }
 
     const enqueueFadeRange = (tn, sOff, eOff, now) => {
       if (!tn || eOff <= sOff) return false;
-      const d = docOf();
-      if (!d || d.hidden) return false;
-      const buckets = getHlBuckets();
+      const d = docOf(), buckets = d && !d.hidden ? getHlBuckets() : null;
       if (!buckets) return false;
       const raw = tn.data ?? tn.nodeValue ?? '';
       if (eOff > raw.length || !/\S/.test(raw.slice(sOff, eOff))) return false;
-
-      const prev = fadeItems.length > 0 ? fadeItems[fadeItems.length - 1] : null;
-      if (prev && prev.n === tn && prev.e === sOff && now - prev.t <= 64) {
-        try {
-          prev.r.setEnd(tn, eOff);
-          prev.e = eOff;
-          return true;
-        } catch {}
-      }
-      if (fadeItems.length >= MAX_FADE_RANGES) {
-        const old = fadeItems.shift();
-        if (old) dropBucketItem(old);
-      }
-      try {
-        const r = d.createRange();
-        r.setStart(tn, sOff);
-        r.setEnd(tn, eOff);
-        buckets[0].add(r);
+      const prev = fadeItems[fadeItems.length - 1];
+      if (prev && prev.n === tn && prev.e === sOff && now - prev.t <= 64 && T(() => (prev.r.setEnd(tn, eOff), prev.e = eOff, true))) return true;
+      if (fadeItems.length >= MAX_FADE_RANGES) { const old = fadeItems.shift(); if (old) dropBucketItem(old); }
+      return !!T(() => {
+        const r = d.createRange(); r.setStart(tn, sOff); r.setEnd(tn, eOff); buckets[0].add(r);
         fadeItems.push({ n: tn, s: sOff, e: eOff, r, b: 0, t: now });
-        const due = now + STREAM_FADE_STEP_MS;
-        const earlier = !nextFadeDueAt || due < nextFadeDueAt;
-        if (earlier) nextFadeDueAt = due;
-        if (earlier && fadeTimer) clearFadeTimer();
+        const due = now + STREAM_FADE_STEP_MS, earlier = !nextFadeDueAt || due < nextFadeDueAt;
+        if (earlier) { nextFadeDueAt = due; clearFadeTimer(); }
         scheduleFadeStep(now, false);
         return true;
-      } catch {
-        return false;
-      }
+      });
     };
 
     const snapTextLens = (node, limit = 24) => {
@@ -307,21 +226,16 @@
       let c = 0;
       const walk = (n) => {
         if (!n || c >= limit) return;
-        if (n.nodeType === 3) {
-          textLenMap.set(n, (n.data ?? n.nodeValue ?? '').length);
-          c++;
-          return;
-        }
+        if (n.nodeType === 3) { textLenMap.set(n, (n.data ?? n.nodeValue ?? '').length); c++; return; }
         const ks = n.childNodes;
-        if (!ks) return;
-        for (let i = ks.length - 1; i >= 0 && c < limit; i--) walk(ks[i]);
+        if (ks) for (let i = ks.length - 1; i >= 0 && c < limit; i--) walk(ks[i]);
       };
       walk(node);
     };
 
     const flushExpiredClasses = () => {
       sweepTimer = 0;
-      if (expirableClasses.size === 0) return;
+      if (!expirableClasses.size) return;
       const now = Date.now();
       let nextDue = Infinity;
       guardMut(() => {
@@ -330,47 +244,37 @@
             if (now >= expAt - 2) { clRm(el, cls); map.delete(cls); }
             else if (expAt < nextDue) nextDue = expAt;
           }
-          if (map.size === 0) expirableClasses.delete(el);
+          if (!map.size) expirableClasses.delete(el);
         }
       });
-      if (!isDestroyed() && expirableClasses.size > 0 && isFin(nextDue)) {
-        sweepTimer = ST(flushExpiredClasses, M.max(16, M.ceil(nextDue - Date.now())));
-      }
+      if (!isDestroyed() && expirableClasses.size && isFin(nextDue)) sweepTimer = ST(flushExpiredClasses, M.max(16, M.ceil(nextDue - Date.now())));
     };
 
     const scheduleTransient = (fn, ms) => {
-      const id = ST(() => {
-        transientTimers.delete(id);
-        if (!isDestroyed()) try { guardMut(fn); } catch {}
-      }, ms);
+      const id = ST(() => { transientTimers.delete(id); if (!isDestroyed()) T(() => guardMut(fn)); }, ms);
       transientTimers.add(id);
       return id;
     };
 
     const clearTransientTimers = () => {
       convEntrySeq++;
-      if (convEntryTimer) { CT(convEntryTimer); convEntryTimer = 0; }
-      if (convEntryRaf) { cAF(convEntryRaf); convEntryRaf = 0; }
-      if (wfClickTimer) { CT(wfClickTimer); wfClickTimer = 0; }
-      if (sweepTimer) { CT(sweepTimer); sweepTimer = 0; }
-      if (runHoldTimer) { CT(runHoldTimer); runHoldTimer = 0; }
+      convEntryTimer = cT(convEntryTimer); convEntryRaf = cAF(convEntryRaf);
+      wfClickTimer = cT(wfClickTimer); sweepTimer = cT(sweepTimer); runHoldTimer = cT(runHoldTimer);
       runningCidMap.clear(); expirableClasses.clear();
       for (const id of transientTimers) CT(id);
       transientTimers.clear();
     };
     const cancelDeferredHydration = () => {
       convEntrySeq++;
-      if (convEntryTimer) { CT(convEntryTimer); convEntryTimer = 0; }
-      if (convEntryRaf) { cAF(convEntryRaf); convEntryRaf = 0; }
-      cAF(hydrateRaf); hydrateRaf = 0; cAF(unfoldRaf); unfoldRaf = 0;
+      convEntryTimer = cT(convEntryTimer); convEntryRaf = cAF(convEntryRaf);
+      hydrateRaf = cAF(hydrateRaf); unfoldRaf = cAF(unfoldRaf);
       sparkQueue = []; iconQueue = []; unfoldQueue = [];
     };
 
     const applySingleSpark = (trig, brand, st) => {
       const d = docOf();
       if (!d || !isConn(trig)) return;
-      if (st === 'streaming') setAttrIfChanged(trig, 'data-ag-cs-spark-streaming', '1');
-      else if (ha(trig, 'data-ag-cs-spark-streaming')) ra(trig, 'data-ag-cs-spark-streaming');
+      tA(trig, 'data-ag-cs-spark-streaming', st === 'streaming');
       let spark = clHas(trig.firstElementChild, 'ag-cs-thinking-spark') ? trig.firstElementChild : qs(trig, '.ag-cs-thinking-spark');
       if (!spark) {
         spark = d.createElement('span');
@@ -423,19 +327,10 @@
     };
 
     const resolveScopeBrand = (scope, primaryModelInfo, paneModelMap) => {
-      const mapped = paneModelMap && typeof paneModelMap.get === 'function' ? paneModelMap.get(scope)?.brand : '';
+      const mapped = isF(paneModelMap?.get) ? paneModelMap.get(scope)?.brand : '';
       if (mapped) return mapped;
-      const paneAttr =
-        (scope && scope !== docOf() && ga(scope, 'data-ag-cs-pane-camp')) ||
-        (scope && typeof scope.closest === 'function' && ga(scope.closest('[data-tiling-pane]'), 'data-ag-cs-pane-camp')) ||
-        '';
-      if (paneAttr) return paneAttr;
-      const glyphBrand =
-        scope && scope !== docOf()
-          ? ga(qs(scope, '[data-testid="model-selector-trigger"] .ag-cs-model-glyph'), 'data-brand')
-          : '';
-      if (glyphBrand) return glyphBrand;
-      return primaryModelInfo?.brand || 'gemini';
+      const d = docOf();
+      return (scope && scope !== d && (ga(scope, 'data-ag-cs-pane-camp') || (isF(scope.closest) && ga(scope.closest('[data-tiling-pane]'), 'data-ag-cs-pane-camp')) || ga(qs(scope, '[data-testid="model-selector-trigger"] .ag-cs-model-glyph'), 'data-brand'))) || primaryModelInfo?.brand || 'gemini';
     };
 
     const syncThinkingSparks = (primaryModelInfo, paneModelMap = null) => {
@@ -447,7 +342,7 @@
       const pending = [];
       for (let s = 0; s < scopes.length; s++) {
         const scope = scopes[s], brand = resolveScopeBrand(scope, primaryModelInfo, paneModelMap), cacheSig = `${brand}:${mv}`;
-        const triggers = qsa(scope, '[data-testid="thinking-collapsible-trigger"]'), len = triggers.length;
+        const triggers = qsa(scope, S_TKT), len = triggers.length;
         for (let i = 0; i < len; i++) {
           const trig = triggers[i], isLast = i === len - 1, expSt = ga(trig, 'data-op-thought-state') === 'streaming';
           if (!expSt && !isLast && doneSparkCache.get(trig) === cacheSig) continue;
@@ -478,13 +373,13 @@
     const clearWorkedForAutoUnfoldAttrs = () => {
       const d = docOf();
       if (!d) return;
-      for (const el of qsa(d, '[data-ag-cs-auto-unfolded]')) ra(el, 'data-ag-cs-auto-unfolded');
-      for (const el of qsa(d, '[data-ag-cs-outer-open]')) ra(el, 'data-ag-cs-outer-open');
+      for (const el of qsa(d, '[data-ag-cs-auto-unfolded]')) ra(el, A_AU);
+      for (const el of qsa(d, '[data-ag-cs-outer-open]')) ra(el, A_OO);
     };
 
     const clickClosed = (cb) => {
-      if (!cb || !isConn(cb) || ga(cb, 'aria-expanded') !== 'false' || typeof cb.click !== 'function') return false;
-      try { cb.click(); } catch {}
+      if (!cb || !isConn(cb) || ga(cb, A_EXP) !== 'false' || !isF(cb.click)) return false;
+      T(() => cb.click());
       return true;
     };
     const pumpUnfoldQueue = () => {
@@ -495,22 +390,22 @@
     };
     const processOuterWf = (btn, pendingClicks) => {
       if (!isConn(btn)) return;
-      const expanded = ga(btn, 'aria-expanded') === 'true';
+      const expanded = ga(btn, A_EXP) === 'true';
       let scope = btn.nextElementSibling;
       if (!scope) { let sib = btn.nextSibling; while (sib && sib.nodeType && sib.nodeType !== 1) sib = sib.nextSibling; scope = sib || null; }
       if (!scope) scope = peOf(btn);
       const innerBtns = qsa(scope, '[data-testid="tool-group-collapsible"]');
       if (expanded) {
-        setAttrIfChanged(btn, 'data-ag-cs-outer-open', '1');
-        for (const cb of innerBtns) if (cb !== btn && ga(cb, 'data-ag-cs-auto-unfolded') !== '1') {
-          sa(cb, 'data-ag-cs-auto-unfolded', '1');
-          if (ga(cb, 'aria-expanded') === 'false' && typeof cb.click === 'function') pendingClicks.push(cb);
+        setAttrIfChanged(btn, A_OO, '1');
+        for (const cb of innerBtns) if (cb !== btn && ga(cb, A_AU) !== '1') {
+          sa(cb, A_AU, '1');
+          if (ga(cb, A_EXP) === 'false' && isF(cb.click)) pendingClicks.push(cb);
         }
-      } else if (ga(btn, 'data-ag-cs-outer-open') === '1') {
-        ra(btn, 'data-ag-cs-outer-open');
-        for (const cb of innerBtns) ra(cb, 'data-ag-cs-auto-unfolded');
+      } else if (ga(btn, A_OO) === '1') {
+        ra(btn, A_OO);
+        for (const cb of innerBtns) ra(cb, A_AU);
         const p = peOf(btn);
-        if (p && p !== scope) for (const el of qsa(p, '[data-ag-cs-auto-unfolded]')) ra(el, 'data-ag-cs-auto-unfolded');
+        if (p && p !== scope) for (const el of qsa(p, '[data-ag-cs-auto-unfolded]')) ra(el, A_AU);
       }
     };
     const flushPendingUnfoldClicks = (pendingClicks) => {
@@ -523,56 +418,39 @@
 
     const syncWorkedForAutoUnfold = (dirtyTargets = null) => {
       const d = docOf();
-      if (isDestroyed()) {
-        clearWorkedForAutoUnfoldAttrs();
-        return;
-      }
+      if (isDestroyed()) { clearWorkedForAutoUnfoldAttrs(); return; }
       if (!d) return;
       const pendingClicks = [];
       if (dirtyTargets && dirtyTargets.size > 0) {
         const outers = new Set();
         for (const node of dirtyTargets) {
           if (!isConn(node)) continue;
-          if (ga(node, 'data-testid') === 'worked-for-collapsible') {
-            outers.add(node);
-            continue;
-          }
+          if (ga(node, A_TID) === 'worked-for-collapsible') { outers.add(node); continue; }
           const prev = node.previousElementSibling;
-          if (prev && ga(prev, 'data-testid') === 'worked-for-collapsible') outers.add(prev);
-          for (const b of qsa(node, '[data-testid="worked-for-collapsible"]')) outers.add(b);
-          let cur = peOf(node);
-          while (cur && cur !== d.body) {
+          if (prev && ga(prev, A_TID) === 'worked-for-collapsible') outers.add(prev);
+          for (const b of qsa(node, S_WF)) outers.add(b);
+          for (let cur = peOf(node); cur && cur !== d.body; cur = peOf(cur)) {
             const sib = cur.previousElementSibling;
-            if (sib && ga(sib, 'data-testid') === 'worked-for-collapsible') {
-              outers.add(sib);
-              break;
-            }
-            cur = peOf(cur);
+            if (sib && ga(sib, A_TID) === 'worked-for-collapsible') { outers.add(sib); break; }
           }
         }
         for (const btn of outers) processOuterWf(btn, pendingClicks);
-        flushPendingUnfoldClicks(pendingClicks);
-        return;
+        return flushPendingUnfoldClicks(pendingClicks);
       }
-      for (const btn of qsa(d, '[data-testid="worked-for-collapsible"]')) processOuterWf(btn, pendingClicks);
+      for (const btn of qsa(d, S_WF)) processOuterWf(btn, pendingClicks);
       flushPendingUnfoldClicks(pendingClicks);
     };
 
     const scheduleWorkedForClickSync = () => {
       if (isDestroyed()) return;
       if (wfClickTimer) CT(wfClickTimer);
-      wfClickTimer = ST(() => {
-        wfClickTimer = 0;
-        if (!isDestroyed()) syncWorkedForAutoUnfold();
-      }, 28);
+      wfClickTimer = ST(() => { wfClickTimer = 0; if (!isDestroyed()) syncWorkedForAutoUnfold(); }, 28);
     };
 
     function findFormalConvViews() {
       const d = docOf(), out = [];
-      for (const cv of qsa(d, '[data-testid="conversation-view"]')) {
-        if (closestOf(cv, '[data-testid="subagent-tab-conversation"]')) continue;
-        if (closestOf(cv, '.agy-home') || qs(cv, '.agy-home')) continue;
-        if (cv.hidden === true || cv.style?.display === 'none') continue;
+      for (const cv of qsa(d, S_CV)) {
+        if (closestOf(cv, S_SUB) || closestOf(cv, '.agy-home') || qs(cv, '.agy-home') || cv.hidden === true || cv.style?.display === 'none') continue;
         out.push(cv);
       }
       return out;
@@ -581,17 +459,15 @@
     function findFormalConvView() {
       const d = docOf(), views = findFormalConvViews();
       if (views.length <= 1) return views[0] || null;
-      const actCv = closestOf(d?.activeElement, '[data-testid="conversation-view"]');
+      const actCv = closestOf(d?.activeElement, S_CV);
       return actCv && views.includes(actCv) ? actCv : views[0];
     }
 
     const sampleHomeComposerRect = () => {
       const home = qs(docOf(), '.agy-home');
       if (!home) return null;
-      const r = rectOf(qs(home, '[data-testid="agent-input-box"]') || qs(home, '.surface-composer-card'));
-      if (r && r.width > 0 && r.height > 0) {
-        lastHomeRect = { left: r.left, top: r.top, width: r.width, height: r.height };
-      }
+      const r = rectOf(qs(home, S_IB) || qs(home, '.surface-composer-card'));
+      if (r && r.width > 0 && r.height > 0) lastHomeRect = { left: r.left, top: r.top, width: r.width, height: r.height };
       return lastHomeRect;
     };
 
@@ -602,13 +478,12 @@
       if (isMotionUltra() && rippleCtl) rippleCtl.triggerLiftoffBurst(r);
     };
 
+    const clrA = (el, a, ms) => scheduleTransient(() => { if (isConn(el)) ra(el, a); }, ms);
     const markLiftoffBubble = (conv) => {
       const bubble = qs(conv, '[data-testid="user-message-bubble"]');
       if (!bubble) return false;
       sa(bubble, 'data-ag-cs-liftoff-bubble', '1');
-      scheduleTransient(() => {
-        if (isConn(bubble)) ra(bubble, 'data-ag-cs-liftoff-bubble');
-      }, 500);
+      clrA(bubble, 'data-ag-cs-liftoff-bubble', 500);
       return true;
     };
 
@@ -617,39 +492,22 @@
       if (!isMotionUltra() || !formalConv || !d) return;
       const now = nowOf();
       for (const n of qsa(d, '.ag-cs-liftoff-veil')) n.remove();
-      const veil = d.createElement('div');
-      veil.className = 'ag-cs-liftoff-veil';
-      sa(veil, 'aria-hidden', 'true');
-      sa(veil, 'data-ag-no-i18n', '');
-      sa(veil, 'data-ag-owned', '1');
+      const veil = mkOv(d, 'ag-cs-liftoff-veil');
       const r = lastHomeRect;
-      setProp(veil, '--ag-lift-x', r && r.width > 0 ? `${Math.round(r.left + r.width / 2)}px` : '50%');
-      setProp(veil, '--ag-lift-y', r && r.height > 0 ? `${Math.round(r.top + r.height / 2)}px` : '58%');
+      setProp(veil, '--ag-lift-x', r && r.width > 0 ? `${M.round(r.left + r.width / 2)}px` : '50%');
+      setProp(veil, '--ag-lift-y', r && r.height > 0 ? `${M.round(r.top + r.height / 2)}px` : '58%');
       const ring = d.createElement('div');
       ring.className = 'ag-cs-liftoff-ring';
       veil.appendChild(ring);
-      d.body?.appendChild(veil);
+      portalOf(d)?.appendChild(veil);
       scheduleTransient(() => veil.remove(), 540);
 
-      const inputBox = qs(formalConv, '[data-testid="agent-input-box"]') || qs(d, '[data-testid="agent-input-box"]');
-      if (inputBox && typeof motionEngine?.spring === 'function') {
-        const nr = measuredRect || rectOf(inputBox);
-        const rawDelta = r && nr ? M.round(r.top - nr.top) : -160;
-        const hostFade = Boolean(
-          closestOf(inputBox, '.animate-fade-in, .no-transitions') ||
-            closestOf(formalConv, '.no-transitions') ||
-            clHas(formalConv, 'no-transitions')
-        );
-        const dy = hostFade
-          ? M.max(-24, M.min(0, rawDelta === 0 ? -10 : M.round(rawDelta * 0.08)))
-          : M.max(-420, M.min(-24, rawDelta === 0 ? -140 : rawDelta));
-        try {
-          motionEngine.spring(
-            inputBox,
-            [{ transform: `translateY(${dy}px) scale(${hostFade ? 0.996 : 0.985})` }, { transform: 'translateY(0) scale(1)' }],
-            { durationMs: hostFade ? 220 : 480, stiffness: hostFade ? 360 : 310, damping: hostFade ? 32 : 28, slot: 'liftoff-dock' }
-          );
-        } catch {}
+      const inputBox = qs(formalConv, S_IB) || qs(d, S_IB);
+      if (inputBox && isF(motionEngine?.spring)) {
+        const nr = measuredRect || rectOf(inputBox), rawDelta = r && nr ? M.round(r.top - nr.top) : -160;
+        const hostFade = !!(closestOf(inputBox, '.animate-fade-in, .no-transitions') || closestOf(formalConv, '.no-transitions') || clHas(formalConv, 'no-transitions'));
+        const dy = hostFade ? M.max(-24, M.min(0, rawDelta === 0 ? -10 : M.round(rawDelta * 0.08))) : M.max(-420, M.min(-24, rawDelta === 0 ? -140 : rawDelta));
+        T(() => motionEngine.spring(inputBox, [{ transform: `translateY(${dy}px) scale(${hostFade ? 0.996 : 0.985})` }, { transform: 'translateY(0) scale(1)' }], { durationMs: hostFade ? 220 : 480, stiffness: hostFade ? 360 : 310, damping: hostFade ? 32 : 28, slot: 'liftoff-dock' }));
       }
       liftoffBubbleUntil = markLiftoffBubble(formalConv) ? 0 : now + 900;
       convAuraCtl?.triggerLiftoffEbb?.(now);
@@ -660,41 +518,26 @@
       const home = qs(docOf(), '.agy-home');
       if (!home) return;
       rippleCtl?.triggerTideSwell?.();
-      if (typeof motionEngine?.stagger === 'function') {
-        const items = [qs(home, '[data-testid="home-greeting"]'), qs(home, '.ag-cs-home-panel'), qs(home, '[data-testid="agent-input-box"]')].filter(
-          Boolean
-        );
-        if (items.length > 0) {
-          try {
-            motionEngine.stagger(items, [{ transform: 'translateY(8px)' }, { transform: 'translateY(0px)' }], {
-              durationMs: 200,
-              delayStep: 20,
-              stepMs: 20,
-              stiffness: 360,
-              damping: 32,
-              slot: 'home-return',
-            });
-          } catch {}
-        }
+      if (isF(motionEngine?.stagger)) {
+        const items = [qs(home, '[data-testid="home-greeting"]'), qs(home, '.ag-cs-home-panel'), qs(home, S_IB)].filter(Boolean);
+        if (items.length) T(() => motionEngine.stagger(items, [{ transform: 'translateY(8px)' }, { transform: 'translateY(0px)' }], { durationMs: 200, delayStep: 20, stepMs: 20, stiffness: 360, damping: 32, slot: 'home-return' }));
       }
     };
 
-    const setAttrSafe = (el, k, v) =>
-      typeof setAttrIfChanged === 'function' ? setAttrIfChanged(el, k, v) : ga(el, k) !== v && sa(el, k, v);
+    const setAttrSafe = (el, k, v) => (isF(setAttrIfChanged) ? setAttrIfChanged(el, k, v) : ga(el, k) !== v && sa(el, k, v));
 
-    const getSidebarRowCid = (row) =>
-      String(ga(row, 'data-cascade-id') || ga(qs(row, 'a[href]'), 'href') || ga(row, 'data-conversation-id') || '').trim();
+    const getSidebarRowCid = (row) => String(ga(row, 'data-cascade-id') || ga(qs(row, 'a[href]'), 'href') || ga(row, 'data-conversation-id') || '').trim();
 
 const isStopBtn = (b) => {
 if (!b || b.hidden === true || ga(b, 'aria-hidden') === 'true' || ga(b, 'aria-haspopup') || ga(b, 'role') === 'checkbox') return false;
-const tid = String(ga(b, 'data-testid') || '').trim(), lbl = String(ga(b, 'aria-label') || ga(b, 'title') || '').trim();
+const tid = String(ga(b, A_TID) || '').trim(), lbl = String(ga(b, 'aria-label') || ga(b, 'title') || '').trim();
 if (NON_STOP_RE.test(tid + ' ' + lbl)) return false;
-return Boolean((tid && (STOP_TID_RE.test(tid) || STOP_CAMEL_RE.test(tid))) || (lbl && STOP_LABEL_RE.test(lbl)) || qs(b, '.lucide-square,.lucide-circle-stop'));
+return !!((tid && (STOP_TID_RE.test(tid) || STOP_CAMEL_RE.test(tid))) || (lbl && STOP_LABEL_RE.test(lbl)) || qs(b, '.lucide-square,.lucide-circle-stop'));
 };
 const isSidebarRowRunning = (row) => {
 if (!row) return false;
 if (qs(row, '[data-testid="status-loading-spinner"]')) return true;
-if (typeof row.getElementsByTagName === 'function') {
+if (isF(row.getElementsByTagName)) {
 for (const b of row.getElementsByTagName('button')) if (isStopBtn(b)) return true;
 for (const b of qsa(row, '[role="button"]')) if (isStopBtn(b)) return true;
 return false;
@@ -723,31 +566,18 @@ return false;
         runHoldTimer = 0;
         if (isDestroyed()) return;
         const d = docOf();
-        if (!d || ga(d.documentElement, 'data-ag-cs-sidebar') === 'off') return;
+        if (!d || ga(d.documentElement, A_SB) === 'off') return;
         const now = nowOf();
         pruneRunningCidMap(now);
         let minRem = Infinity;
         guardMut(() => {
-          const rows = qsa(d, '[data-testid="conversation-row-sidebar"]');
-          for (let i = 0; i < rows.length; i++) {
-            const r = rows[i];
+          for (const r of qsa(d, S_SBR)) {
             const cid = getSidebarRowCid(r);
-            if (isSidebarRowRunning(r)) {
-              runningRowMap.set(r, now);
-              if (cid) runningCidMap.set(cid, now);
-              setAttrSafe(r, 'data-ag-cs-row-running', '1');
-              continue;
-            }
+            if (isSidebarRowRunning(r)) { runningRowMap.set(r, now); if (cid) runningCidMap.set(cid, now); setAttrSafe(r, A_RR, '1'); continue; }
             const lastAt = M.max(cid ? runningCidMap.get(cid) || 0 : 0, runningRowMap.get(r) || 0);
             const rem = lastAt > 0 ? SIDEBAR_RUN_HOLD_MS - (now - lastAt) : -1;
-            if (rem > 0) {
-              if (rem < minRem) minRem = rem;
-              setAttrSafe(r, 'data-ag-cs-row-running', '1');
-            } else {
-              if (cid && runningCidMap.get(cid) === lastAt) runningCidMap.delete(cid);
-              runningRowMap.delete(r);
-              if (ha(r, 'data-ag-cs-row-running')) ra(r, 'data-ag-cs-row-running');
-            }
+            if (rem > 0) { if (rem < minRem) minRem = rem; setAttrSafe(r, A_RR, '1'); }
+            else { if (cid && runningCidMap.get(cid) === lastAt) runningCidMap.delete(cid); runningRowMap.delete(r); if (ha(r, A_RR)) ra(r, A_RR); }
           }
         });
         if (isFin(minRem)) scheduleRunningHoldExpiry(minRem);
@@ -756,18 +586,11 @@ return false;
 
     const resolveSidebarRowRunning = (row, domRunning, now) => {
       const cid = getSidebarRowCid(row);
-      if (domRunning) {
-        runningRowMap.set(row, now);
-        if (cid) runningCidMap.set(cid, now);
-        return true;
-      }
+      if (domRunning) { runningRowMap.set(row, now); if (cid) runningCidMap.set(cid, now); return true; }
       const lastAt = M.max(cid ? runningCidMap.get(cid) || 0 : 0, runningRowMap.get(row) || 0);
       if (lastAt > 0) {
-        const elapsed = now - lastAt;
-        if (elapsed >= 0 && elapsed <= SIDEBAR_RUN_HOLD_MS) {
-          scheduleRunningHoldExpiry(SIDEBAR_RUN_HOLD_MS - elapsed);
-          return true;
-        }
+        const el = now - lastAt;
+        if (el >= 0 && el <= SIDEBAR_RUN_HOLD_MS) { scheduleRunningHoldExpiry(SIDEBAR_RUN_HOLD_MS - el); return true; }
         if (cid && runningCidMap.get(cid) === lastAt) runningCidMap.delete(cid);
         runningRowMap.delete(row);
       }
@@ -776,41 +599,35 @@ return false;
 
     const lockSidebarRowRunningOnPointerDown = (row) => {
       const d = docOf();
-      if (!row || !d || ga(d.documentElement, 'data-ag-cs-sidebar') === 'off') return false;
-      const now = nowOf();
-      const cid = getSidebarRowCid(row);
+      if (!row || !d || ga(d.documentElement, A_SB) === 'off') return false;
+      const now = nowOf(), cid = getSidebarRowCid(row);
       const heldAt = M.max(cid ? runningCidMap.get(cid) || 0 : 0, runningRowMap.get(row) || 0);
-      const isRun =
-        ha(row, 'data-ag-cs-row-running') ||
-        isSidebarRowRunning(row) ||
-        (heldAt > 0 && now - heldAt <= SIDEBAR_RUN_HOLD_MS);
-      if (!isRun) return false;
+      if (!(ha(row, A_RR) || isSidebarRowRunning(row) || (heldAt > 0 && now - heldAt <= SIDEBAR_RUN_HOLD_MS))) return false;
       runningRowMap.set(row, now);
       if (cid) runningCidMap.set(cid, now);
-      guardMut(() => setAttrSafe(row, 'data-ag-cs-row-running', '1'));
+      guardMut(() => setAttrSafe(row, A_RR, '1'));
       scheduleRunningHoldExpiry(SIDEBAR_RUN_HOLD_MS);
       return true;
     };
 
     const stampSidebarRowRunningImmediate = (row) => {
       const d = docOf();
-      if (!row || !d || ga(d.documentElement, 'data-ag-cs-sidebar') === 'off') return false;
-      const now = nowOf();
-      const run = resolveSidebarRowRunning(row, isSidebarRowRunning(row), now);
-      if (run) guardMut(() => setAttrSafe(row, 'data-ag-cs-row-running', '1'));
+      if (!row || !d || ga(d.documentElement, A_SB) === 'off') return false;
+      const run = resolveSidebarRowRunning(row, isSidebarRowRunning(row), nowOf());
+      if (run) guardMut(() => setAttrSafe(row, A_RR, '1'));
       return run;
     };
 
 const measureSidebarSelectionSnapshot = () => {
-const rows = qsa(docOf(), '[data-testid="conversation-row-sidebar"]');
+const rows = qsa(docOf(), S_SBR);
 if (!rows.length) return { e: true };
 const now = nowOf();
 pruneRunningCidMap(now);
 let selIdx = -1, selRow = null, selRun = false, batchRun = null;
 const states = [], listP = rows.length > 1 ? peOf(rows[0]) : null;
-if (listP && typeof listP.getElementsByTagName === 'function' && AF(rows).every((r) => peOf(r) === listP)) {
+if (listP && isF(listP.getElementsByTagName) && AF(rows).every((r) => peOf(r) === listP)) {
 batchRun = new Set();
-const mr = (n) => { const r = closestOf(n, '[data-testid="conversation-row-sidebar"]'); if (r) batchRun.add(r); };
+const mr = (n) => { const r = closestOf(n, S_SBR); if (r) batchRun.add(r); };
 for (const sp of qsa(listP, '[data-testid="status-loading-spinner"]')) mr(sp);
 for (const b of listP.getElementsByTagName('button')) if (isStopBtn(b)) mr(b);
 for (const rb of qsa(listP, '[role="button"]')) if (isStopBtn(rb)) mr(rb);
@@ -825,56 +642,44 @@ states.push([r, run]);
       if (sbInit && sbRect && (curCid && sbCid ? curCid === sbCid : selIdx === sbIndex)) return { e: false, i: selIdx, cid: curCid, r: selRow, rn: selRun, s: sbRect, st: states };
       const list = peOf(selRow);
       if (getBus()?.isSkipped?.(selRow)) return { e: false, i: selIdx, cid: curCid, r: selRow, rn: selRun, s: sbRect, st: states };
-      const rr = rectOf(selRow);
-      const lr = rectOf(list);
-      const stTop = list ? list.scrollTop || 0 : 0;
-      const snap = rr
-        ? {
-            left: rr.left,
-            top: rr.top,
-            width: rr.width,
-            height: rr.height,
-            ry: lr ? rr.top - lr.top + stTop : rr.top,
-            rx: lr ? rr.left - lr.left : rr.left,
-          }
-        : null;
+      const rr = rectOf(selRow), lr = rectOf(list), stTop = list ? list.scrollTop || 0 : 0;
+      const snap = rr ? { left: rr.left, top: rr.top, width: rr.width, height: rr.height, ry: lr ? rr.top - lr.top + stTop : rr.top, rx: lr ? rr.left - lr.left : rr.left } : null;
       return { e: false, i: selIdx, cid: curCid, r: selRow, rn: selRun, s: snap, l: lr, t: stTop, st: states };
     };
 
-    const rstSb = () => { sbInit = false; sbIndex = -1; sbCid = ''; sbRect = null; sbRunning = false; };
+    const rstSb = () => { sbInit = sbRunning = false; sbIndex = -1; sbCid = ''; sbRect = null; };
     const syncSidebarSelectionGlide = (snap) => {
       const d = docOf();
       if (!snap || !d) return;
-      if (ga(d.documentElement, 'data-ag-cs-sidebar') === 'off') {
+      if (ga(d.documentElement, A_SB) === 'off') {
         for (const n of qsa(d, '.ag-cs-sidebar-glide-pill')) n.remove();
-        if (snap.st) for (const [row] of snap.st) if (ha(row, 'data-ag-cs-row-running')) ra(row, 'data-ag-cs-row-running');
+        if (snap.st) for (const [row] of snap.st) if (ha(row, A_RR)) ra(row, A_RR);
         if (runHoldTimer) { CT(runHoldTimer); runHoldTimer = 0; }
         runningCidMap.clear();
         return rstSb();
       }
-      if (snap.st) for (const [row, run] of snap.st) { if (run) setAttrSafe(row, 'data-ag-cs-row-running', '1'); else if (ha(row, 'data-ag-cs-row-running')) ra(row, 'data-ag-cs-row-running'); }
+      if (snap.st) for (const [row, run] of snap.st) { if (run) setAttrSafe(row, A_RR, '1'); else if (ha(row, A_RR)) ra(row, A_RR); }
       if (snap.e) return rstSb();
       const { i: selIdx, cid: curCid, r: selRow, rn: selRun, s: curSnap, l: listRect, t: scrollTop } = snap;
       if (!selRow) return;
-      const targetRun = Boolean(selRun || ha(selRow, 'data-ag-cs-row-running'));
+      const targetRun = !!(selRun || ha(selRow, A_RR));
       if (!sbInit) { sbInit = true; sbIndex = selIdx; sbCid = curCid; sbRect = curSnap; sbRunning = targetRun; return; }
       const sessionChanged = curCid && sbCid ? curCid !== sbCid : selIdx !== sbIndex;
       if (sbIndex >= 0 && selIdx >= 0 && sessionChanged && sbRect && curSnap && !(suppressEntryMotionUntil > nowOf())) {
         const fromRect = listRect ? { left: listRect.left + sbRect.rx, top: listRect.top + sbRect.ry - scrollTop, width: sbRect.width, height: sbRect.height } : sbRect;
         if (isMotionStandardOrUltra()) {
           for (const n of qsa(d, '.ag-cs-sidebar-glide-pill')) n.remove();
-          const pill = d.createElement('div');
-          pill.className = 'ag-cs-sidebar-glide-pill';
-          sa(pill, 'aria-hidden', 'true'); sa(pill, 'data-ag-no-i18n', ''); sa(pill, 'data-ag-owned', '1');
+          const pill = mkOv(d, 'ag-cs-sidebar-glide-pill');
           if (targetRun) sa(pill, 'data-ag-cs-glide-running', '1'); else if (sbRunning) sa(pill, 'data-ag-cs-glide-from-running', '1');
-          for (const s of `position:fixed|z-index:38|pointer-events:none|left:${M.round(curSnap.left)}px|top:${M.round(curSnap.top)}px|width:${M.round(curSnap.width)}px|height:${M.round(curSnap.height)}px`.split('|')) { const i = s.indexOf(':'); setProp(pill, s.slice(0, i), s.slice(i + 1)); }
-          d.body?.appendChild(pill);
-          try { motionEngine?.glideIndicator?.(pill, fromRect, curSnap, { durationMs: 240, stiffness: 390, damping: 32, mass: 0.9 }); } catch {}
+          setProp(pill, 'position', 'fixed'); setProp(pill, 'z-index', '38'); setProp(pill, 'pointer-events', 'none');
+          for (const k of ['left', 'top', 'width', 'height']) setProp(pill, k, `${M.round(curSnap[k])}px`);
+          portalOf(d)?.appendChild(pill);
+          T(() => motionEngine?.glideIndicator?.(pill, fromRect, curSnap, { durationMs: 240, stiffness: 390, damping: 32, mass: 0.9 }));
           scheduleTransient(() => pill.remove(), 260);
         }
         if (isMotionUltra()) {
           const dir = selIdx < sbIndex ? 'down' : 'up';
-          const vps = AF(qsa(d, '[data-testid="autoscroll-viewport"]')).filter((vp) => !closestOf(vp, '[data-testid="subagent-tab-conversation"]'));
+          const vps = AF(qsa(d, '[data-testid="autoscroll-viewport"]')).filter((vp) => !closestOf(vp, S_SUB));
           const matchedVp = curCid ? vps.find((vp) => ga(closestOf(vp, '[data-cascade-id]'), 'data-cascade-id') === curCid) : null;
           for (const vp of matchedVp ? [matchedVp] : vps) {
             sa(vp, 'data-ag-cs-stage-glide', dir);
@@ -890,13 +695,7 @@ states.push([r, run]);
       sbIndex = selIdx; sbCid = curCid; sbRect = curSnap; sbRunning = targetRun;
     };
 
-    const applyCaustic = (el) => {
-      if (!el || !isMotionUltra()) return;
-      sa(el, 'data-ag-cs-caustic', '1');
-      scheduleTransient(() => {
-        if (isConn(el)) ra(el, 'data-ag-cs-caustic');
-      }, 920);
-    };
+    const applyCaustic = (el) => { if (el && isMotionUltra()) { sa(el, 'data-ag-cs-caustic', '1'); clrA(el, 'data-ag-cs-caustic', 920); } };
 
     const getBus = () => G.__agDomBus || G.__agPrismDomBus || (typeof window !== 'undefined' && (window.__agDomBus || window.__agPrismDomBus)) || null;
     const measureVisibleChangedHeaders = () => {
@@ -915,8 +714,7 @@ states.push([r, run]);
       if (!root) return;
       for (const hdr of qsa(root, '[data-testid="changed-files-card-header"]')) {
         const next = hdr.nextElementSibling;
-        if (next && tagOf(next) === 'DIV') setAttrIfChanged(hdr, 'data-ag-cs-hdr-open', '1');
-        else if (ha(hdr, 'data-ag-cs-hdr-open')) ra(hdr, 'data-ag-cs-hdr-open');
+        tA(hdr, 'data-ag-cs-hdr-open', next && tagOf(next) === 'DIV');
       }
     };
 
@@ -940,68 +738,40 @@ states.push([r, run]);
         bus.mutate('sc:caustics-w', () => { if (!isDestroyed() && mHdrs?.length) guardMut(() => applyCausticHeaders(mHdrs)); });
       } else applyCausticHeaders(measureVisibleChangedHeaders());
 
-      const PANE_RUN_SEL = '[data-testid="input-cancel-button"],[data-testid="stop-button"],[data-testid="cancel-button"],[data-testid="agent-loading"],[data-testid="thinking-collapsible-trigger"][data-op-thought-state="streaming"]';
-      const views = findFormalConvViews();
-      let paneCausticHit = false;
-      if (views.length > 1) {
-        for (let i = 0; i < views.length; i++) {
-          const cv = views[i];
-          const runPane = Boolean(qs(cv, PANE_RUN_SEL));
-          const ps = paneRunState.get(cv);
-          if (!ps) {
-            paneRunState.set(cv, { wasRunning: runPane, startAt: runPane ? now : 0 });
-          } else if (runPane && !ps.wasRunning) {
-            ps.wasRunning = true;
-            ps.startAt = now;
-          } else if (!runPane && ps.wasRunning) {
+      const PRS = '[data-testid="input-cancel-button"],[data-testid="stop-button"],[data-testid="cancel-button"],[data-testid="agent-loading"],[data-testid="thinking-collapsible-trigger"][data-op-thought-state="streaming"]';
+      const vs = findFormalConvViews();
+      let pCh = false;
+      if (vs.length > 1) {
+        for (const cv of vs) {
+          const rP = !!(qs(cv, PRS)), ps = paneRunState.get(cv);
+          if (!ps) paneRunState.set(cv, { wasRunning: rP, startAt: rP ? now : 0 });
+          else if (rP && !ps.wasRunning) { ps.wasRunning = true; ps.startAt = now; }
+          else if (!rP && ps.wasRunning) {
             ps.wasRunning = false;
             const dur = ps.startAt > 0 ? now - ps.startAt : 0;
             ps.startAt = 0;
             if (dur >= 6000 && isMotionUltra()) {
-              const card = qs(cv, '[data-testid="agent-input-box"] .surface-composer-card');
-              if (card && !closestOf(card, '[data-testid="subagent-tab-conversation"]')) {
-                applyCaustic(card);
-                paneCausticHit = true;
-              }
+              const c = qs(cv, '[data-testid="agent-input-box"] .surface-composer-card');
+              if (c && !closestOf(c, S_SUB)) { applyCaustic(c); pCh = true; }
             }
           }
         }
       }
-
-      const runningNow = isConvRunning();
-      if (!runInit) {
-        runInit = true;
-        wasRunning = runningNow;
-        runStartAt = runningNow ? now : 0;
-      } else if (runningNow && !wasRunning) {
-        wasRunning = true;
-        runStartAt = now;
-      } else if (!runningNow && wasRunning) {
+      const rNow = isConvRunning(true);
+      if (!runInit) { runInit = true; wasRunning = rNow; runStartAt = rNow ? now : 0; }
+      else if (rNow && !wasRunning) { wasRunning = true; runStartAt = now; }
+      else if (!rNow && wasRunning) {
         wasRunning = false;
-        const elapsed = runStartAt > 0 ? now - runStartAt : 0;
+        const el = runStartAt > 0 ? now - runStartAt : 0;
         runStartAt = 0;
-        const auraPhase = convAuraCtl?.getInstance?.()?.phase || '';
-        const errDom = qs(
-          d,
-          '[data-testid="conversation-view"] [data-testid="agent-error-banner"], [data-testid="conversation-view"] [data-testid="error-message"]'
-        );
-        if (auraPhase === 'error-halted' || !!(errDom)) {
+        if (convAuraCtl?.getInstance?.()?.phase === 'error-halted' || qs(d, '[data-testid="conversation-view"] [data-testid="agent-error-banner"], [data-testid="conversation-view"] [data-testid="error-message"]')) {
           convAuraCtl?.triggerErrorHalted?.(now);
-          notifyMascot('streamDone', { error: true, durationMs: elapsed });
+          notifyMascot('streamDone', { error: true, durationMs: el });
         } else {
-          if (!paneCausticHit && elapsed >= 6000 && isMotionUltra()) {
-            for (const c of qsa(d, '[data-testid="agent-input-box"] .surface-composer-card')) {
-              if (!closestOf(c, '[data-testid="subagent-tab-conversation"]')) applyCaustic(c);
-            }
-          }
-          if (elapsed >= 15000) {
-            convAuraCtl?.triggerLongTaskComplete?.(now);
-            notifyMascot('aura-complete', { durationMs: elapsed });
-          } else {
-            notifyMascot('complete', { durationMs: elapsed });
-          }
-          const warnBar = qs(d, '[data-ag-prism-pulse-bar][data-pv-warn="1"], #ag-prism-pulse-bar[data-pv-warn="1"]');
-          if (warnBar && now - lastVialHighNotifyAt >= 600000) {
+          if (!pCh && el >= 6000 && isMotionUltra()) for (const c of qsa(d, '[data-testid="agent-input-box"] .surface-composer-card')) if (!closestOf(c, S_SUB)) applyCaustic(c);
+          if (el >= 15000) { convAuraCtl?.triggerLongTaskComplete?.(now); notifyMascot('aura-complete', { durationMs: el }); }
+          else notifyMascot('complete', { durationMs: el });
+          if (qs(d, '[data-ag-prism-pulse-bar][data-pv-warn="1"], #ag-prism-pulse-bar[data-pv-warn="1"]') && now - lastVialHighNotifyAt >= 600000) {
             lastVialHighNotifyAt = now;
             notifyMascot('vial-high', { fraction: 0.8 });
           }
@@ -1011,105 +781,57 @@ states.push([r, run]);
 
     const triggerHeroDFiberPulse = (card, modelBtn, brand) => {
       if (!card || !isMotionUltra()) return;
-      const camp = brand === 'antigravity' || brand === 'claude' || brand === 'openai' ? brand : 'gemini';
-      if (fiberTimer) {
-        CT(fiberTimer);
-        transientTimers.delete(fiberTimer);
-        fiberTimer = 0;
-      }
-      sa(card, 'data-ag-cs-fiber-camp', camp);
-      fiberTimer = scheduleTransient(() => {
-        fiberTimer = 0;
-        if (isConn(card)) ra(card, 'data-ag-cs-fiber-camp');
-      }, 480);
+      if (fiberTimer) { transientTimers.delete(fiberTimer); fiberTimer = cT(fiberTimer); }
+      sa(card, 'data-ag-cs-fiber-camp', brand === 'antigravity' || brand === 'claude' || brand === 'openai' ? brand : 'gemini');
+      fiberTimer = scheduleTransient(() => { fiberTimer = 0; if (isConn(card)) ra(card, 'data-ag-cs-fiber-camp'); }, 480);
       const glyph = qs(modelBtn, '.ag-cs-model-glyph');
-      if (glyph && typeof motionEngine?.spring === 'function') {
-        try {
-          motionEngine.spring(
-            glyph,
-            [
-              { transform: 'scale(0.84) rotate(-8deg)' },
-              { transform: 'scale(1.12) rotate(3deg)' },
-              { transform: 'scale(1) rotate(0deg)' },
-            ],
-            { stiffness: 420, damping: 22, slot: 'fiber-focus' }
-          );
-        } catch {}
-      }
+      if (glyph && isF(motionEngine?.spring)) T(() => motionEngine.spring(glyph, [{ transform: 'scale(0.84) rotate(-8deg)' }, { transform: 'scale(1.12) rotate(3deg)' }, { transform: 'scale(1) rotate(0deg)' }], { stiffness: 420, damping: 22, slot: 'fiber-focus' }));
     };
 
     const triggerHeroESonar = (navTurn) => {
       if (!navTurn || !isMotionUltra()) return;
-      const conv = closestOf(navTurn, '[data-testid="conversation-view"]') || findFormalConvView();
+      const conv = closestOf(navTurn, S_CV) || findFormalConvView();
       if (!conv) return;
       let turns = qsa(conv, '[data-testid="user-input-step"]');
       if (!turns.length) turns = qsa(conv, '[data-testid="conversation-turn"]');
       if (!turns.length) turns = qsa(conv, '[data-testid="user-message-bubble"]');
       if (!turns.length) return;
-
       let idx = -1;
       const rawAttr = ga(navTurn, 'data-turn-index') ?? ga(navTurn, 'data-index');
-      if (rawAttr != null && /^\d+$/.test(String(rawAttr).trim())) {
-        idx = parseInt(String(rawAttr).trim(), 10);
-      } else if (ga(navTurn, 'data-testid') === 'conversation-navigator-group') {
-        idx = 0;
-      } else {
+      if (rawAttr != null && /^\d+$/.test(String(rawAttr).trim())) idx = parseInt(String(rawAttr).trim(), 10);
+      else if (ga(navTurn, A_TID) === 'conversation-navigator-group') idx = 0;
+      else {
         const navRoot = closestOf(navTurn, '[data-testid="conversation-navigator"]') || peOf(navTurn);
         if (navRoot) {
-          const sibs = AF(qsa(navRoot, '[data-testid="conversation-navigator-turn"]'));
-          const relIdx = sibs.indexOf(navTurn);
-          if (relIdx >= 0) idx = M.min(turns.length - 1, M.max(0, turns.length - sibs.length) + relIdx);
+          const sibs = AF(qsa(navRoot, '[data-testid="conversation-navigator-turn"]')), rel = sibs.indexOf(navTurn);
+          if (rel >= 0) idx = M.min(turns.length - 1, M.max(0, turns.length - sibs.length) + rel);
         }
       }
       const target = idx >= 0 && idx < turns.length ? turns[idx] : null;
       if (!target) return;
       sa(target, 'data-ag-cs-sonar', '1');
-      scheduleTransient(() => {
-        if (isConn(target)) ra(target, 'data-ag-cs-sonar');
-      }, 720);
+      clrA(target, 'data-ag-cs-sonar', 720);
     };
 
     const syncHeroRouteChoreography = (measured) => {
-      const d = docOf();
-      const inHome = measured ? measured.inHome : Boolean(qs(d, '.agy-home'));
-      const formalConv = measured ? measured.formalConv : !inHome ? findFormalConvView() : null;
-      const inFormalConv = !!(formalConv);
-
-      if (inHome) {
-        const sheet = closestOf(qs(d, '.agy-home'), '.agy-sheet');
-        if (sheet) setAttrIfChanged(sheet, 'data-ag-cs-home-sheet', '1');
-      }
-      const formalViews = !inHome ? findFormalConvViews() : [];
-      for (let i = 0; i < formalViews.length; i++) {
-        const cv = formalViews[i];
-        const seat = peOf(cv);
+      const d = docOf(), inHome = measured ? measured.inHome : !!(qs(d, '.agy-home'));
+      const formalConv = measured ? measured.formalConv : !inHome ? findFormalConvView() : null, inFormalConv = !!formalConv;
+      if (inHome) { const sheet = closestOf(qs(d, '.agy-home'), '.agy-sheet'); if (sheet) setAttrIfChanged(sheet, 'data-ag-cs-home-sheet', '1'); }
+      if (!inHome) for (const cv of findFormalConvViews()) {
+        const seat = peOf(cv), vpP = peOf(qs(cv, '[data-testid="autoscroll-viewport"]'));
         if (seat && tagOf(seat) === 'DIV') setAttrIfChanged(seat, 'data-ag-cs-conv-seat', '1');
-        const vp = qs(cv, '[data-testid="autoscroll-viewport"]');
-        const vpP = peOf(vp);
         if (vpP && vpP !== cv) setAttrIfChanged(vpP, 'data-ag-cs-vp-wrap', '1');
       }
       if (inHome && !measured?.homeComposerSampled) sampleHomeComposerRect();
-
-      if (!heroState.routeInitialized) {
-        heroState.routeInitialized = true;
-        heroState.wasInHome = inHome;
-        heroState.wasInFormalConv = inFormalConv;
-      } else {
+      if (!heroState.routeInitialized) { heroState.routeInitialized = true; heroState.wasInHome = inHome; heroState.wasInFormalConv = inFormalConv; }
+      else {
         if (!(suppressEntryMotionUntil > nowOf())) {
           if (heroState.wasInHome && !inHome && inFormalConv) triggerHeroALiftoff(formalConv, measured?.convInputRect || null);
           else if (heroState.wasInFormalConv && !heroState.wasInHome && inHome) triggerHeroBHomeReturn();
-        } else {
-          liftoffBubbleUntil = 0;
-        }
-        heroState.wasInHome = inHome;
-        heroState.wasInFormalConv = inFormalConv;
-      }
-
-      if (liftoffBubbleUntil > 0 && formalConv) {
-        if (nowOf() <= liftoffBubbleUntil) {
-          if (markLiftoffBubble(formalConv)) liftoffBubbleUntil = 0;
         } else liftoffBubbleUntil = 0;
+        heroState.wasInHome = inHome; heroState.wasInFormalConv = inFormalConv;
       }
+      if (liftoffBubbleUntil > 0 && formalConv && (nowOf() > liftoffBubbleUntil || markLiftoffBubble(formalConv))) liftoffBubbleUntil = 0;
       if (measured?.sidebarSnap) syncSidebarSelectionGlide(measured.sidebarSnap);
       if (!measured || measured.checkCaustics !== false) syncHeroCCaustics(measured?.visibleChangedHeaders);
     };
@@ -1158,7 +880,7 @@ states.push([r, run]);
           if (d) for (const cls of ['ag-cs-stream-chunk', 'ag-cs-thought-chunk', 'ag-cs-code-scan']) for (const el of qsa(d, '.' + cls)) clRm(el, cls);
         }
         if (!d) return;
-        for (const el of qsa(d, '[data-ag-cs-thought-streaming]')) ra(el, 'data-ag-cs-thought-streaming');
+        for (const el of qsa(d, '[data-ag-cs-thought-streaming]')) ra(el, A_TS);
         if (!isMotionUltra()) {
           for (const el of qsa(d, '.ag-cs-liftoff-veil')) el.remove();
           for (const s of 'liftoff-bubble|caustic|fiber-camp|stage-glide|glide-item|sonar'.split('|')) for (const el of qsa(d, `[data-ag-cs-${s}]`)) ra(el, 'data-ag-cs-' + s);
@@ -1173,20 +895,11 @@ states.push([r, run]);
       const body = docOf()?.body;
       let cur = isEl(node) ? node : peOf(node);
       while (cur && cur !== body) {
-        if (ga(cur, 'data-ag-cs-thought-streaming') === '1') return cur;
-        const tid = ga(cur, 'data-testid');
-        if (
-          tid === 'planner-response-text' ||
-          tid === 'agent-response' ||
-          tid === 'background-task-command' ||
-          tid === 'tool-group-collapsible' ||
-          tid === 'conversation-view' ||
-          tid === 'autoscroll-viewport'
-        ) {
-          return null;
-        }
+        if (ga(cur, A_TS) === '1') return cur;
+        const tid = ga(cur, A_TID);
+        if (tid === 'planner-response-text' || tid === 'agent-response' || tid === 'background-task-command' || tid === 'tool-group-collapsible' || tid === 'conversation-view' || tid === 'autoscroll-viewport') return null;
         const prev = cur.previousElementSibling;
-        if (prev && ga(prev, 'data-testid') === 'thinking-collapsible-trigger' && ga(prev, 'aria-expanded') === 'true') return cur;
+        if (prev && ga(prev, A_TID) === 'thinking-collapsible-trigger' && ga(prev, A_EXP) === 'true') return cur;
         cur = peOf(cur);
       }
       return null;
@@ -1263,140 +976,90 @@ states.push([r, run]);
 
         if (m.type !== 'childList' || !m.addedNodes?.length) continue;
 
-        const inAnimBlock = Boolean(closestOf(baseEl, '.ag-cs-stream-chunk, .ag-cs-thought-chunk'));
+        const inAnimBlock = !!(closestOf(baseEl, '.ag-cs-stream-chunk, .ag-cs-thought-chunk'));
         const thoughtBody = findStreamingThoughtBody(target);
+        const eachAdd = (fn) => { for (const a of m.addedNodes) { if (isThoughtIsolatedNode(a)) continue; if (a.nodeType === 3) fadeLeafTexts(a, now, 1); else if (isEl(a)) fn(a); } };
         if (thoughtBody) {
           if (isManagedThoughtPanel(thoughtBody)) continue;
-          for (const added of m.addedNodes) {
-            if (isThoughtIsolatedNode(added)) continue;
-            if (added.nodeType === 3) {
-              fadeLeafTexts(added, now, 1);
-            } else if (isEl(added)) {
-              if (inAnimBlock || INLINE_TAGS.has(tagOf(added))) fadeLeafTexts(added, now, 4);
-              else if (!seenBlocks.has(added) && newBlocks < 4) {
-                seenBlocks.add(added);
-                newBlocks++;
-                snapTextLens(added, 12);
-                markStreamClass(added, 'ag-cs-thought-chunk', 290);
-              }
-            }
-          };
+          eachAdd((a) => {
+            if (inAnimBlock || INLINE_TAGS.has(tagOf(a))) fadeLeafTexts(a, now, 4);
+            else if (!seenBlocks.has(a) && newBlocks < 4) { seenBlocks.add(a); newBlocks++; snapTextLens(a, 12); markStreamClass(a, 'ag-cs-thought-chunk', 290); }
+          });
           continue;
         }
-
         const proseRoot = closestOf(baseEl, PROSE_SEL);
         if (!proseRoot) continue;
-
         const markCode = (el, lim) => { scannedNodes.add(el); lastCodeAt = now; snapTextLens(el, lim); markStreamClass(el, 'ag-cs-code-scan', 240); };
         const codeCtx = insideCodeOrTable(target, proseRoot);
         if (codeCtx) {
           if (TABLE_TAGS.has(tagOf(codeCtx))) {
-            for (const added of m.addedNodes) {
-              if (added.nodeType === 3) { fadeLeafTexts(added, now, 1); continue; }
-              if (!isEl(added)) continue;
-              const tr = tagOf(added) === 'TR' ? added : findRowAnc(added, proseRoot) || findRowAnc(codeCtx, proseRoot);
+            eachAdd((a) => {
+              const tr = tagOf(a) === 'TR' ? a : findRowAnc(a, proseRoot) || findRowAnc(codeCtx, proseRoot);
               if (tr && !scannedNodes.has(tr) && now - lastCodeAt >= STREAM_BATCH_MS) markCode(tr, 12);
-              else fadeLeafTexts(added, now, 3);
-            }
-            continue;
-          }
-          for (const added of m.addedNodes) {
-            if (added.nodeType === 3) { fadeLeafTexts(added, now, 1); continue; }
-            if (!isEl(added)) continue;
-            if (tagOf(added) === 'PRE' || clHas(added, 'code-block')) { if (!scannedNodes.has(added)) markCode(added, 16); continue; }
-            const lineEl = clHas(added, 'code-line') ? added : closestOf(added, '.code-line') || added;
-            if (lineEl && lineEl !== proseRoot && tagOf(lineEl) !== 'PRE' && !clHas(lineEl, 'code-block') && !scannedNodes.has(lineEl) && now - lastCodeAt >= STREAM_BATCH_MS) markCode(lineEl, 8);
-            else fadeLeafTexts(added, now, 3);
-          }
+              else fadeLeafTexts(a, now, 3);
+            });
+          } else eachAdd((a) => {
+            if (tagOf(a) === 'PRE' || clHas(a, 'code-block')) { if (!scannedNodes.has(a)) markCode(a, 16); return; }
+            const ln = clHas(a, 'code-line') ? a : closestOf(a, '.code-line') || a;
+            if (ln && ln !== proseRoot && tagOf(ln) !== 'PRE' && !clHas(ln, 'code-block') && !scannedNodes.has(ln) && now - lastCodeAt >= STREAM_BATCH_MS) markCode(ln, 8);
+            else fadeLeafTexts(a, now, 3);
+          });
           continue;
         }
-        for (const added of m.addedNodes) {
-          if (added.nodeType === 3) { fadeLeafTexts(added, now, 1); continue; }
-          if (!isEl(added)) continue;
-          const tag = tagOf(added);
-          const isCodeOrTbl = tag === 'PRE' || tag === 'TABLE' || clHas(added, 'code-block') || clHas(added, 'md-table-host') || clHas(added, 'md-table-frame') || Boolean(qs(added, 'pre, table, .code-block, .md-table-frame'));
-          if (isCodeOrTbl) { if (!scannedNodes.has(added) && now - lastCodeAt >= STREAM_BATCH_MS) markCode(added, 16); }
-          else if (inAnimBlock || (INLINE_TAGS.has(tag) && baseEl !== proseRoot)) fadeLeafTexts(added, now, 4);
-          else if (!seenBlocks.has(added) && newBlocks < 4) { seenBlocks.add(added); newBlocks++; snapTextLens(added, 12); markStreamClass(added, 'ag-cs-stream-chunk', 310); }
-          else fadeLeafTexts(added, now, 4);
-        }
+        eachAdd((a) => {
+          const tag = tagOf(a);
+          if (tag === 'PRE' || tag === 'TABLE' || clHas(a, 'code-block') || clHas(a, 'md-table-host') || clHas(a, 'md-table-frame') || qs(a, 'pre, table, .code-block, .md-table-frame')) {
+            if (!scannedNodes.has(a) && now - lastCodeAt >= STREAM_BATCH_MS) markCode(a, 16);
+          } else if (inAnimBlock || (INLINE_TAGS.has(tag) && baseEl !== proseRoot)) fadeLeafTexts(a, now, 4);
+          else if (!seenBlocks.has(a) && newBlocks < 4) { seenBlocks.add(a); newBlocks++; snapTextLens(a, 12); markStreamClass(a, 'ag-cs-stream-chunk', 310); }
+          else fadeLeafTexts(a, now, 4);
+        });
 }
 };
 const syncStreamActiveAttr = (on) => {
 const h = docOf()?.documentElement;
-if (h) { if (on) { if (ga(h, 'data-ag-cs-stream-active') !== '1' && typeof h.setAttribute === 'function') setAttrIfChanged(h, 'data-ag-cs-stream-active', '1'); } else if (ha(h, 'data-ag-cs-stream-active') && typeof h.removeAttribute === 'function') ra(h, 'data-ag-cs-stream-active'); }
-try { getBus()?.setStreaming?.(on); } catch {}
+if (h && isF(on ? h.setAttribute : h.removeAttribute)) tA(h, 'data-ag-cs-stream-active', on);
+T(() => getBus()?.setStreaming?.(on));
 };
 const syncDualStreamEngine = () => {
-const running = isConvRunning();
-const views = running ? findFormalConvViews() : [];
+const running = isConvRunning(true), views = running ? findFormalConvViews() : [];
 syncStreamActiveAttr(running && views.length > 0);
-const active = canStreamMotion() && running;
-if (!active || views.length === 0) {
-if (streamObs) { try { streamObs.disconnect(); } catch {} streamRoots.clear(); }
+if (!(canStreamMotion() && running) || !views.length) {
+if (streamObs) { T(() => streamObs.disconnect()); streamRoots.clear(); }
 getBus()?.cancelGroup?.('conv:stream');
-flushAllStreamArtifacts(!canStreamMotion());
-return;
+return flushAllStreamArtifacts(!canStreamMotion());
 }
 const trigByView = [];
-for (let v = 0; v < views.length; v++) {
-const conv = views[v];
-const triggers = qsa(conv, '[data-testid="thinking-collapsible-trigger"]');
+for (const conv of views) {
+const triggers = qsa(conv, S_TKT);
 trigByView.push([conv, triggers]);
 for (let i = 0; i < triggers.length; i++) {
-const trig = triggers[i];
-const bodyDiv = trig.nextElementSibling;
+const trig = triggers[i], bodyDiv = trig.nextElementSibling;
 if (!bodyDiv || tagOf(bodyDiv) !== 'DIV') continue;
-const streaming =
-ga(trig, 'aria-expanded') === 'true' &&
-isStreamingThoughtTrigger(trig, i === triggers.length - 1);
-if (streaming) setAttrIfChanged(bodyDiv, 'data-ag-cs-thought-streaming', '1');
-else if (ha(bodyDiv, 'data-ag-cs-thought-streaming')) ra(bodyDiv, 'data-ag-cs-thought-streaming');
+tA(bodyDiv, A_TS, ga(trig, A_EXP) === 'true' && isStreamingThoughtTrigger(trig, i === triggers.length - 1));
 }
 }
 if (!streamObs && typeof MutationObserver === 'function') streamObs = new MutationObserver(onStreamMutations);
-if (streamObs) {
-let changed = streamRoots.size !== views.length;
-if (!changed) {
-for (let v = 0; v < views.length; v++) {
-if (!streamRoots.has(views[v])) { changed = true; break; }
-}
-}
-if (changed) {
-try {
-streamObs.disconnect();
-streamRoots.clear();
-for (let v = 0; v < trigByView.length; v++) {
-const [conv, triggers] = trigByView[v];
-const resps = qsa(conv, PROSE_SEL);
-if (resps.length > 0) snapTextLens(resps[resps.length - 1], 24);
-if (triggers.length > 0) {
-const lb = triggers[triggers.length - 1]?.nextElementSibling;
+if (streamObs && (streamRoots.size !== views.length || views.some((v) => !streamRoots.has(v)))) {
+T(() => {
+streamObs.disconnect(); streamRoots.clear();
+for (const [conv, triggers] of trigByView) {
+const resps = qsa(conv, PROSE_SEL), lb = triggers[triggers.length - 1]?.nextElementSibling;
+if (resps.length) snapTextLens(resps[resps.length - 1], 24);
 if (lb && !isManagedThoughtPanel(lb)) snapTextLens(lb, 16);
-}
 streamObs.observe(conv, { childList: true, characterData: true, subtree: true });
 streamRoots.add(conv);
 }
-} catch {}
+});
 }
-}
-};
-const isFreshTriggerOrigin = (trig) => {
-if (!trig || !isFin(trig.at)) return false;
-const age = nowOf() - trig.at;
-return age >= 0 && age <= 900;
 };
 const resolveTriggerOriginCoords = (trig) => {
-if (!isFreshTriggerOrigin(trig)) return null;
+const age = trig && isFin(trig.at) ? nowOf() - trig.at : -1;
+if (age < 0 || age > 900) return null;
 if (trig.el && !trig._measured) {
 trig._measured = true;
-if (trig.el.isConnected !== false) {
-const r = rectOf(trig.el);
-if (r && r.width > 0 && r.height > 0) {
-trig.x = r.left + r.width / 2;
-trig.y = r.top + r.height / 2;
-}
-}
+const r = trig.el.isConnected !== false ? rectOf(trig.el) : null;
+if (r && r.width > 0 && r.height > 0) { trig.x = r.left + r.width / 2; trig.y = r.top + r.height / 2; }
 trig.el = null;
 }
 return isFin(trig.x) && isFin(trig.y) ? trig : null;
@@ -1404,38 +1067,27 @@ return isFin(trig.x) && isFin(trig.y) ? trig : null;
 const measureNewLensOverlays = () => {
 const d = docOf();
 if (!isMotionStandardOrUltra() || !d) return [];
-const cands = new Set([
-...qsa(d, '.agy-overlay, .agy-fastpick, [data-testid="context-menu-popup"], [data-testid="context-menu-submenu-popup"]'),
-]);
-for (const el of qsa(d, '[data-testid="overview-panel"]')) {
-const p = peOf(el);
-if (p && tagOf(p) === 'DIV') cands.add(p);
-}
+const cands = new Set([...qsa(d, '.agy-overlay, .agy-fastpick, [data-testid="context-menu-popup"], [data-testid="context-menu-submenu-popup"]')]);
+for (const el of qsa(d, '[data-testid="overview-panel"]')) { const p = peOf(el); if (p && tagOf(p) === 'DIV') cands.add(p); }
 const freshNew = [], bus = getBus();
-for (const ov of cands) {
-if (!ha(ov, 'data-hover-card-popup') && !seenOverlays.has(ov) && !bus?.isSkipped?.(ov)) freshNew.push(ov);
-}
-if (freshNew.length === 0) return [];
-// 仅在真有新浮层弹出时才懒测距点击源，消除普通正文点击时的同步回流
+for (const ov of cands) if (!ha(ov, 'data-hover-card-popup') && !seenOverlays.has(ov) && !bus?.isSkipped?.(ov)) freshNew.push(ov);
+if (!freshNew.length) return [];
 const trig = resolveTriggerOriginCoords(heroState.lastTriggerOrigin);
-const out = [];
-for (const ov of freshNew) out.push({ ov, rect: trig ? rectOf(ov) : null });
-return out;
+return freshNew.map((ov) => ({ ov, rect: trig ? rectOf(ov) : null }));
 };
 const applyLensOverlays = (list) => {
-if (!list || !list.length) return;
+if (!list?.length) return;
 const trig = resolveTriggerOriginCoords(heroState.lastTriggerOrigin);
 for (const { ov, rect: r } of list) {
-if (seenOverlays.has(ov)) continue;
-if (trig && r && (r.width <= 0 || r.height <= 0)) continue;
+if (seenOverlays.has(ov) || (trig && r && (r.width <= 0 || r.height <= 0))) continue;
 seenOverlays.add(ov);
 if (trig && r && r.width > 0 && r.height > 0) {
-          setProp(ov, '--ag-origin-x', `${Math.round(Math.max(-40, Math.min(r.width + 40, trig.x - r.left)))}px`);
-          setProp(ov, '--ag-origin-y', `${Math.round(Math.max(-40, Math.min(r.height + 40, trig.y - r.top)))}px`);
+setProp(ov, '--ag-origin-x', `${M.round(M.max(-40, M.min(r.width + 40, trig.x - r.left)))}px`);
+setProp(ov, '--ag-origin-y', `${M.round(M.max(-40, M.min(r.height + 40, trig.y - r.top)))}px`);
 }
 let idx = 0;
 for (const item of qsa(ov, '[role="option"], [role="menuitem"], [data-testid]')) {
-const role = ga(item, 'role'), tid = ga(item, 'data-testid') || '';
+const role = ga(item, 'role'), tid = ga(item, A_TID) || '';
 if (role === 'option' || role === 'menuitem' || tid.startsWith('overview-panel-row-') || tid === 'subagent-node' || tid === 'artifact-row') {
 setProp(item, '--ag-row-i', String(idx++));
 setAttrIfChanged(item, 'data-ag-row-stagger', '1');
@@ -1452,7 +1104,7 @@ const p = peOf(el);
 if (p && tagOf(p) === 'DIV') { setAttrIfChanged(p, 'data-ag-cs-overview-shell', '1'); setAttrIfChanged(p, 'data-ag-cs-prism-box', '1'); setAttrIfChanged(p, 'data-ag-cs-prism-mirror', '1'); }
 }
 if (!isMotionStandardOrUltra()) return;
-if (measuredOverlays) { applyLensOverlays(measuredOverlays); return; }
+if (measuredOverlays) return applyLensOverlays(measuredOverlays);
 const bus = getBus();
 if (bus?.measure && bus?.mutate) {
 let mList = null;
@@ -1464,26 +1116,16 @@ applyLensOverlays(measureNewLensOverlays());
 };
 const scheduleDeferredConvEntry = (fn, delayMs = 65, frame2Fn = null) => {
 const seq = ++convEntrySeq;
-if (convEntryTimer) CT(convEntryTimer);
-if (convEntryRaf) {
-cAF(convEntryRaf);
-convEntryRaf = 0;
-}
+convEntryTimer = cT(convEntryTimer); convEntryRaf = cAF(convEntryRaf);
 convEntryTimer = ST(() => {
 convEntryTimer = 0;
 if (isDestroyed() || seq !== convEntrySeq) return;
-const cont = fn();
-if (cont !== false && seq === convEntrySeq && typeof frame2Fn === 'function') {
-convEntryRaf = rAF(() => {
-convEntryRaf = 0;
-if (!isDestroyed() && seq === convEntrySeq) frame2Fn();
-});
-}
+if (fn() !== false && seq === convEntrySeq && isF(frame2Fn)) convEntryRaf = rAF(() => { convEntryRaf = 0; if (!isDestroyed() && seq === convEntrySeq) frame2Fn(); });
 }, delayMs);
 };
 const disconnectStreamObserver = () => {
 syncStreamActiveAttr(false);
-if (streamObs) { try { streamObs.disconnect(); } catch {} streamObs = null; streamRoots.clear(); }
+if (streamObs) { T(() => streamObs.disconnect()); streamObs = null; streamRoots.clear(); }
 flushAllStreamArtifacts(true);
 };
 return {

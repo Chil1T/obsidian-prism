@@ -7,17 +7,18 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : typeof window !== 'undefined' ? window : this, function (G) {
   'use strict';
+  const M = Math, F = Object.freeze;
   const BUSY_ATTR = 'data-ag-perf-busy', PERF_MODE_ATTR = 'data-ag-cs-perf-mode', STREAM_ATTR = 'data-ag-cs-stream-active';
   const PERF_CHANGE_EVENT = 'ag-prism-perf-mode-change', CV_EV = 'contentvisibilityautostatechange', BM_EV = 'beforematch';
-  const PASSIVE_CAP = Object.freeze({ capture: true, passive: true }), PASSIVE_OPT = Object.freeze({ passive: true });
+  const PASSIVE_CAP = F({ capture: true, passive: true }), PASSIVE_OPT = F({ passive: true });
   const OFF_P = 'html[data-ag-cs-style][data-ag-cs-motion="off"] :is(';
   const OFF_PS = '[data-testid="status-loading-spinner"],[data-testid="input-cancel-button"],[data-ag-cs-row-running="1"],[data-ag-sub-running="1"],[data-ag-overview-running="1"],[data-ag-sp-running="1"],[data-ag-cs-caustic="1"],[data-ag-cs-fiber-camp],[data-ag-cs-thought-streaming="1"],.ag-cs-sidebar-glide-pill,.agy-scroll-bottom';
   const MOTION_OFF_SCOPED_CSS =
     OFF_P + 'button,[role="button"],[role="menuitem"],[role="option"],[role="tab"],[role="switch"],div[role="dialog"],.agy-overlay,.agy-overlay-item,.agy-fastpick,.agy-selection-pill,.agy-toast,.surface-composer-card,.agy-composer-footer,.ag-cs-home-panel,.ag-cs-ctx-menu,.ag-cs-ctx-toast,.ag-cs-model-glyph,.ag-cs-thinking-spark,.ag-cs-smooth-caret,.ag-cs-stream-chunk,.ag-cs-thought-chunk,.ag-cs-code-scan,.ag-prism-thought-chunk,.ag-cs-liftoff-veil,.ag-cs-liftoff-ring,[data-testid="conversation-row-sidebar"],[data-testid="conversation-row-history"],[data-testid="step-plan"],[data-testid="step-plan-item"],[data-testid="queued-messages-card"],[data-testid="interaction-takeover-card"],[data-ag-cs-overview-shell="1"],[data-ag-row-stagger="1"],[data-ag-cs-sonar="1"],' + OFF_PS + '),' +
     OFF_P + OFF_PS + ')::before,' + OFF_P + OFF_PS + ')::after{animation:none!important;transition:none!important}';
   const mkCap = (mode, maxFps, minFrameGapMs, maxDpr, disableHeavyBlur, lowPriorityThrottleMs, chunkBudgetMs) =>
-    Object.freeze({ mode, maxFps, minFrameGapMs, maxDpr, disableHeavyBlur, lowPriorityThrottleMs, chunkBudgetMs });
-  const PERF_CAPS_TABLE = Object.freeze({
+    F({ mode, maxFps, minFrameGapMs, maxDpr, disableHeavyBlur, lowPriorityThrottleMs, chunkBudgetMs });
+  const PERF_CAPS_TABLE = F({
     performance: mkCap('performance', 60, 14.5, 1, true, 200, 2.5),
     balanced: mkCap('balanced', 180, 0, 1.5, false, 180, 3.5),
     quality: mkCap('quality', 0, 0, 2, false, 160, 4.5),
@@ -150,19 +151,23 @@
     }
     function dispatchMo(muts, isRa) {
       if (!muts?.length || !subs.size) return;
+      let hm = 0, nCd = null;
+      for (const m of muts) { const t = m?.type; hm |= t === 'childList' ? 1 : t === 'attributes' ? 2 : t === 'characterData' ? 4 : 0; }
       const hi = isStr() || scBusy, caps = gCaps(), now = nowMs();
       for (const s of subs.values()) {
-        if (isRa !== undefined && s.ra !== isRa) continue;
+        if ((isRa !== undefined && s.ra !== isRa) || (hm && !(hm & s.wM))) continue;
+        const src = (hm & 4) && !s.wD ? (nCd || (nCd = muts.filter((m) => m && m.type !== 'characterData'))) : muts;
+        if (!src.length) continue;
         let hit = null;
-        if (s.pa) hit = muts;
-        else for (const m of muts) if (matchRec(s, m)) (hit || (hit = [])).push(m);
+        if (s.pa || (!s.f && !s.rO && (!(hm & 1) || s.wC) && (!(hm & 2) || (s.wA && !s.aS)))) hit = src;
+        else for (const m of src) if (matchRec(s, m)) (hit || (hit = [])).push(m);
         if (!hit?.length) continue;
         if (s.p === 'low' && (hi || s.th > 0)) {
-          const wMs = hi ? Math.max(s.th || 0, caps.lowPriorityThrottleMs || 180) : s.th;
+          const wMs = hi ? M.max(s.th || 0, caps.lowPriorityThrottleMs || 180) : s.th;
           s.q.push(...hit);
           const el = now - s.at;
           if (el >= wMs && !s.tm) flushSub(s);
-          else if (!s.tm) s.tm = setTimeout(() => flushSub(s), Math.max(16, wMs - el));
+          else if (!s.tm) s.tm = setTimeout(() => flushSub(s), M.max(16, wMs - el));
         } else if (s.q.length) { s.q.push(...hit); flushSub(s); }
         else { s.at = now; T(() => s.h(hit)); }
       }
@@ -187,7 +192,7 @@
       T(() => sl.m.observe(tg, opts));
     }
     function reconcileMo() {
-      if (!subs.size) { for (let i = 0; i < 3; i++) dropSl(slots[i]); return; }
+      if (!subs.size) { for (const sl of slots) dropSl(sl); return; }
       const d = getDoc(), w = getWin(null, d), tg = getHtml(d) || d?.body || null, MO = gFn('MutationObserver', w);
       if (!tg || !MO) return;
       syncSl(slots[0], tg, calcMoOpts(false, false), MO);
@@ -203,10 +208,10 @@
       const pv = subs.get(id);
       if (pv) pv.tm = clrT(pv.tm);
       const mo = isO(o.observeOptions) ? o.observeOptions : { childList: true, subtree: true, attributes: !!o.attributes, attributeFilter: o.attributeFilter };
-      const wC = mo.childList !== false, wD = !!mo.characterData, wA = !!mo.attributes;
+      const wC = mo.childList !== false, wD = !!mo.characterData, wA = !!mo.attributes, wM = (wC ? 1 : 0) | (wA ? 2 : 0) | (wD ? 4 : 0);
       const aS = wA && isA(mo.attributeFilter) && mo.attributeFilter.length ? new Set(mo.attributeFilter) : null;
       const rO = mo.subtree === false, ra = rO && !wC && !wD && wA, wB = !!(ra && o.observeBody), f = isF(o.filter) ? o.filter : null;
-      const en = { id, h, p: o.priority === 'high' || o.priority === 'low' ? o.priority : 'normal', f, th: isN(o.throttleMs) && o.throttleMs > 0 ? o.throttleMs : 0, o: mo, wC, wD, wA, aS, rO, ra, wB, pa: !f && !rO && wC && wD && wA && !aS, q: [], tm: 0, at: 0 };
+      const en = { id, h, p: o.priority === 'high' || o.priority === 'low' ? o.priority : 'normal', f, th: isN(o.throttleMs) && o.throttleMs > 0 ? o.throttleMs : 0, o: mo, wC, wD, wA, wM, aS, rO, ra, wB, pa: !f && !rO && wC && wD && wA && !aS, q: [], tm: 0, at: 0 };
       subs.set(id, en);
       att(); reconcileMo();
       return () => { const c = subs.get(id); if (c !== en) return; c.tm = clrT(c.tm); c.q.length = 0; subs.delete(id); reconcileMo(); };
@@ -476,10 +481,10 @@
     function gDprCap(baseCap, envOrDoc) {
       const isD = isO(envOrDoc) && !!envOrDoc.documentElement, env = isD ? undefined : envOrDoc;
       const caps = gCaps(null, isD ? envOrDoc : null), b = isFin(+baseCap) && +baseCap > 0 ? +baseCap : caps.maxDpr || 1.5;
-      if (caps.mode === 'performance') return Math.min(b, 1);
+      if (caps.mode === 'performance') return M.min(b, 1);
       const hw = readHw(env);
       if (!isLowHw(hw)) return b;
-      return Math.min(b, hw.sw || posLe(hw.mem, 2) ? 1 : 1.25);
+      return M.min(b, hw.sw || posLe(hw.mem, 2) ? 1 : 1.25);
     }
     function resAutoPm(cfg, wO) {
       if (!isO(cfg)) return null;
@@ -500,7 +505,7 @@
       for (const k of [...tasks.keys()]) cTask(k);
       for (const s of subs.values()) { s.tm = clrT(s.tm); s.q.length = 0; }
       subs.clear();
-      for (let i = 0; i < 3; i++) dropSl(slots[i]);
+      for (const sl of slots) dropSl(sl);
       if (szRo) { T(() => szRo.disconnect()); szRo = null; }
       szCbs.clear(); szCache = new WeakMap();
       for (const r of vMap.values()) if (r.u) T(r.u);
@@ -528,7 +533,7 @@
       detectLowEndHardware: isLowEnd, resolveEffectivePerformanceMode: resEffPm, resolveAutoBootPerfMode: resAutoPm, getAdaptiveDprCap: gDprCap,
       normalizePerformanceMode: normPm, applyPerformanceMode: applyPm, getPerfCaps: gCaps,
       getDebugState: () => ({
-        subscriberCount: subs.size, observing: !!(slots[0].m || slots[1].m || slots[2].m), listenersAttached: lsOn,
+        subscriberCount: subs.size, observing: slots.some((sl) => !!sl.m), listenersAttached: lsOn,
         scrollBusy: scBusy, streamBusy: stBusy, busy: isBsy(), perfMode: gCaps().mode,
         pendingMeasures: mQ.size, pendingMutates: wQ.size, pendingTasks: tasks.size,
         sizeObservedCount: szCbs.size, visibilityObservedCount: vMap.size,

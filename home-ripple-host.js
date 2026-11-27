@@ -10,7 +10,7 @@
   const PP_OPEN = 'data-ag-pp-open';
   const SB = 'aside,[data-side-panel-body]', GCLS = 'ag-cs-brand-glow', GTID = 'onboarding-brand-glow', RCLS = 'ag-cs-ripple-canvas';
   const CP = { subtle: [0.6, 0.4, 0.45, 0.55, 32, 340, 72, 196, 0.62, 0.28, 0.72], medium: [0.85, 0.75, 0.75, 0.82, 22, 270, 54, 215, 0.85, 0.34, 0.88], full: [1, 1, 1, 1, 16, 220, 42, 230, 1, 0.4, 1] };
-  const isF = (v) => typeof v === 'function', ga = (e, k) => e?.getAttribute?.(k), T = (f) => { try { return f(); } catch {} }, gbr = (e) => e?.getBoundingClientRect?.();
+  const isF = (v) => typeof v === 'function', isFin = Number.isFinite, ga = (e, k) => e?.getAttribute?.(k), T = (f) => { try { return f(); } catch {} }, gbr = (e) => e?.getBoundingClientRect?.();
   const ra = (e, k) => { if (e?.hasAttribute?.(k)) e.removeAttribute(k); };
   const hasH = (e) => ga(e, HA) === 'true' || ga(e, DHA) === 'true';
   const docOf = () => (typeof document !== 'undefined' ? document : null), winOf = () => (typeof window !== 'undefined' ? window : null);
@@ -18,18 +18,27 @@
   const hasRaf = () => typeof requestAnimationFrame === 'function';
   const cAF = (id) => { if (id && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(id); return 0; };
   const rAF = (fn) => (hasRaf() ? requestAnimationFrame(fn) : 0);
-  const cT = (id) => { if (id) clearTimeout(id); return 0; };
+  const cT = (id) => { if (id) clearTimeout(id); return 0; }, ST = (fn, ms) => setTimeout(fn, ms);
   const N = () => {}, NF = () => false, isST = () => typeof setTimeout === 'function';
   const NOOP_F = { mode: 'none', dispose: N, invalidate: N, draw: N, needsDraw: NF, busy: NF };
   const NOOP_G = { mode: 'none', resize: N, draw: N, clear: N, dispose: N };
-  const pAmb = (r) => G.__agPrismRipple?.parseAmbientScale ? G.__agPrismRipple.parseAmbientScale(r) : r == null || r === '' ? 1 : cl(+r > 1 ? +r / 100 : Number.isFinite(+r) ? +r : 1, 0, 1);
+  const pAmb = (r) => G.__agPrismRipple?.parseAmbientScale ? G.__agPrismRipple.parseAmbientScale(r) : r == null || r === '' ? 1 : cl(+r > 1 ? +r / 100 : isFin(+r) ? +r : 1, 0, 1);
 
   function createHomeRippleController({ rippleCore: rc, isDestroyed: isD, isAllowed, isConvAllowed, getConvLevel, isConvRunning, isDarkTheme, motionReduced: mRed, getMinFrameGapMs, getAmbientIntensity, getAccentTone, setAttrIfChanged: sa, onPointerPressMascot }) {
     let rm = null, cHost = null, timer = 0, rRaf = 0, recT = 0, recRaf = 0, rzT = 0, mAt = 0, tideAt = 0, ro = null, unWin = null, syncMFn = null, strChk = null, refLv = null;
     const html = () => docOf()?.documentElement || null, rw = () => G.__agPrismRippleWorker || null, gH = (k) => ga(html(), k);
     const pMode = () => String(html()?.dataset?.agCsPerfMode || gH(PMA) || '').trim().toLowerCase();
     const setCS = (on, el) => { const h = html(); if (h) on ? sa(h, CA, '1') : ra(h, CA); if (cHost && cHost !== el) ra(cHost, HHA); cHost = on && el ? el : null; if (cHost) sa(cHost, HHA, '1'); };
-    const isCB = () => { const d = docOf(); return !!(mRed() || gH('data-ag-cs-motion') === 'off' || gH('data-ag-prism-wallpaper') === 'on' || hasH(html()) || hasH(d?.body) || d?.querySelector?.(`[${HA}="true"],[${DHA}="true"]`)); };
+    let hAt = -1, hV = false;
+    const HS = `[${HA}="true"],[${DHA}="true"]`;
+    const isCB = (f) => {
+      const d = docOf(), h = html();
+      if (mRed() || ga(h, 'data-ag-cs-motion') === 'off' || ga(h, 'data-ag-prism-wallpaper') === 'on' || hasH(h) || hasH(d?.body)) return true;
+      const n = nowOf();
+      if (!f && hAt >= 0 && M.abs(n - hAt) < 250) return hV;
+      hAt = n;
+      return (hV = !!(d?.querySelector?.(HS)));
+    };
     const convLv = () => { if (isF(isConvAllowed) && !isConvAllowed()) return 'off'; if (isF(getConvLevel)) { const v = getConvLevel(); return v === true || v === 'true' || v === 'on' ? 'medium' : v === 'subtle' || v === 'medium' || v === 'full' ? v : 'off'; } return isF(isConvAllowed) && isConvAllowed() ? 'medium' : 'off'; };
 
     function resolveTarget() {
@@ -38,7 +47,7 @@
       const home = d.querySelector('.agy-home');
       if (home) return isAllowed() ? { mode: 'home', root: home, level: 'off' } : null;
       const lv = convLv();
-      if (lv === 'off' || isCB() || !isF(d.querySelectorAll)) return null;
+      if (lv === 'off' || isCB(true) || !isF(d.querySelectorAll)) return null;
       const vs = Array.from(d.querySelectorAll('[data-testid="conversation-view"]')).filter((v) => !v.hidden && v.style?.display !== 'none' && v.style?.visibility !== 'hidden' && !v.closest?.('[data-testid="subagent-tab-conversation"]'));
       if (!vs.length) return null;
       const ok = (el) => !!(el && el !== d.documentElement && el !== d.body && ga(el, 'data-testid') !== 'conversation-view' && !hasH(el) && !el.closest?.(SB) && !el.querySelector?.(SB + ',[data-testid="sidebar-split"]>div:first-child') && vs.every((v) => !isF(el.contains) || el.contains(v)));
@@ -71,14 +80,16 @@
       t.fontFamily = cs.getPropertyValue('--font-mono').trim() || t.fontFamily;
       return t;
     }
+    const aB = { x: 0, y: 0, radius: 230, strength: 0, active: false };
     function buildPal(tok, as, now, aRaw, sp, mode, lv) {
-      const t = tok || defTok(isDarkTheme(), sp), amb = cl(Number.isFinite(aRaw) ? aRaw : 1, 0, 1);
-      const c = mode === 'conv', cp = c ? CP[lv] || CP.medium : null, rad = cp ? cp[7] : 230, fd = as?.f ?? 1, on = !!(as?.active && fd > 0.005 && !mRed() && amb > 0.001);
+      const t = tok || defTok(isDarkTheme(), sp), amb = cl(isFin(aRaw) ? aRaw : 1, 0, 1);
+      const c = mode === 'conv', cp = c ? CP[lv] || CP.medium : null, fd = as?.f ?? 1, on = !!(as?.active && fd > 0.005 && !mRed() && amb > 0.001);
+      aB.x = on ? as.x : 0; aB.y = on ? as.y : 0; aB.radius = cp ? cp[7] : 230; aB.strength = on ? amb * (cp ? cp[3] : 1) * fd : 0; aB.active = on;
       return {
         ink: t.ink, wave: t.wave, dark: t.dark, fontFamily: t.fontFamily, conv: c,
         alphaScale: cp ? (amb <= 0.001 ? 0 : cp[0]) : 1, nebulaLiftScale: cp ? cp[1] : 1, auraLiftScale: cp ? cp[2] : 1,
         prismStrength: amb * (sp === 'mono' ? 0.45 : 1) * (cp ? cp[8] : 1), ambientIntensity: amb, spectrum: sp, nebula: amb <= 0.001 ? false : undefined,
-        aura: on ? { x: as.x, y: as.y, radius: rad, strength: amb * (cp ? cp[3] : 1) * fd, active: true } : { x: 0, y: 0, radius: rad, strength: 0, active: false },
+        aura: aB,
         auraPhase: (now || 0) * (cp ? 0.00045 + 0.00015 * cp[3] : 0.0006),
       };
     }
@@ -91,14 +102,14 @@
     const stopM = (m) => { stopT(m); clrRec(); rzT = cT(rzT); ro?.disconnect(); };
 
     function parkRipple() {
-      setCS(false, null);
+      hAt = -1; setCS(false, null);
       if (!rm) return;
       stopM(rm); detR(rm);
       rm.host.remove(); rm.reclaim?.(); rm.sleeping = rm.parked = true;
     }
 
     function unmountRipple() {
-      setCS(false, null);
+      hAt = -1; setCS(false, null);
       if (!rm) return;
       const m = rm;
       stopM(m); unWin?.(); detR(m);
@@ -161,9 +172,10 @@
       const { cellWidth: CW, cellHeight: CH } = rc.RIPPLE;
       const dead = () => isD() || st.parked, hasDim = () => st.width > 0 && st.height > 0;
       const isPerf = (m = pMode()) => m === 'performance' || m === 'eco';
-      const isAB = () => gH(WB) === '1', isPp = () => gH(PP_OPEN) === '1' && (st.mode !== 'conv' || isPerf()), isRz = () => gH(RZA) === '1';
-      const isStr = () => st.mode === 'conv' && isF(isConvRunning) && !!isConvRunning();
-      const hP = () => !!(d.hidden || wb || isAB() || isPp() || (st.mode === 'conv' && isCB()));
+      const isC = () => st.mode === 'conv';
+      const isAB = () => gH(WB) === '1', isPp = () => gH(PP_OPEN) === '1' && (!isC() || isPerf()), isRz = () => gH(RZA) === '1';
+      const isStr = () => isC() && isF(isConvRunning) && !!isConvRunning(true);
+      const hP = () => !!(d.hidden || wb || isAB() || isPp() || (isC() && isCB()));
       const hasSz = (c) => !!(c && c.width > 0 && c.height > 0), isW = (i) => i?.mode === 'worker-webgl2';
       const hasBuf = (c, i) => !!(c && (isW(i) ? i.getBufferSize?.().width > 0 && i.getBufferSize?.().height > 0 : hasSz(c)));
       const hasFSz = () => hasBuf(cv, st.field), hasGSz = () => hasBuf(st.glowCanvas, st.glow);
@@ -172,7 +184,7 @@
       const isLost = (c, i) => !!(i?.isContextLost?.() || (i?.mode !== '2d' && !isW(i) && c?.getContext?.('webgl2')?.isContextLost?.()));
       const hasG = isF(rc.mountBrandHorizonGlow), rawDpr = () => winOf()?.devicePixelRatio || 1;
       const gridOf = (w = st.width, h = st.height) => [M.ceil(w / CW), M.ceil(h / CH)];
-      const rDpr = () => { const r = rawDpr(), m = pMode(); return rw()?.resolveRippleDpr?.(r, d) ?? M.min(r, isPerf(m) ? 1 : m === 'balanced' ? 1.5 : 2); };
+      const rDpr = () => { const r = rawDpr(), m = pMode(), b = rw()?.resolveRippleDpr?.(r, d) ?? M.min(r, isPerf(m) ? 1 : m === 'balanced' ? 1.5 : 2); return isC() ? M.min(b, 1.25) : b; };
       const gDpr = () => { const r = rawDpr(), m = pMode(); return rw()?.resolveGlowDpr?.(r, d, 0.7) ?? (isPerf(m) ? 0.55 : m === 'balanced' ? 0.7 : m === 'quality' ? M.min(r, 2) : 0.6); };
       const pGap = () => { const g = rw()?.getPerfMinGapMs?.(d); return g > 0 ? g * 0.88 : isPerf() ? 14.5 : 0; };
 
@@ -193,7 +205,7 @@
         if (isF0) { fLost = true; setV(cv, 0); } else { gLost = true; setV(st.glowCanvas, 0); }
         if (recN >= 3 || recT || recRaf) return;
         const run = () => { recT = recRaf = 0; recoverLost(); };
-        const tid = isST() ? setTimeout(run, 32) : 0;
+        const tid = isST() ? ST(run, 32) : 0;
         if (tid) recT = tid; else if (hasRaf()) recRaf = rAF(run); else run();
       }
 
@@ -206,7 +218,7 @@
         let g = hasG && wm?.mountManagedGlow ? wm.mountManagedGlow({
           getCanvas: () => st.glowCanvas, swapCanvas: swG, rippleCore: rc, doc: d, prefer2D: !!p2d, allowWorker: !wFail, onContextLost: lostG,
           onFallbackDone: () => { wFail = true; if (!dead() && st.glowCanvas) { T(() => st.glow?.dispose?.()); mountGlow(0, 1); resyncG(); } },
-          onUpgradeReady: () => { if (!dead() && !wFail && st.mode === 'home' && st.glow?.mode === 'webgl2') { mountGlow(0, 1); resyncG(); } },
+          onUpgradeReady: () => { if (!dead() && !wFail && !isC() && st.glow?.mode === 'webgl2') { mountGlow(0, 1); resyncG(); } },
         }) : null;
         if (!g) {
           const mk = (u) => (hasG ? rc.mountBrandHorizonGlow(st.glowCanvas, { prefer2D: !!u, width: 0, height: 0, onContextLost: lostG }) : NOOP_G);
@@ -252,7 +264,7 @@
           st.field = mountField(...gridOf(), p2d, 1);
           tok = sampleTok(cv); cRect = null; updateCalm();
         }
-        if (ng && st.glowCanvas && st.mode === 'home') {
+        if (ng && st.glowCanvas && !isC()) {
           mountGlow(p2d, 1);
           if (hasDim() && st.glow?.mode !== 'none') st.glow?.resize?.(st.width, st.height, gDpr());
         }
@@ -294,7 +306,7 @@
       function updateCalm() {
         const cur = st.root;
         if (!cur || !st.field?.setCalmZones) return;
-        const gr = st.mode === 'home' ? cur.querySelector('[data-testid="home-greeting"]') : null;
+        const gr = !isC() ? cur.querySelector('[data-testid="home-greeting"]') : null;
         if (!gr) return st.field.setCalmZones([]);
         const c = gbr(cv); cRect = c; cRectAt = nowOf();
         const g = gbr(gr);
@@ -342,7 +354,7 @@
         timer = cT(timer);
         if (dead()) return;
         if (d.hidden) return reclaim();
-        if (st.mode === 'conv' && isCB()) return parkRipple();
+        if (isC() && isCB()) return parkRipple();
         if (shrunk) layout();
         if (noRen()) return enterIdleSleep();
         if (hP() || isStr()) { if ((!drawn || f1) && hasFSz()) drawFrame(nowOf()); return enterIdleSleep(); }
@@ -358,16 +370,16 @@
         st.rafId = 0; wanted = false;
         if (dead() || (rm !== st && rm !== null)) return;
         if (d.hidden) return reclaim();
-        if (st.mode === 'conv' && isCB()) return parkRipple();
+        if (isC() && isCB()) return parkRipple();
         const str = isStr();
         if (str) as.active = false;
         const still = mRed() || str, vsDt = lastTs > 0 && now > lastTs ? now - lastTs : now - lastDraw;
         lastTs = now;
         const rawGap = M.max(pGap(), +(getMinFrameGapMs?.() || 0) || 0);
-        const minGap = (st.mode === 'home' || st.convLevel === 'full') && (st.waves?.active?.() || (as.active && lsa > 0 && now - lsa < 650) || (tideAt > 0 && now - tideAt < 480)) ? rawGap : M.max(33, rawGap);
+        const minGap = (!isC() || st.convLevel === 'full') && (st.waves?.active?.() || (as.active && lsa > 0 && now - lsa < 650) || (tideAt > 0 && now - tideAt < 480)) ? (isC() ? M.max(16, rawGap) : rawGap) : M.max(33, rawGap);
         if (!still && drawn && !f1 && minGap > 0 && lastDraw > 0 && now - lastDraw < minGap && !hP()) {
           const rem = minGap - (now - lastDraw);
-          if (isST() && rem > M.max(8, vsDt + 2)) { timer = cT(timer); timer = setTimeout(() => { timer = 0; wake(); }, M.max(4, M.ceil(rem))); }
+          if (isST() && rem > M.max(8, vsDt + 2)) { timer = cT(timer); timer = ST(() => { timer = 0; wake(); }, M.max(4, M.ceil(rem))); }
           else wake();
           return;
         }
@@ -375,7 +387,7 @@
         const dt = still ? 0 : wSlp ? M.min(16, M.max(0, now - prev)) : cl(now - prev, 0, 50);
         aT = aT === null ? now : aT + dt; wSlp = 0;
         st.waves.advance(still ? 0 : cl(dt / 1000, 0, 0.05), 12); prev = now;
-        const te = st.mode === 'home' && tideAt > 0 ? now - tideAt : -1, inT = !still && te >= 0 && te < 480;
+        const te = !isC() && tideAt > 0 ? now - tideAt : -1, inT = !still && te >= 0 && te < 480;
         if (tideAt > 0 && !inT) { tideAt = 0; st.aura.reach = 0.47; st.aura.strength = 1.0; f1 = true; }
         else if (inT) { const e = 1 - M.pow(1 - cl(te / 480, 0, 1), 2.2); st.aura.reach = +(0.2 + 0.27 * e).toFixed(4); st.aura.strength = +(0.32 + 0.68 * e).toFixed(4); }
 
@@ -388,7 +400,7 @@
           else { const u = age <= 750 ? 1 : (IDLE_MS - age) / 450; as.f = u * u * (3 - 2 * u) * (aWk && now - aWk < 180 ? cl((now - aWk) / 180, 0.12, 1) : 1); }
         }
         const aRec = !str && amb > 0.001 && as.active && lsa > 0 && now - lsa < IDLE_MS;
-        const inI = st.mode === 'home' && !still && amb > 0.001 && now - mAt < INTRO_MS;
+        const inI = !isC() && !still && amb > 0.001 && now - mAt < INTRO_MS;
         const busy = !str && !!st.field?.busy?.();
         const need = f1 || !drawn || aSet || (!!st.glowCanvas && amb <= 0.001 && !gZero) || inT || inI || aRec || (!str && !!st.field?.needsDraw(aT, still));
 
@@ -409,7 +421,7 @@
       refLv = () => { f1 = true; invAll(); d.hidden ? reclaim() : wake(); };
       st.reattach = () => {
         timer = cT(timer); clrRec(); rzT = cT(rzT); rzPend = false; fLost = gLost = false; recN = 0; prev = nowOf(); wSlp = 1; aWk = 0; wanted = false; f1 = true; as.active = false; lx = ly = null; carry = 0;
-        const runRe = () => { if (dead()) return; const pw0 = st.width, ph0 = st.height; layout(); if (st.width !== pw0 || st.height !== ph0 || st.mode === 'conv') updateCalm(); invAll(); wake(true); };
+        const runRe = () => { if (dead()) return; const pw0 = st.width, ph0 = st.height; layout(); if (st.width !== pw0 || st.height !== ph0 || isC()) updateCalm(); invAll(); wake(true); };
         if (!shrunk && hasDim() && !d.hidden && hasRaf()) { st.rafId = cAF(st.rafId); st.rafId = rAF(() => { st.rafId = 0; runRe(); }); } else runRe();
       };
 
@@ -418,7 +430,7 @@
         if (mRed()) return;
         if (!isAB()) wb = false;
         if (hP() || isStr()) return;
-        const c = st.mode === 'conv', cp = c ? CP[st.convLevel] || CP.medium : null, nr = nowOf();
+        const c = isC(), cp = c ? CP[st.convLevel] || CP.medium : null, nr = nowOf();
         if (c) { if ((lcma > 0 && nr - lcma < cp[4]) || isIgnC(ev.target, false)) return; lcma = nr; }
         if (!cRect || nr - cRectAt > 1500) { cRect = gbr(cv); cRectAt = nr; }
         const x = ev.clientX - cRect.left, y = ev.clientY - cRect.top;
@@ -438,7 +450,7 @@
 
       st.onPress = (ev) => {
         if (ev.button !== 0 || mRed() || ambScale() <= 0.001 || hP() || isStr()) return;
-        const c = st.mode === 'conv';
+        const c = isC();
         if (c && isIgnC(ev.target, true)) return;
         const cp = c ? CP[st.convLevel] || CP.medium : null, r = gbr(cv);
         cRect = r; cRectAt = nowOf();
@@ -450,7 +462,7 @@
 
       const onVis = () => {
         if (d.hidden) return reclaim();
-        if (st.mode === 'conv' || convLv() !== 'off') { if (isCB()) { if (!st.parked) parkRipple(); return; } if (st.parked) return syncRipple(); }
+        if (isC() || convLv() !== 'off') { if (isCB(true)) { if (!st.parked) parkRipple(); return; } if (st.parked) return syncRipple(); }
         if (st.parked) return;
         const s = shrunk, pChg = pMode() !== lastPM;
         if (s || pChg || !hasFSz()) layout();
@@ -479,7 +491,7 @@
           rzT = 0;
           if (dead()) return;
           if (d.hidden) { rzPend = false; return reclaim(); }
-          if (isRz()) { rzT = setTimeout(flushLay, RZ_MS); return; }
+          if (isRz()) { rzT = ST(flushLay, RZ_MS); return; }
           if (!rzPend) return;
           rzPend = false; applyLay(0);
         };
@@ -488,7 +500,7 @@
           if (d.hidden) { rzT = cT(rzT); rzPend = false; return reclaim(); }
           const now = nowOf(), live = !shrunk && hasDim() && hasFSz() && !fLost && !isLost(cv, st.field);
           if (live && (isRz() || rzPend || (lastLayAt >= 0 && now > lastLayAt && now - lastLayAt <= RZ_WIN))) {
-            rRaf = cAF(rRaf); rzPend = true; rzT = cT(rzT); rzT = setTimeout(flushLay, RZ_MS); return;
+            rRaf = cAF(rRaf); rzPend = true; rzT = cT(rzT); rzT = ST(flushLay, RZ_MS); return;
           }
           !hasRaf() ? doLay() : !rRaf && (rRaf = rAF(doLay));
         });

@@ -2731,7 +2731,7 @@ trackedWaitPanels.delete(panel);
  try { for (let i = 0; i < ps.length; i++) if (isConn(ps[i])) processSingleTrigger(ps[i], false, 20000 + i); } finally { syncHydrateBudget = 99; }
  }
  if (ioPT.size) {
- const ts = Array.from(ioPT).filter(isConn); ioPT.clear();
+ const ts = Array.from(ioPT).filter((c) => isConn(c) && !isHiddenByAncestor(null, c)); ioPT.clear();
  if (ts.length && translateToolSummaries) {
  const tps = new Set(), cs = [];
  for (let i = 0; i < ts.length; i++) {
@@ -2766,12 +2766,14 @@ trackedWaitPanels.delete(panel);
  try { offIo.observe(el); } catch {}
  }
  };
- function readViewportDims() { const r = docRoot(); return { vh: W.innerHeight || (r && r.clientHeight) || 0, vw: W.innerWidth || (r && r.clientWidth) || 1440 }; }
- function probeViewportBand(el, vp) {
+ function readViewportDims() { const r = docRoot(); return { vh: W.innerHeight || (r && r.clientHeight) || 0, vw: W.innerWidth || (r && r.clientWidth) || 1440, rem: 32 }; }
+ function probeViewportBand(el, vp, deferIo = false) {
  if (getDomBus()?.isSkipped?.(el)) return 0;
  const iv = el ? ioVis.get(el) : undefined;
  if (iv !== undefined) return iv ? 2 : 0;
+ if (deferIo && hasVisIo()) return 0;
  if (!el || typeof el.getBoundingClientRect !== 'function') return 2;
+ if (vp && typeof vp.rem === 'number') { if (vp.rem <= 0) return 0; vp.rem -= 1; }
  try {
  const rect = el.getBoundingClientRect();
  if (rect.width === 0 && rect.height === 0) return typeof el[K_CV] === 'function' ? 0 : 2;
@@ -3049,7 +3051,7 @@ const scope = isConn(cachedConvRoot) && cachedConvRoot.querySelectorAll ? cached
 const thoughtPanelSet = new Set(), tBtns = queryTriggers();
 for (let i = 0; i < tBtns.length; i++) { const tp = nextSib(tBtns[i]); if (tp) thoughtPanelSet.add(tp); }
 const containers = [], seenContainer = new Set(), rawCands = [];
-const stage = (c) => { if (c && !seenContainer.has(c) && isConn(c) && !isHiddenByAncestor(null, c)) { seenContainer.add(c); rawCands.push(c); } };
+const stage = (c) => { if (c && !seenContainer.has(c) && isConn(c)) { seenContainer.add(c); rawCands.push(c); } };
 const groupTrigs = scope.querySelectorAll ? scope.querySelectorAll(SEL_TOOL_TRIGGERS) : [];
 const findBody = W.__agPrismToolStepVerbs?.findToolCollapsibleBody;
 for (let i = 0; i < groupTrigs.length; i++) {
@@ -3060,20 +3062,26 @@ const bodyDiv = findBody ? findBody(trig) : nextSib(trig);
 if (bodyDiv && (findBody || String(bodyDiv.tagName || '').toUpperCase() === 'DIV')) stage(bodyDiv);
 }
 const visSet = new Set(); let sawOffTool = false;
-for (let i = 0; i < rawCands.length; i++) { if (probeViewportBand(rawCands[i], vp) > 0) { visSet.add(rawCands[i]); containers.push(rawCands[i]); } else { sawOffTool = true; watchOff(rawCands[i], 't'); } }
+for (let i = 0; i < rawCands.length; i++) {
+const c = rawCands[i];
+if (probeViewportBand(c, vp, true) === 0) { sawOffTool = true; watchOff(c, 't'); continue; }
+if (isHiddenByAncestor(null, c)) continue;
+visSet.add(c); containers.push(c);
+}
 const rowEls = scope.querySelectorAll ? scope.querySelectorAll(SEL_TOOL_ROWS) : [];
 if (rowEls && rowEls.length) {
 const orphanRaw = [];
 for (let i = 0; i < rowEls.length; i++) {
 const r = rowEls[i];
 let insideKnown = false;
-for (let cur = parEl(r); cur; cur = parEl(cur)) if (visSet.has(cur)) { insideKnown = true; break; }
-if (!insideKnown && !isHiddenByAncestor(null, r)) orphanRaw.push(r);
+for (let cur = parEl(r); cur; cur = parEl(cur)) if (seenContainer.has(cur)) { insideKnown = true; break; }
+if (!insideKnown) orphanRaw.push(r);
 }
 const byParent = new Map();
 for (let i = 0; i < orphanRaw.length; i++) {
 const r = orphanRaw[i];
-if (probeViewportBand(r, vp) === 0) { sawOffTool = true; watchOff(r, 't'); continue; }
+if (probeViewportBand(r, vp, true) === 0) { sawOffTool = true; watchOff(r, 't'); continue; }
+if (isHiddenByAncestor(null, r)) continue;
 const p = parEl(r) || r;
 if (!byParent.has(p)) byParent.set(p, []);
 byParent.get(p).push(r);
@@ -3563,10 +3571,11 @@ const { containers, thoughtPanelSet } = preRead || collectToolSummaryTargets(rea
  const visitedNodes = new Set();
  const candidates = [];
  const bcGroups = new Map();
+ const vp = readViewportDims();
  let sawOffscreen = false;
  for (let i = 0; i < nodes.length && candidates.length < 40; i++) {
  const c = nodes[i];
- if (!c || !isConn(c) || isHiddenByAncestor(null, c)) continue;
+ if (!c || !isConn(c)) continue;
  if (isTitleContainerExcluded(c, sidebarOn)) continue;
  const tid = ga(c, 'data-testid') || '';
  if (tid === 'breadcrumb-segment') {
@@ -3579,7 +3588,8 @@ const { containers, thoughtPanelSet } = preRead || collectToolSummaryTargets(rea
  segs.push(c);
  continue;
  }
- if (probeViewportBand(c) === 0) { sawOffscreen = true; watchOff(c, 'c'); continue; }
+ if (probeViewportBand(c, vp, true) === 0) { sawOffscreen = true; watchOff(c, 'c'); continue; }
+ if (isHiddenByAncestor(null, c)) continue;
  const explicitTitleEl = findExplicitPrimaryTitleEl(c, c, sidebarOn);
  collectTitleTextNodes(explicitTitleEl || c, c, candidates, visitedNodes, sidebarOn, activeLang, true);
  }
@@ -3587,7 +3597,8 @@ const { containers, thoughtPanelSet } = preRead || collectToolSummaryTargets(rea
  if (candidates.length >= 40) break;
  if (!segs || segs.length < 2) continue;
  const lastSeg = segs[segs.length - 1];
- if (probeViewportBand(lastSeg) === 0) { sawOffscreen = true; watchOff(lastSeg, 'c'); continue; }
+ if (probeViewportBand(lastSeg, vp, true) === 0) { sawOffscreen = true; watchOff(lastSeg, 'c'); continue; }
+ if (isHiddenByAncestor(null, lastSeg)) continue;
  collectTitleTextNodes(lastSeg, lastSeg, candidates, visitedNodes, sidebarOn, activeLang, true);
  }
  hasOffscreenTitles = sawOffscreen;
@@ -3697,6 +3708,7 @@ const { containers, thoughtPanelSet } = preRead || collectToolSummaryTargets(rea
  const isLatest = i === lastIdx, allowPreload = triggerTiming === 'preload' && isLatest, expanded = ga(btn, A_EXP) === 'true';
  if (!allowPreload && !expanded) continue;
  const panel = nextSib(btn);
+ let band = 0;
  if (panel) {
  const em = panelMeta.get(panel), streamingNow = isTriggerStreaming(btn);
  if (streamingNow && expanded && isLatest && em && em.s && ga(panel, A_PND) === '1') { trackStreamingTrigger(btn, panel); activePanelSet.add(panel); continue; }
@@ -3704,14 +3716,19 @@ const { containers, thoughtPanelSet } = preRead || collectToolSummaryTargets(rea
  if (expanded && ga(panel, A_RDY) === '1' && em.ds && em.ds === ga(panel, A_SIG)) continue;
  if (!expanded) { const inf = rawCacheMap.get(panel); if (inf && inf.s === em.rs && em.ps && em.ps === sigFromBody(inf.k, currentMode)) continue; }
  }
- if (!isLatest && isHiddenByAncestor(btn, panel)) continue;
+ if (!isLatest) {
+ band = expanded ? probeViewportBand(panel || btn, vp, true) : 0;
+ if (band === 0) { sawOffscreenLazy = true; watchOff(panel || btn, 'p', btn); continue; }
+ if (isHiddenByAncestor(btn, panel)) continue;
+ }
  if (em && !streamingNow && em.rs === quickPanelStamp(panel) && isHiddenByAncestor(btn, panel)) {
  const inf = rawCacheMap.get(panel);
  if (inf && inf.s === em.rs && em.ps && em.ps === sigFromBody(inf.k, currentMode)) { activePanelSet.add(panel); continue; }
  }
+ } else if (!isLatest) {
+ band = expanded ? probeViewportBand(btn, vp, true) : 0;
+ if (band === 0) { sawOffscreenLazy = true; watchOff(btn, 'p', btn); continue; }
  }
- const band = expanded && !isLatest ? probeViewportBand(panel || btn, vp) : 0;
- if (!isLatest && band === 0) { sawOffscreenLazy = true; watchOff(panel || btn, 'p', btn); continue; }
  if (panel) activePanelSet.add(panel);
  const tier = isLatest && expanded ? 25 : band === 2 ? 20 : isLatest ? 12 : 10;
  candidates.push({ b: btn, a: allowPreload, p: tier * 1000 + i });
