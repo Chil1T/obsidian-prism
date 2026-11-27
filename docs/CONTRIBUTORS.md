@@ -34,6 +34,7 @@
 | **[@alanheverton](https://github.com/alanheverton)** | [PR #86](https://github.com/RMvdesi/obsidian-prism/pull/86) | 将 8 个测试文件中的 `URL.pathname` 替换为 `fileURLToPath`，修复含空格或非 ASCII 路径仓库的测试执行。<br>*Replaced `URL.pathname` with `fileURLToPath` across 8 test files to support repositories in spaced or non-ASCII paths.* |
 | **[@Wlaeg](https://github.com/Wlaeg)** | [PR #126](https://github.com/RMvdesi/obsidian-prism/pull/126) · [#123](https://github.com/RMvdesi/obsidian-prism/issues/123) | 推动低配硬件自动适配方案落地，并贡献 2D Canvas 渐变对象缓存及离屏性能优化思路。<br>*Championed automatic low-end hardware adaptation and contributed 2D Canvas gradient object caching and offscreen performance optimizations.* |
 | **[@luck-caicai](https://github.com/luck-caicai)** | [PR #133](https://github.com/RMvdesi/obsidian-prism/pull/133) | 扩展 `host-i18n` 在 `on`/`auto` 模式下对侧边栏外框（Projects/Conversations/Pinned/Coordinator）的汉化覆盖，适配 Base UI 浮层门户与微任务同步翻译以消除首帧英文闪屏，并新增侧栏会话行点击局部重扫。<br>*Extended `host-i18n` sidebar chrome localization across `on`/`auto` modes, added Base UI portal support and microtask synchronous translation to eliminate first-frame menu English flash, and added O(1)-bailed conversation-row click rescanning.* |
+| **[@World-false](https://github.com/World-false)** | [PR #138](https://github.com/RMvdesi/obsidian-prism/pull/138) | 联合推动全链路编译器、Daemon 稳定性、25 处版本锚点对齐与渲染热路径优化，并移除整轮对话与 Markdown 代码块残留的 `content-visibility: auto` 以保护代码块吸顶与长对话滚动稳定。<br>*Co-contributed compiler, daemon stability, 25-anchor version alignment, and render hot-path optimizations, and removed residual whole-turn and Markdown `<pre>` `content-visibility: auto` to protect sticky code headers and long-chat scroll stability.* |
 
 ---
 
@@ -41,7 +42,8 @@
 
 > 感谢以下伙伴提交的高质量性能剖析、根因线索、截图复现与体验建议：
 
-- **[@Antonioxv](https://github.com/Antonioxv)** — [PR #135](https://github.com/RMvdesi/obsidian-prism/pull/135)、[#136](https://github.com/RMvdesi/obsidian-prism/issues/136)：协助识别平滑光标在零宽字符（ZWSP）与非空文本/内联装饰器编辑器中的两项关键回退边界条件，并提出 `agy-powertools` 浮窗菜单尺寸豁免及语言汉化/遥测自动让位（auto-yield）兼容性方案。
+- **[@KitaHare](https://github.com/KitaHare)** — [#142](https://github.com/RMvdesi/obsidian-prism/issues/142)、[#143](https://github.com/RMvdesi/obsidian-prism/issues/143)：精准反馈纯 JS 热重载时复用的 `__agPrismCssMgr` 样式表丢失与 Home Studio 滚动时棱镜边缘框错位问题，推动热重载管理器守卫与内外滚屏壳体解耦修复落地。
+- **[@Antonioxv](https://github.com/Antonioxv)** — [PR #135](https://github.com/RMvdesi/obsidian-prism/pull/135)、[PR #140](https://github.com/RMvdesi/obsidian-prism/pull/140)、[#136](https://github.com/RMvdesi/obsidian-prism/issues/136)：协助识别平滑光标在零宽字符（ZWSP）、非空文本及 Quote/内联装饰器芯片处的边界回退条件（推动 4 项 `smooth-caret` 守卫落地），并提出 `agy-powertools` 与 `agy-stats-popup` 浮窗及其后代零 `:has()` 豁免及语言汉化/遥测自动让位（auto-yield）兼容性方案。
 - **[@xiaojiang233](https://github.com/xiaojiang233)** — [#112](https://github.com/RMvdesi/obsidian-prism/issues/112)：提交清晰的问题复现与交互反馈，协助完善客户端兼容性与使用体验。
 - **[@yaoguaiLYG](https://github.com/yaoguaiLYG)** — [#109](https://github.com/RMvdesi/obsidian-prism/issues/109)：反馈 DeepSeek 小鲸鱼像素桌宠在休息/睡觉状态下持续眨眼的问题，推动 `POSE_RECIPES.loaf` 补齐小鲸鱼闭眼分支。
 - **[@LnGXi](https://github.com/LnGXi)** — [#107](https://github.com/RMvdesi/obsidian-prism/issues/107)：反馈 Antigravity v2.35.2 暗色模式输入框外围直角白边/蓝框与高负载卡顿、冷启动偏慢现象，推动暗色输入框清框及全链路渲染与冷启动专项优化。
