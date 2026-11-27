@@ -5,13 +5,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-try {
-  if (typeof module.enableCompileCache === 'function') {
-    const compileCacheDir = path.join(os.homedir(), '.gemini', 'antigravity', 'sidecar_data', 'obsidian-prism', 'compile-cache');
-    module.enableCompileCache(compileCacheDir);
-  }
-} catch {}
-
+import {
+  resolveDefaultCompileCacheDir,
+  shouldEnableDaemonCompileCache,
+} from '../../src/daemon/compile-cache-guard.mjs';
 import {
   sanitizeSecretText,
   sanitizeLogLine,
@@ -64,6 +61,24 @@ import {
 } from '../../src/daemon/index.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
+
+// 仅在长期驻留守护进程主入口启用 compile-cache，避免短命 CLI 与单测进程不断制造碎片文件
+try {
+  if (
+    typeof module.enableCompileCache === 'function' &&
+    shouldEnableDaemonCompileCache({
+      argv: process.argv,
+      execArgv: process.execArgv,
+      env: process.env,
+      isMain: isMainEntryBase(process.argv[1], __filename),
+    })
+  ) {
+    const compileCacheDir =
+      resolveDefaultCompileCacheDir(os.homedir()) ||
+      path.join(os.homedir(), '.gemini', 'antigravity', 'sidecar_data', 'obsidian-prism', 'compile-cache');
+    module.enableCompileCache(compileCacheDir);
+  }
+} catch {}
 
 /**
  * 保留默认参数为本入口文件路径，兼容历史 CLI 与单测调用。

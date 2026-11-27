@@ -647,3 +647,96 @@ test('R2 Task 6: C#/Swift Watchers lazy-load fallback scripts, wait 1.5s when sp
   assert.ok(swiftSrc.includes('.milliseconds(150)'), 'main.swift must provide 1.5s yield window when spawning native daemon');
   assert.ok(swiftSrc.includes('if dirSource == nil && fallbackScriptsLoaded'), 'main.swift must not run unconditional 2s directory scan when DispatchSource is active');
 });
+
+test('Wave P3-D: compile-cache governance gates short-lived CLI/tests, prunes oldest files by mtime safely, blocks symlink escape & cancels on stop()', async () => {
+  const {
+    shouldEnableDaemonCompileCache,
+    validateCompileCacheDir,
+    cleanupCompileCacheAsync,
+  } = await import('../src/daemon/compile-cache-guard.mjs');
+
+  // 1) Process gate: only long-lived daemon main process enables compile-cache
+  assert.equal(shouldEnableDaemonCompileCache({ argv: ['node', 'sidecars/daemon/main.mjs'], execArgv: [], env: {}, isMain: true }), true);
+  assert.equal(shouldEnableDaemonCompileCache({ argv: ['node', 'sidecars/daemon/main.mjs', '--once'], execArgv: [], env: {}, isMain: true }), false);
+  assert.equal(shouldEnableDaemonCompileCache({ argv: ['node', 'sidecars/daemon/main.mjs', '--help'], execArgv: [], env: {}, isMain: true }), false);
+  assert.equal(shouldEnableDaemonCompileCache({ argv: ['node', 'sidecars/daemon/main.mjs'], execArgv: [], env: {}, isMain: false }), false);
+  assert.equal(shouldEnableDaemonCompileCache({ argv: ['node', 'sidecars/daemon/main.mjs'], execArgv: ['--test'], env: {}, isMain: true }), false);
+  assert.equal(shouldEnableDaemonCompileCache({ argv: ['node', 'sidecars/daemon/main.mjs'], execArgv: [], env: { NODE_TEST_CONTEXT: 'child' }, isMain: true }), false);
+  assert.equal(shouldEnableDaemonCompileCache({ argv: ['node', 'sidecars/daemon/main.mjs'], execArgv: [], env: { CI: 'true' }, isMain: true }), false);
+  assert.equal(shouldEnableDaemonCompileCache({ argv: ['node', 'sidecars/daemon/main.mjs'], execArgv: [], env: { AG_PRISM_DISABLE_COMPILE_CACHE: '1' }, isMain: true }), false);
+
+  // 2) Path boundary & symlink guard + bounded mtime eviction
+  const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-cc-guard-'));
+  try {
+    const allowedParent = path.join(tmpBase, 'sidecar_data', 'obsidian-prism');
+    const cacheDir = path.join(allowedParent, 'compile-cache');
+    const nestedDir = path.join(cacheDir, 'v24-old');
+    const externalDir = path.join(tmpBase, 'external-user-config');
+    const externalFile = path.join(externalDir, 'keep-me.json');
+    fs.mkdirSync(nestedDir, { recursive: true });
+    fs.mkdirSync(externalDir, { recursive: true });
+    fs.writeFileSync(externalFile, '{"secret":"must-stay"}', 'utf8');
+
+    // Reject non-compile-cache dir name & outside-base path
+    assert.equal((await validateCompileCacheDir(externalDir, { allowedBaseDir: allowedParent })).ok, false);
+    assert.equal((await validateCompileCacheDir(path.join(tmpBase, 'other', 'compile-cache'), { allowedBaseDir: allowedParent })).ok, false);
+    assert.equal((await validateCompileCacheDir(cacheDir, { allowedBaseDir: allowedParent })).ok, true);
+
+    // Seed 10 cache files with staggered mtimes (0 = oldest, 9 = newest)
+    const now = Date.now();
+    for (let i = 0; i < 10; i++) {
+      const target = i < 4 ? path.join(nestedDir, `f${i}.cache`) : path.join(cacheDir, `f${i}.cache`);
+      fs.writeFileSync(target, 'x'.repeat(2048), 'utf8');
+      const mtime = new Date(now - (10 - i) * 60_000);
+      fs.utimesSync(target, mtime, mtime);
+    }
+
+    // Best-effort symlink escape trap inside compile-cache (skipped gracefully if OS denies symlink privilege)
+    const linkFile = path.join(cacheDir, 'escape-link.cache');
+    let symlinkCreated = false;
+    try {
+      fs.symlinkSync(externalFile, linkFile);
+      symlinkCreated = true;
+    } catch {}
+
+    const res = await cleanupCompileCacheAsync(cacheDir, {
+      allowedBaseDir: allowedParent,
+      maxFiles: 3,
+      maxBytes: 1024 * 1024,
+      minAgeMs: 0,
+      batchSize: 4,
+      batchYieldMs: 0,
+    });
+    assert.equal(res.ok, true);
+    assert.equal(res.reason, 'pruned');
+    assert.equal(res.deletedFiles, 7, 'Must evict oldest 7 files to bring 10 down to maxFiles=3');
+    assert.equal(res.scannedFiles - res.deletedFiles, 3);
+    assert.equal(fs.existsSync(nestedDir), false, 'Emptied old cache subdir must be removed');
+    assert.equal(fs.existsSync(path.join(cacheDir, 'f9.cache')), true, 'Newest cache files must be preserved');
+    assert.equal(fs.existsSync(path.join(cacheDir, 'f8.cache')), true);
+    assert.equal(fs.existsSync(path.join(cacheDir, 'f7.cache')), true);
+    assert.equal(fs.readFileSync(externalFile, 'utf8'), '{"secret":"must-stay"}', 'External file must NEVER be touched');
+    if (symlinkCreated) {
+      assert.equal(fs.lstatSync(linkFile).isSymbolicLink(), true, 'Symlink entry inside compile-cache must be skipped without unlinking external target');
+    }
+
+    // 3) DaemonLoop schedules background maintenance and cancels cleanly on stop()
+    const daemon = new PrismDaemon({
+      rootDir: ROOT,
+      bundleCachePath: false,
+      silent: true,
+      enableAutoUpdateTimer: false,
+      enableStorageGuardTimer: false,
+      enableCompileCacheGuard: true,
+      compileCacheDir: cacheDir,
+      compileCacheCleanupDelayMs: 60_000,
+    });
+    const fakeMaint = { cancelled: false, cancel() { this.cancelled = true; } };
+    daemon.daemonLoop._compileCacheMaint = fakeMaint;
+    await daemon.stop(false, { skipAutoArchive: true });
+    assert.equal(fakeMaint.cancelled, true, 'DaemonLoop.stop() must invoke cancel() on compile-cache maintenance handle');
+    assert.equal(daemon.daemonLoop._compileCacheMaint, null, 'DaemonLoop.stop() must clear _compileCacheMaint handle');
+  } finally {
+    fs.rmSync(tmpBase, { recursive: true, force: true });
+  }
+});

@@ -12,11 +12,11 @@ const qS=(e,s)=>e?.querySelector?.(s),qA=(e,s)=>e?.querySelectorAll?.(s);
 const emitB=(w,p)=>{try{w?.__agPulseExternalBridge?.(p);}catch{}};
 const TI=s=>`[data-testid="${s}"]`,TIs=s=>s.split('|').map(TI).join(','),cT=t=>(t!==null&&clearTimeout(t),null),stTm=(fn,ms)=>{const t=setTimeout(fn,ms);t?.unref?.();return t;},on=(e,t,f,c)=>(e?.addEventListener?.(t,f,c),()=>e?.removeEventListener?.(t,f,c)),setIf=(e,k,v)=>{if(gA(e,k)!==v)sA(e,k,v);},qAll=(d,s)=>{let r=isFn(d?.querySelectorAll)?Array.from(d.querySelectorAll(s)):[];if(!r.length&&isFn(d?.querySelector)){const o=d.querySelector(s);if(o)r=[o];}return r;},mkTier=(anc,host)=>({anc,host,ro:null,raf:0,curFtTier:0,curBarTier:0,pendW:0,hasPendW:false,lastFtTv:'',lastBarTv:'',lastWide:false});
 
-const BAR_ID='ag-pulse-status-bar',PRISM_BAR_ID='ag-prism-pulse-bar',PRISM_BAR_ATTR='data-ag-prism-pulse-bar',FALLBACK_ATTR='data-ag-prism-fallback',HID_ATTR='data-ag-prism-hidden',METRICS_BINDING='__agPrismMetricsCall';
-const WAIT_MS=1500,GRACE_MS=3500,SW_DEBOUNCE_MS=30,HOVER_OPEN_MS=180,HOVER_CLOSE_MS=220,LRU_MAX=32,GUID_RE=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,URL_CID_RE=/\/c\/([0-9a-f-]{36})/i;
-const TIER_ATTR='data-t',TIER_STYLE_ATTR='data-pt',TIER_VALS=['0','1','1 2','1 2 3','1 2 3 4','1 2 3 4 5'],FT_VALS=['0','1','1 2'];
+const BI='ag-pulse-status-bar',PI='ag-prism-pulse-bar',PA='data-ag-prism-pulse-bar',FA='data-ag-prism-fallback',HA='data-ag-prism-hidden',MB='__agPrismMetricsCall';
+const WM=1500,GM=3500,SWM=30,HOM=180,HCM=220,LMX=32,GRE=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,URE=/\/c\/([0-9a-f-]{36})/i;
+const TA='data-t',TSA='data-pt',TVS=['0','1','1 2','1 2 3','1 2 3 4','1 2 3 4 5'],FVS=['0','1','1 2'],N0=Date.now,mx=Math.max,mn=Math.min,rd=Math.round;
 const CID_A='data-cascade-id',CID_S='['+CID_A+']',CV_S=TI('conversation-view'),AE_A='aria-expanded',IB_S=TI('agent-input-box'),MS_S=TI('model-selector-trigger');
-const LE='local-estimate',AG='data-ag-cs-',PV='data-pv-',DW='data-warn',CK='conversationId',IK='includeConversations';
+const LE='local-estimate',RP='renderer-proxy',AG='data-ag-cs-',PV='data-pv-',DW='data-warn',CK='conversationId',IK='includeConversations';
 const expCss=s=>{
 const k='pqrstuvwxyz0123456789abcdefghijklmno',t=[':host([data-no-q="1"][data-t~="','.bar>$2context"]','color:var(--','::before','transparent)',':is(.bar,.bar *)','font-variant-numeric:tabular-nums','position:relative','flex:none','justify-content:','align-items:center','var(--e)',':host([data-t~="','[data-card="','color-mix(in srgb,var(--pt-c) ','overflow:hidden;white-space:nowrap;','transform:scale(.9) translateX(4px);pointer-events:none!important','border-radius:','background:','rgba(148,163,184,.',':host([data-pv-resizing="1"])',':host([data-pv-light="1"])',':is(:hover,[aria-expanded="true"])','transition:','font-size:','opacity:','position:absolute;','flex-shrink:','max-width:','margin:','padding:','.bar .chip',':host(:not(.icons-only))','font-weight:','display:none!','pointer-events:none'];
 for(let i=0;i<t.length;i++)s=s.split('$'+k[i]).join(t[i]);
@@ -117,95 +117,88 @@ if(kids)for(const c of kids)if(c)el.appendChild(c);
 return el;
 }
 
-const HOST_ATTRS=Object.freeze({[FALLBACK_ATTR]:'1',[PRISM_BAR_ATTR]:'true','data-ag-owned':'1','data-ag-no-i18n':'',translate:'no','data-no-translate':'true','data-ag-localization-skip':'true','data-agy-no-translate':'true','data-antigravity-zh-skip':'1'});
+const HOST_ATTRS=Object.freeze({[FA]:'1',[PA]:'true','data-ag-owned':'1','data-ag-no-i18n':'',translate:'no','data-no-translate':'true','data-ag-localization-skip':'true','data-agy-no-translate':'true','data-antigravity-zh-skip':'1'});
 const HIDE_PROPS='position:fixed|left:-9999px|top:-9999px|width:1px|height:1px|opacity:0|pointer-events:none|visibility:hidden|overflow:hidden'.split('|').map(s=>s.split(':'));
-const FT_CUTS=[440,360],BAR_CUTS=[880,660,530,440,360],WIDE_CUT=1080,FT_SEL='.agy-composer-footer,'+TI('input-box-bottom-toolbar'),HC_A='data-hover-card-popup',QMODE_ATTR='data-ag-cs-telemetry-quota';
-const stepTier=(cur,w,cuts)=>{let t=cur;while(t<cuts.length&&w<cuts[t])t++;while(t>0&&w>=cuts[t-1]+12)t--;return t;};
-const SB_SEL='aside,'+TI('sidebar-split')+'>div:first-child,'+TIs('conversation-row-sidebar|project-header')+',['+HC_A+']';
-const IGN_STREAM_SEL=TIs('autoscroll-viewport|planner-response-text|agent-response|background-task-command|running-items-card')+',[data-markdown-root],'+SB_SEL+',[data-op-thought="1"],.ag-prism-thought-overlay,.ag-cs-conv-aura-host,.ag-cs-crab,.ag-cs-prism-rim-cv,.ag-anim-icon,.ag-cs-thinking-spark,[data-agy-hans-ui],#agy-theme-switcher,#agy-theme-menu,#antigravity-quota-widget,#antigravity-translation-audit';
-const BURST_STEPS=[450,700,900,1100,1400,1800,2200,2500],BUSY_SEL=TIs('input-cancel-button|stop-button|cancel-button|stop-generation-button'),SEND_SEL=TIs('input-send-button|send-button')+','+IB_S+' button[type="submit"]',SLASH_OPT_SEL='[id^="typeahead-item-"][role="option"],'+TI('slash-command-menu')+' [role="option"],[role="listbox"] [role="option"]',PT_SEL=TIs('agy-context-ring-trigger|agy-speed-stats-trigger'),CMP_RE=/^\/compact(?:\s|$)/i;
+const FTC=[440,360],BRC=[880,660,530,440,360],WDC=1080,FT_S='.agy-composer-footer,'+TI('input-box-bottom-toolbar'),HC_A='data-hover-card-popup',QMA='data-ag-cs-telemetry-quota';
+const stpT=(c,w,cs)=>{let t=c;while(t<cs.length&&w<cs[t])t++;while(t>0&&w>=cs[t-1]+12)t--;return t;};
+const SB_S='aside,'+TI('sidebar-split')+'>div:first-child,'+TIs('conversation-row-sidebar|project-header')+',['+HC_A+']';
+const IGN_S=TIs('autoscroll-viewport|planner-response-text|agent-response|background-task-command|running-items-card')+',[data-markdown-root],'+SB_S+',[data-op-thought="1"],.ag-prism-thought-overlay,.ag-cs-conv-aura-host,.ag-cs-crab,.ag-cs-prism-rim-cv,.ag-anim-icon,.ag-cs-thinking-spark,[data-agy-hans-ui],#agy-theme-switcher,#agy-theme-menu,#antigravity-quota-widget,#antigravity-translation-audit';
+const BST=[450,700,900,1100,1400,1800,2200,2500],BSY_S=TIs('input-cancel-button|stop-button|cancel-button|stop-generation-button'),SND_S=TIs('input-send-button|send-button')+','+IB_S+' button[type="submit"]',SLO_S='[id^="typeahead-item-"][role="option"],'+TI('slash-command-menu')+' [role="option"],[role="listbox"] [role="option"]',PT_S=TIs('agy-context-ring-trigger|agy-speed-stats-trigger'),CMP_RE=/^\/compact(?:\s|$)/i;
 let reqSeq=0;
 
 function createTelemetryController(envOpts){
 const gW=()=>(envOpts&&envOpts.window)||(typeof window!=='undefined'?window:globalRoot);
 const gD=()=>(envOpts&&envOpts.document)||gW()?.document||null;
 
-let mode='auto',quotaMode='compact',waitTm=null,rescTm=null,pollTm=null,swTm=null,burstTm=null,burstIdx=0,burstGen=0,burstBase=null,burstCid=null,cmpOff=null,pickCmpAt=0,wasBusy=false;
-let hasHost=false,yielded=false,lastSig='',detAt=0,lastHealAt=0;
-let docOff=null,popOff=null,winResOff=null,lastSnap=null,mApi=null,mRes=null,seatObs=null,healTm=null;
-let expLang='',activeHost=null,winBlur=false,pollSusp=false,blurOff=null,blurObs=null,extGuardHeld=false,lastHref='',lastUrlCid='';
-const pend=new Map(),inFlight=new Map(),insts=new Map(),instByHost=new WeakMap(),extTiers=new Map(),snapByCid=new Map(),locSnaps=new WeakMap();
+let md='auto',qm='compact',wTm=null,rTm=null,pTm=null,swTm=null,bTm=null,bIdx=0,bGen=0,bBase=null,bCid=null,cOff=null,pCmpAt=0,wBsy=false,pxM=false;
+let hHost=false,yld=false,lSg='',dAt=0,lHlAt=0;
+let dOff=null,pOff=null,wrOff=null,lS=null,mApi=null,mRes=null,sObs=null,hTm=null;
+let eLng='',aH=null,wBl=false,pSp=false,bOff=null,bObs=null,eGH=false,lHr='',lUC='';
+const PD=new Map(),IF=new Map(),LM=new Map(),IS=new Map(),IH=new WeakMap(),ET=new Map(),SC=new Map(),LS=new WeakMap();
 
-const readRouteKey=w=>{const l=w?.location;return l?`${l.href||''}|${l.pathname||''}|${l.hash||''}`:'';};
-const extractUrlCid=w=>{const l=w?.location,m=(isStr(l?.pathname)&&l.pathname.match(URL_CID_RE))||(isStr(l?.href)&&l.href.match(URL_CID_RE));return m?m[1]:null;};
-const ctxTs=s=>{const v=s?.speed?.context?.sampledAt;if(isFin(v))return v;const t=Date.parse(v||'');return isFin(t)?t:NaN;};
-const putCidSnap=(cid,snap)=>{
-if(!cid||!snap||typeof snap!=='object')return;
-const prev=snapByCid.get(cid);
-if(snap.connection===LE&&prev&&prev.connection!==LE)return;
-if(prev&&prev.connection!==LE&&snap.connection!==LE){const pt=ctxTs(prev),nt=ctxTs(snap);if(isFin(pt)&&isFin(nt)&&nt<pt)return;}
-snapByCid.delete(cid);snapByCid.set(cid,snap);
-if(snapByCid.size>LRU_MAX)snapByCid.delete(snapByCid.keys().next().value);
+const rRK=w=>{const l=w?.location;return l?`${l.href||''}|${l.pathname||''}|${l.hash||''}`:'';};
+const eUC=w=>{const l=w?.location,m=(isStr(l?.pathname)&&l.pathname.match(URE))||(isStr(l?.href)&&l.href.match(URE));return m?m[1]:null;};
+const cTs=s=>{const v=s?.speed?.context?.sampledAt;if(isFin(v))return v;const t=Date.parse(v||'');return isFin(t)?t:NaN;};
+const pCS=(c,s)=>{
+if(!c||!s||typeof s!=='object')return;
+const p=SC.get(c);
+if(s.connection===LE&&p&&p.connection!==LE)return;
+if(p&&p.connection!==LE&&s.connection!==LE){const pt=cTs(p),nt=cTs(s);if(isFin(pt)&&isFin(nt)&&nt<pt)return;}
+SC.delete(c);SC.set(c,s);
+if(SC.size>LMX)SC.delete(SC.keys().next().value);
 };
-const getCidSnap=cid=>{
-if(!cid||!snapByCid.has(cid))return null;
-const v=snapByCid.get(cid);snapByCid.delete(cid);snapByCid.set(cid,v);return v;
-};
-const isConn=(doc,el)=>{
-if(!el||el.isConnected===false)return false;
-if(el.isConnected===true)return true;
-if(!el.parentNode&&!el.parentElement)return false;
-if(doc&&isFn(doc.getElementById)&&el.id&&!isFn(doc.querySelectorAll)){const b=doc.getElementById(el.id);if(b&&b!==el)return false;}
+const gCS=c=>{if(!c||!SC.has(c))return null;const v=SC.get(c);SC.delete(c);SC.set(c,v);return v;};
+const iC=(d,e)=>{
+if(!e||e.isConnected===false)return false;
+if(e.isConnected===true)return true;
+if(!e.parentNode&&!e.parentElement)return false;
+if(d&&isFn(d.getElementById)&&e.id&&!isFn(d.querySelectorAll)){const b=d.getElementById(e.id);if(b&&b!==e)return false;}
 return true;
 };
-const getPrimaryInst=()=>{
-const doc=gD();let first=null;
-for(const it of insts.values()){if(!isConn(doc,it.host))continue;if(!first)first=it;if(it.host.id===PRISM_BAR_ID)return it;}
-return first;
+const gPI=()=>{const d=gD();let f=null;for(const it of IS.values()){if(!iC(d,it.host))continue;if(!f)f=it;if(it.host.id===PI)return it;}return f;};
+const iCO=it=>!!(it&&((it.xCard&&!it.xCard.hidden)||(it.sCard&&!it.sCard.hidden)));
+const actIn=()=>{
+const d=gD();
+for(const it of IS.values())if(iC(d,it.host)&&iCO(it))return it;
+if(aH&&iC(d,aH)){const h=IH.get(aH);if(h)return h;}
+const cv=d?.activeElement?.closest?.(CV_S+','+IB_S);
+if(cv)for(const it of IS.values())if(iC(d,it.host)&&(cv===it.anc||cv.contains?.(it.anc)))return it;
+return gPI();
 };
-const isCardOpen=it=>!!(it&&((it.xCard&&!it.xCard.hidden)||(it.sCard&&!it.sCard.hidden)));
-const resolveActiveInst=()=>{
-const doc=gD();
-for(const it of insts.values())if(isConn(doc,it.host)&&isCardOpen(it))return it;
-if(activeHost&&isConn(doc,activeHost)){const hit=instByHost.get(activeHost);if(hit)return hit;}
-const actCv=doc?.activeElement?.closest?.(CV_S+','+IB_S);
-if(actCv)for(const it of insts.values())if(isConn(doc,it.host)&&(actCv===it.anc||actCv.contains?.(it.anc)))return it;
-return getPrimaryInst();
-};
-const syncPrimaryId=()=>{
-const doc=gD();let primary=null;
-for(const it of insts.values()){if(!isConn(doc,it.host))continue;if(!primary)primary=it;if(it.host.id===PRISM_BAR_ID){primary=it;break;}}
-for(const it of insts.values()){
-if(it===primary){if(it.host.id!==PRISM_BAR_ID)sA(it.host,'id',PRISM_BAR_ID);}
+const syPI=()=>{
+const d=gD();let p=null;
+for(const it of IS.values()){if(!iC(d,it.host))continue;if(!p)p=it;if(it.host.id===PI){p=it;break;}}
+for(const it of IS.values()){
+if(it===p){if(it.host.id!==PI)sA(it.host,'id',PI);}
 else if(it.host.id){rA(it.host,'id');if(it.host.id)it.host.id='';}
 }
 };
 
-const syncHostAttrs=h=>{
+const syH=h=>{
 const de=gD()?.documentElement;if(!h||!de)return;
 const th=gA(de,AG+'theme');
 if(th==='light')setIf(h,PV+'light','1');else if(th==='dark'&&gA(h,PV+'light')==='1')rA(h,PV+'light');
 for(const k of['resizing','ignore-rm'])gA(de,AG+k)==='1'?setIf(h,PV+k,'1'):gA(h,PV+k)!==null&&rA(h,PV+k);
 };
-const syncAllHostAttrs=()=>{for(const it of insts.values())syncHostAttrs(it.host);for(const b of findExtBars(gD()))syncHostAttrs(b);};
-const pulseRingAnim=rec=>{const r=rec?.sr?.getElementById?.('context-ring');if(!r)return;rec.ringTm=cT(rec.ringTm);setIf(r,'data-anim','1');rec.ringTm=stTm(()=>{rec.ringTm=null;rA(r,'data-anim');},320);};
-const applyTierRec=(rec,force=false)=>{
+const syAH=()=>{for(const it of IS.values())syH(it.host);for(const b of fEB(gD()))syH(b);};
+const pRA=rec=>{const r=rec?.sr?.getElementById?.('context-ring');if(!r)return;rec.ringTm=cT(rec.ringTm);setIf(r,'data-anim','1');rec.ringTm=stTm(()=>{rec.ringTm=null;rA(r,'data-anim');},320);};
+const apT=(rec,force=false)=>{
 rec.raf=0;
-const doc=gD(),ft=mode!=='off'&&rec.anc&&isConn(doc,rec.anc)?rec.anc:null,w=rec.hasPendW?rec.pendW:ft?.getBoundingClientRect?.().width;
+const d=gD(),ft=md!=='off'&&rec.anc&&iC(d,rec.anc)?rec.anc:null,w=rec.hasPendW?rec.pendW:ft?.getBoundingClientRect?.().width;
 rec.pendW=0;rec.hasPendW=false;
 if(!ft||!isFin(w)||w<=0)return;
-const prevBarTv=rec.lastBarTv,ftTv=FT_VALS[(rec.curFtTier=stepTier(rec.curFtTier,w,FT_CUTS))]||'0',barTv=TIER_VALS[(rec.curBarTier=stepTier(rec.curBarTier,w,BAR_CUTS))]||'0',isWide=w>=WIDE_CUT;
-if(!force&&ftTv===rec.lastFtTv&&gA(ft,TIER_ATTR)===ftTv&&barTv===rec.lastBarTv&&isWide===rec.lastWide)return;
-rec.lastFtTv=ftTv;rec.lastBarTv=barTv;rec.lastWide=isWide;setIf(ft,TIER_ATTR,ftTv);
+const pB=rec.lastBarTv,fT=FVS[(rec.curFtTier=stpT(rec.curFtTier,w,FTC))]||'0',bT=TVS[(rec.curBarTier=stpT(rec.curBarTier,w,BRC))]||'0',iW=w>=WDC;
+if(!force&&fT===rec.lastFtTv&&gA(ft,TA)===fT&&bT===rec.lastBarTv&&iW===rec.lastWide)return;
+rec.lastFtTv=fT;rec.lastBarTv=bT;rec.lastWide=iW;setIf(ft,TA,fT);
 if(rec.host){
-if(gA(rec.host,HID_ATTR)!=='1'){setIf(rec.host,TIER_ATTR,barTv);if(prevBarTv&&prevBarTv.includes('5')!==barTv.includes('5'))pulseRingAnim(rec);if(isWide)setIf(rec.host,'data-wide','1');else if(gA(rec.host,'data-wide')!==null)rA(rec.host,'data-wide');}
+if(gA(rec.host,HA)!=='1'){setIf(rec.host,TA,bT);if(pB&&pB.includes('5')!==bT.includes('5'))pRA(rec);if(iW)setIf(rec.host,'data-wide','1');else if(gA(rec.host,'data-wide')!==null)rA(rec.host,'data-wide');}
 return;
 }
-const exts=findExtBars(doc),loc=exts.filter(b=>b&&(ft.contains?.(b)||b.parentElement===ft));
-for(const b of(loc.length?loc:extTiers.size<=1?exts:[])){
-if(!b||gA(b,HID_ATTR)==='1')continue;
-setIf(b,TIER_ATTR,barTv);syncHostAttrs(b);
-if(b.shadowRoot&&!qS(b.shadowRoot,`style[${TIER_STYLE_ATTR}="1"]`))try{const st=doc.createElement('style');sA(st,TIER_STYLE_ATTR,'1');st.textContent=TIER_CSS;b.shadowRoot.appendChild(st);}catch{}
+const ex=fEB(d),lc=ex.filter(b=>b&&(ft.contains?.(b)||b.parentElement===ft));
+for(const b of(lc.length?lc:ET.size<=1?ex:[])){
+if(!b||gA(b,HA)==='1')continue;
+setIf(b,TA,bT);syH(b);
+if(b.shadowRoot&&!qS(b.shadowRoot,`style[${TSA}="1"]`))try{const st=d.createElement('style');sA(st,TSA,'1');st.textContent=TIER_CSS;b.shadowRoot.appendChild(st);}catch{}
 }
 };
 const gBus=()=>{const w=gW();return w?.__agDomBus||w?.__agPrismDomBus||null;};
@@ -215,339 +208,369 @@ if(b?.subscribe)return{disconnect:b.subscribe(id,fn,{doc:gD(),win:w,priority:pri
 if(!isFn(w?.MutationObserver)||!root)return null;
 const mo=new w.MutationObserver(fn);try{mo.observe(root,opt);}catch{}return mo;
 };
-const readEntryW=e=>(Array.isArray(e?.borderBoxSize)?e.borderBoxSize[0]:e?.borderBoxSize)?.inlineSize??(Array.isArray(e?.contentBoxSize)?e.contentBoxSize[0]:e?.contentBoxSize)?.inlineSize??e?.contentRect?.width;
-const schedTierRec=(rec,entries)=>{
-if(entries&&typeof entries.length==='number'){
-let rw=NaN;for(let i=entries.length-1;i>=0;i--){const w0=readEntryW(entries[i]);if(isFin(w0)&&w0>=0){rw=w0;break;}}
+const rEW=e=>(Array.isArray(e?.borderBoxSize)?e.borderBoxSize[0]:e?.borderBoxSize)?.inlineSize??(Array.isArray(e?.contentBoxSize)?e.contentBoxSize[0]:e?.contentBoxSize)?.inlineSize??e?.contentRect?.width;
+const scT=(rec,es)=>{
+if(es&&typeof es.length==='number'){
+let rw=NaN;for(let i=es.length-1;i>=0;i--){const w0=rEW(es[i]);if(isFin(w0)&&w0>=0){rw=w0;break;}}
 if(isFin(rw)){rec.pendW=rw;rec.hasPendW=true;}
 }else rec.hasPendW=false;
-if(!rec.raf&&mode!=='off'){const w=gW();if(w?.requestAnimationFrame){let ran=false;const id=w.requestAnimationFrame(()=>{ran=true;applyTierRec(rec,false);});rec.raf=ran?0:id;}else applyTierRec(rec,false);}
+if(!rec.raf&&md!=='off'){const w=gW();if(w?.requestAnimationFrame){let rn=false;const id=w.requestAnimationFrame(()=>{rn=true;apT(rec,false);});rec.raf=rn?0:id;}else apT(rec,false);}
 };
-const ensWinResize=()=>{const w=gW();if(!winResOff&&w&&isFn(w.addEventListener))winResOff=on(w,'resize',()=>{for(const it of insts.values())schedTierRec(it,null);for(const et of extTiers.values())schedTierRec(et,null);},{passive:true});};
-const attachTierRec=rec=>{
-const w=gW();if(!w||!rec?.anc||mode==='off')return;
+const eWR=()=>{const w=gW();if(!wrOff&&w&&isFn(w.addEventListener))wrOff=on(w,'resize',()=>{for(const it of IS.values())scT(it,null);for(const et of ET.values())scT(et,null);},{passive:true});};
+const atT=rec=>{
+const w=gW();if(!w||!rec?.anc||md==='off')return;
 if(!rec.ro){
 const b=gBus();
-if(b?.observeSize)try{rec.ro={disconnect:b.observeSize(rec.anc,(sz,en)=>schedTierRec(rec,[en||{borderBoxSize:[{inlineSize:sz.width}]}]))};}catch{}
-else if(isFn(w.ResizeObserver))try{rec.ro=new w.ResizeObserver(es=>schedTierRec(rec,es));rec.ro.observe(rec.anc);}catch{}
+if(b?.observeSize)try{rec.ro={disconnect:b.observeSize(rec.anc,(sz,en)=>scT(rec,[en||{borderBoxSize:[{inlineSize:sz.width}]}]))};}catch{}
+else if(isFn(w.ResizeObserver))try{rec.ro=new w.ResizeObserver(es=>scT(rec,es));rec.ro.observe(rec.anc);}catch{}
 }
-ensWinResize();if(!rec.lastBarTv||!rec.ro)applyTierRec(rec,true);
+eWR();if(!rec.lastBarTv||!rec.ro)apT(rec,true);
 };
-const detachTierRec=rec=>{
+const dtT=rec=>{
 if(!rec)return;
-try{if(rec.raf)gW()?.cancelAnimationFrame?.(rec.raf);rec.ringTm=cT(rec.ringTm);rec.ro?.disconnect?.();rA(rec.anc,TIER_ATTR);if(rec.host)rA(rec.host,'data-wide');}catch{}
+try{if(rec.raf)gW()?.cancelAnimationFrame?.(rec.raf);rec.ringTm=cT(rec.ringTm);rec.ro?.disconnect?.();rA(rec.anc,TA);if(rec.host)rA(rec.host,'data-wide');}catch{}
 Object.assign(rec,{raf:0,ro:null,curFtTier:0,curBarTier:0,pendW:0,hasPendW:false,lastFtTv:'',lastBarTv:'',lastWide:false});
 };
-const clrExtTiers=()=>{for(const et of extTiers.values())detachTierRec(et);extTiers.clear();};
-const clrTier=()=>{
-for(const it of insts.values())detachTierRec(it);
-clrExtTiers();try{winResOff?.();}catch{}winResOff=null;
-for(const b of qA(gD(),`#${PRISM_BAR_ID},[${PRISM_BAR_ATTR}],#${BAR_ID},[id^="${BAR_ID}"],[data-ag-pulse-bar]`)||[])try{rA(b,TIER_ATTR);rA(b,'data-wide');qS(b.shadowRoot,`style[${TIER_STYLE_ATTR}="1"]`)?.remove?.();}catch{}
+const cET=()=>{for(const et of ET.values())dtT(et);ET.clear();};
+const cTr=()=>{
+for(const it of IS.values())dtT(it);
+cET();try{wrOff?.();}catch{}wrOff=null;
+for(const b of qA(gD(),`#${PI},[${PA}],#${BI},[id^="${BI}"],[data-ag-pulse-bar]`)||[])try{rA(b,TA);rA(b,'data-wide');qS(b.shadowRoot,`style[${TSA}="1"]`)?.remove?.();}catch{}
 };
-const ensTierObs=()=>{
-const doc=gD();if(!doc||mode==='off')return;
-if(insts.size>0){clrExtTiers();for(const it of insts.values())attachTierRec(it);return;}
-const fts=findAnchors(doc,true),ftSet=new Set(fts);
-for(const[anc,et]of extTiers)if(!ftSet.has(anc)||!isConn(doc,anc)){detachTierRec(et);extTiers.delete(anc);}
-for(const ft of fts){let et=extTiers.get(ft);if(!et)extTiers.set(ft,et=mkTier(ft,null));attachTierRec(et);}
+const eTO=()=>{
+const d=gD();if(!d||md==='off')return;
+if(IS.size>0){cET();for(const it of IS.values())atT(it);return;}
+const fts=fAn(d,true),fs=new Set(fts);
+for(const[anc,et]of ET)if(!fs.has(anc)||!iC(d,anc)){dtT(et);ET.delete(anc);}
+for(const ft of fts){let et=ET.get(ft);if(!et)ET.set(ft,et=mkTier(ft,null));atT(et);}
 };
 
-const bindHook=()=>{
+const gLm=()=>{const w=gW();return w?(w.__agPrismMetricsLast||=new Map()):LM;};
+const pLm=(cid,sn,inc,sig,tr)=>{
+if(!sn||typeof sn!=='object'||sn.connection===LE)return;
+const tr0=tr||sn.transport||(sn.connection===RP?RP:'');
+if(tr0===RP)pxM=true;else if(sn.connection==='live'&&!tr0)pxM=false;
+const lm=gLm(),ck=cid||'';lm.delete(ck);
+lm.set(ck,{at:N0(),snap:sn,inc:!!inc,sig:isStr(sig)?sig:(isStr(sn.sig)?sn.sig:''),tr:tr0});
+if(lm.size>16)lm.delete(lm.keys().next().value);
+};
+const bHk=()=>{
 const w=gW();if(!w)return;
 if(!mRes){
 mRes=(id,pl)=>{
-const it=pend.get(id);if(!it)return;
-cT(it.timer);pend.delete(id);
-let synced=pl;
+const it=PD.get(id);if(!it)return;
+cT(it.timer);PD.delete(id);
+if(pl&&pl.unchanged===true){
+if(pl.transport===RP)pxM=true;
+const lm=gLm(),ck=it.cid||'',rc=lm.get(ck),pv=rc?.snap||(it.cid&&SC.get(it.cid))||(!it.cid?lS:null);
+if(pv){
+if(rc){rc.at=N0();if(isStr(pl.sig)&&pl.sig)rc.sig=pl.sig;}else pLm(it.cid,pv,it.inc,pl.sig,pl.transport);
+it.onSettle?.();it.resolve(pv);return;
+}
+pl=gFb(it.cid,null);
+}
+let sy=pl;
 if(pl&&pl.connection!==LE&&pl.groups?.length>0){
-const prev=(it.cid&&snapByCid.get(it.cid))||(!it.cid?lastSnap:null);
-const ks=!pl.speed&&prev?.speed,kc=!pl.conversations?.length&&prev?.conversations?.length;
-synced=ks||kc?{...pl,...(ks?{speed:prev.speed}:{}),...(kc?{conversations:prev.conversations}:{})}:pl;
-if(it.cid)putCidSnap(it.cid,synced);
-if(!lastSnap||!it.cid||resolveActiveInst()?.cid===it.cid)lastSnap=synced;
+const pv=(it.cid&&SC.get(it.cid))||(!it.cid?lS:null);
+const ks=!pl.speed&&pv?.speed,kc=!pl.conversations?.length&&pv?.conversations?.length;
+sy=ks||kc?{...pl,...(ks?{speed:pv.speed}:{}),...(kc?{conversations:pv.conversations}:{})}:pl;
+if(it.cid)pCS(it.cid,sy);
+if(!lS||!it.cid||actIn()?.cid===it.cid)lS=sy;
 }
-if(it.syncUi&&synced&&synced.connection!==LE&&synced.speed?.context&&insts.size>0){
-const doc=gD(),multi=insts.size>1,nAt=String(synced.speed.context.sampledAt||'');
-for(const ins of insts.values()){
-if(!isConn(doc,ins.host))continue;
-const liveCid=detCid(ins.host,multi),oAt=String(ins.snap?.speed?.context?.sampledAt||'');
-if((it.cid?(ins.cid===it.cid&&(!liveCid||liveCid===it.cid)):(!multi&&!ins.cid))&&ins.snap!==synced&&(!oAt||!nAt||nAt>=oAt))applySnapToInst(ins,synced);
+if(sy&&sy.connection!==LE)pLm(it.cid,sy,it.inc,pl?.sig,pl?.transport);
+if(it.syncUi&&sy&&sy.connection!==LE&&sy.speed?.context&&IS.size>0){
+const d=gD(),ml=IS.size>1,nAt=String(sy.speed.context.sampledAt||'');
+for(const ins of IS.values()){
+if(!iC(d,ins.host))continue;
+const lc=dCd(ins.host,ml),oAt=String(ins.snap?.speed?.context?.sampledAt||'');
+if((it.cid?(ins.cid===it.cid&&(!lc||lc===it.cid)):(!ml&&!ins.cid))&&ins.snap!==sy&&(!oAt||!nAt||nAt>=oAt))apSn(ins,sy);
 }
 }
-it.onSettle?.();it.resolve(pl);
+it.onSettle?.();it.resolve(sy);
 };
 }
 if(w.__agPrismMetricsResolve!==mRes)w.__agPrismMetricsResolve=mRes;
 };
-const clrWait=()=>{waitTm=cT(waitTm);rescTm=cT(rescTm);};
-const clrSw=()=>{swTm=cT(swTm);};
-const clrBurst=()=>{burstGen++;burstTm=cT(burstTm);burstIdx=0;burstBase=burstCid=null;};
-const clrPoll=()=>{if(pollTm!==null){clearInterval(pollTm);pollTm=null;}};
-const clrCompactWatch=()=>{try{cmpOff?.();}catch{}cmpOff=null;pickCmpAt=0;wasBusy=false;};
-const isBlur=()=>{const d=gD();return!!(d?.hidden||gA(d?.documentElement,AG+'win-blur')==='1'||winBlur);};
-const readAttrQuotaMode=()=>{const a=gA(gD()?.documentElement,QMODE_ATTR);return a==='both'?'both':a==='compact'?'compact':'';};
-const clrBlur=()=>{try{blurOff?.();blurObs?.disconnect?.();}catch{}blurOff=blurObs=null;winBlur=pollSusp=false;};
-const startPoll=()=>{
-clrPoll();if(insts.size===0||mode==='off')return;
-if(isBlur()){pollSusp=true;return;}
-pollSusp=false;pollTm=setInterval(()=>{isBlur()?(pollSusp=true,clrPoll()):void refresh();},4000);pollTm?.unref?.();
+const cWt=()=>{wTm=cT(wTm);rTm=cT(rTm);};
+const cSw=()=>{swTm=cT(swTm);};
+const cBs=()=>{bGen++;bTm=cT(bTm);bIdx=0;bBase=bCid=null;};
+const cPl=()=>{pTm=cT(pTm);};
+const clCW=()=>{try{cOff?.();}catch{}cOff=null;pCmpAt=0;wBsy=false;};
+const iBl=()=>{const d=gD();return!!(d?.hidden||gA(d?.documentElement,AG+'win-blur')==='1'||wBl);};
+const rdQm=()=>{const a=gA(gD()?.documentElement,QMA);return a==='both'?'both':a==='compact'?'compact':'';};
+const cBl=()=>{try{bOff?.();bObs?.disconnect?.();}catch{}bOff=bObs=null;wBl=pSp=false;};
+const aOp=()=>{for(const it of IS.values())if(iCO(it))return true;return false;};
+const gPM=()=>(aOp()||hBs(gD()))?2800:(pxM?6000:5000);
+const sPl=()=>{
+cPl();if(IS.size===0||md==='off')return;
+if(iBl()){pSp=true;return;}
+pSp=false;pTm=stTm(()=>{pTm=null;if(IS.size===0||md==='off')return;if(iBl()){pSp=true;return;}void refresh({poll:true}).finally(()=>{if(IS.size&&md!=='off'&&!iBl()&&pTm===null)sPl();});},gPM());
 };
-const syncBlur=res=>{
-if(insts.size===0||mode==='off'){clrPoll();clrBurst();pollSusp=false;return;}
-if(isBlur()){pollSusp=true;clrPoll();clrBurst();return;}
-const was=pollSusp;pollSusp=false;if(pollTm===null)startPoll();if(was&&res)void refresh();
+const syBl=r=>{
+if(IS.size===0||md==='off'){cPl();cBs();pSp=false;return;}
+if(iBl()){pSp=true;cPl();cBs();return;}
+const w=pSp;pSp=false;if(pTm===null)sPl();if(w&&r)void refresh();
 };
-const ensBlur=()=>{
+const eBl=()=>{
 const w=gW(),d=gD();if(!w||!d)return;
-if(!blurOff&&isFn(w.addEventListener)){
-const u=[on(w,'blur',()=>{winBlur=true;syncBlur(false);}),on(w,'focus',()=>{winBlur=false;syncBlur(true);}),on(d,'visibilitychange',()=>{if(!gD()?.hidden)winBlur=false;syncBlur(!gD()?.hidden);})];
-blurOff=()=>{for(const f of u)f();};
+if(!bOff&&isFn(w.addEventListener)){
+const u=[on(w,'blur',()=>{wBl=true;syBl(false);}),on(w,'focus',()=>{wBl=false;syBl(true);}),on(d,'visibilitychange',()=>{if(!gD()?.hidden)wBl=false;syBl(!gD()?.hidden);})];
+bOff=()=>{for(const f of u)f();};
 }
-if(!blurObs&&d.documentElement)try{blurObs=subMo('pulse-blur',d.documentElement,{childList:false,subtree:false,attributes:true,attributeFilter:[AG+'win-blur',QMODE_ATTR,AG+'theme',AG+'resizing',AG+'ignore-rm']},()=>{const b=gA(gD()?.documentElement,AG+'win-blur')==='1';if(!b)winBlur=false;syncBlur(!b);syncAllHostAttrs();const qm=readAttrQuotaMode();if(qm&&qm!==quotaMode){quotaMode=qm;for(const it of insts.values())if(it.snap||lastSnap)applySnapToInst(it,it.snap||lastSnap);}},'high');}catch{}
+if(!bObs&&d.documentElement)try{bObs=subMo('pulse-blur',d.documentElement,{childList:false,subtree:false,attributes:true,attributeFilter:[AG+'win-blur',QMA,AG+'theme',AG+'resizing',AG+'ignore-rm']},()=>{const b=gA(gD()?.documentElement,AG+'win-blur')==='1';if(!b)wBl=false;syBl(!b);syAH();const q=rdQm();if(q&&q!==qm){qm=q;for(const it of IS.values())if(it.snap||lS)apSn(it,it.snap||lS);}},'high');}catch{}
 };
-const clrSeat=()=>{clrSw();healTm=cT(healTm);try{seatObs?.disconnect?.();popOff?.();}catch{}seatObs=popOff=null;clrTier();};
-const isConv=(doc,w,anc)=>{
-if(!doc||anc?.closest?.('.agy-home')||qS(doc,'.agy-home, [data-testid="home-greeting"]'))return false;
+const cSt=()=>{cSw();hTm=cT(hTm);try{sObs?.disconnect?.();pOff?.();}catch{}sObs=pOff=null;cTr();};
+const isConv=(d,w,anc)=>{
+if(!d||anc?.closest?.('.agy-home')||qS(d,'.agy-home, [data-testid="home-greeting"]'))return false;
 const pn=w?.location?.pathname;
-if(typeof pn==='string'&&pn&&!/\/c\/[0-9a-f-]{8,}/i.test(pn)&&!qS(doc,CV_S)&&!anc?.closest?.(CID_S)&&!qS(doc,CID_S))return false;
+if(isStr(pn)&&pn&&!/\/c\/[0-9a-f-]{8,}/i.test(pn)&&!qS(d,CV_S)&&!anc?.closest?.(CID_S)&&!qS(d,CID_S))return false;
 return true;
 };
-const findExtBars=doc=>{
-if(!doc)return[];
-const s=new Set(),add=e=>{if(e)s.add(e);};
-try{for(const e of qA(doc,`#${BAR_ID},[id^="${BAR_ID}"],[data-ag-pulse-bar="true"]`)||[])add(e);}catch{}
-add(doc.getElementById?.(BAR_ID));return[...s];
+const fEB=d=>{
+if(!d)return[];
+const s=new Set(),a=e=>{if(e)s.add(e);};
+try{for(const e of qA(d,`#${BI},[id^="${BI}"],[data-ag-pulse-bar="true"]`)||[])a(e);}catch{}
+a(d.getElementById?.(BI));return[...s];
 };
-const purgeOrphans=doc=>{
-const live=new Set();for(const it of insts.values())live.add(it.host);
-for(const e of qA(doc,`[${FALLBACK_ATTR}="1"],#${PRISM_BAR_ID},[${PRISM_BAR_ATTR}]`)||[])if(!live.has(e))try{e.remove();}catch{}
+const pOr=d=>{
+const lv=new Set();for(const it of IS.values())lv.add(it.host);
+for(const e of qA(d,`[${FA}="1"],#${PI},[${PA}]`)||[])if(!lv.has(e))try{e.remove();}catch{}
 };
-const usableExt=(doc,b)=>!!(b&&gA(b,FALLBACK_ATTR)!=='1'&&isConn(doc,b)&&gA(b,HID_ATTR)!=='1'&&gA(b,'data-layout')!=='blocked'&&b.hidden!==true&&b.style?.display!=='none'&&(!doc?.body||(b.parentElement!==doc.body&&b.parentNode!==doc.body))&&!b.closest?.('.agy-home'));
-const hasExt=(barsArg,knownConv=false)=>{
-const w=gW(),doc=gD();if(!w||!doc||(!knownConv&&!isConv(doc,w)))return false;
-let sawDead=false;
-for(const b of barsArg||findExtBars(doc)){
-if(!b||gA(b,FALLBACK_ATTR)==='1'||!isConn(doc,b)||gA(b,HID_ATTR)==='1')continue;
-if(usableExt(doc,b)){detAt=0;return true;}
-sawDead=true;
+const uEx=(d,b)=>!!(b&&gA(b,FA)!=='1'&&iC(d,b)&&gA(b,HA)!=='1'&&gA(b,'data-layout')!=='blocked'&&b.hidden!==true&&b.style?.display!=='none'&&(!d?.body||(b.parentElement!==d.body&&b.parentNode!==d.body))&&!b.closest?.('.agy-home'));
+const hEx=(bs,kC=false)=>{
+const w=gW(),d=gD();if(!w||!d||(!kC&&!isConv(d,w)))return false;
+let sD=false;
+for(const b of bs||fEB(d)){
+if(!b||gA(b,FA)==='1'||!iC(d,b)||gA(b,HA)==='1')continue;
+if(uEx(d,b)){dAt=0;return true;}
+sD=true;
 }
-for(const e of qAll(doc,PT_SEL))if(usableExt(doc,e)){detAt=0;return true;}
-if(sawDead)return false;
-const sig=[w.__agPulseRuntimeOwner?String(w.__agPulseRuntimeOwner):'',w.__agPulseRuntimeBridge?'b':'',w.__agPulseInlineInstalled&&!extGuardHeld?'1':'',w.agPulseHost&&!w.agPulseHost.__prismFallback?'h':''].join('|');
-if(sig!=='|||'){const now=Date.now();if(sig!==lastSig){lastSig=sig;detAt=now;return true;}if(!detAt)detAt=now;return now-detAt<GRACE_MS;}
-lastSig='';detAt=0;return false;
+for(const e of qAll(d,PT_S))if(uEx(d,e)){dAt=0;return true;}
+if(sD)return false;
+const sg=[w.__agPulseRuntimeOwner?String(w.__agPulseRuntimeOwner):'',w.__agPulseRuntimeBridge?'b':'',w.__agPulseInlineInstalled&&!eGH?'1':'',w.agPulseHost&&!w.agPulseHost.__prismFallback?'h':''].join('|');
+if(sg!=='|||'){const nw=N0();if(sg!==lSg){lSg=sg;dAt=nw;return true;}if(!dAt)dAt=nw;return nw-dAt<GM;}
+lSg='';dAt=0;return false;
 };
-const showExt=()=>{
-if(extGuardHeld){extGuardHeld=false;const w=gW();if(w&&!w.__agPulseDispose)w.__agPulseInlineInstalled=false;}
-for(const b of findExtBars(gD()))if(b&&gA(b,HID_ATTR)==='1'){
-rA(b,HID_ATTR);const s=b.style;
+const sEx=()=>{
+if(eGH){eGH=false;const w=gW();if(w&&!w.__agPulseDispose)w.__agPulseInlineInstalled=false;}
+for(const b of fEB(gD()))if(b&&gA(b,HA)==='1'){
+rA(b,HA);const s=b.style;
 if(s){if(isFn(s.removeProperty)){s.removeProperty('display');for(const[p]of HIDE_PROPS)s.removeProperty(p);}else s.opacity=s.position=s.pointerEvents='';}
 }
 };
-const hideExt=(disposeExt=false)=>{
-if(disposeExt){const w=gW();if(w){try{w.__agPulseDispose?.();}catch{}w.__agPulseInlineInstalled=true;extGuardHeld=true;}}
-for(const b of findExtBars(gD()))if(b&&gA(b,FALLBACK_ATTR)!=='1'){
-sA(b,HID_ATTR,'1');const s=b.style;
+const hdEx=(dE=false)=>{
+if(dE){const w=gW();if(w){try{w.__agPulseDispose?.();}catch{}w.__agPulseInlineInstalled=true;eGH=true;}}
+for(const b of fEB(gD()))if(b&&gA(b,FA)!=='1'){
+sA(b,HA,'1');const s=b.style;
 if(s){s.removeProperty?.('display');if(isFn(s.setProperty))for(const[p,v]of HIDE_PROPS)s.setProperty(p,v,'important');else Object.assign(s,{position:'fixed',left:'-9999px',opacity:'0',pointerEvents:'none'});}
 }
 };
-const ensBridge=()=>{const w=gW();if(!w)return;bindHook();if(!mApi)mApi={__prismOwned:true,getMetrics:inp=>reqSnapSF(inp?.conversationId||'__bridge',inp,null,true),getLatestSnapshot:()=>lastSnap};w.__agPrismMetricsBridge=mApi;};
-const rmHost=()=>{const w=gW();if(hasHost&&w?.agPulseHost?.__prismFallback)delete w.agPulseHost;hasHost=false;};
-const ensHost=()=>{
-const w=gW();if(!w)return;ensBridge();
+const eBr=()=>{const w=gW();if(!w)return;bHk();if(!mApi)mApi={__prismOwned:true,getMetrics:i=>rSF(i?.conversationId||'__bridge',i,null,true),getLatestSnapshot:()=>lS};w.__agPrismMetricsBridge=mApi;};
+const rmH=()=>{const w=gW();if(hHost&&w?.agPulseHost?.__prismFallback)delete w.agPulseHost;hHost=false;};
+const eHs=()=>{
+const w=gW();if(!w)return;eBr();
 if(!w.agPulseHost||!isFn(w.agPulseHost.getMetrics)){
-w.agPulseHost={__prismFallback:true,getMetrics:inp=>reqSnapSF(inp?.conversationId||'__host',inp,null,true),getLatestSnapshot:()=>lastSnap,getPreferences:()=>Promise.resolve({language:resolveCurLang()}),setPreferences:v=>Promise.resolve(v||{}),report:()=>{}};
-hasHost=true;
+w.agPulseHost={__prismFallback:true,getMetrics:i=>rSF(i?.conversationId||'__host',i,null,true),getLatestSnapshot:()=>lS,getPreferences:()=>Promise.resolve({language:rCL()}),setPreferences:v=>Promise.resolve(v||{}),report:()=>{}};
+hHost=true;
 }
 };
-const clrHover=it=>{if(it){it.hOpenTm=cT(it.hOpenTm);it.hCloseTm=cT(it.hCloseTm);}};
-const disposeInst=(it,notifyBridge=true)=>{
-if(!it)return;clrHover(it);it.pinned=null;it.hoverOpen=false;detachTierRec(it);
-try{if(it.xCard)it.xCard.hidden=true;if(it.sCard)it.sCard.hidden=true;if(notifyBridge)emitB(gW(),{event:'dispose',host:it.host});}catch{}
+const cHv=it=>{if(it){it.hOpenTm=cT(it.hOpenTm);it.hCloseTm=cT(it.hCloseTm);}};
+const dIn=(it,nb=true)=>{
+if(!it)return;cHv(it);it.pinned=null;it.hoverOpen=false;dtT(it);
+try{if(it.xCard)it.xCard.hidden=true;if(it.sCard)it.sCard.hidden=true;if(nb)emitB(gW(),{event:'dispose',host:it.host});}catch{}
 try{it.host.remove();}catch{}
-if(activeHost===it.host)activeHost=null;
-instByHost.delete(it.host);insts.delete(it.anc);
+if(aH===it.host)aH=null;
+IH.delete(it.host);IS.delete(it.anc);
 };
-const unmountFb=(keepBridge=false)=>{
-clrWait();clrSw();clrBurst();clrPoll();clrCompactWatch();clrBlur();
-if(docOff){try{docOff();}catch{}docOff=null;}
-if(!keepBridge){clrSeat();for(const it of pend.values()){cT(it.timer);it.onSettle?.();it.resolve(null);}pend.clear();inFlight.clear();rmHost();}
-const n=insts.size;for(const it of[...insts.values()])disposeInst(it,false);
+const uFb=(kB=false)=>{
+cWt();cSw();cBs();cPl();clCW();cBl();
+if(dOff){try{dOff();}catch{}dOff=null;}
+if(!kB){cSt();for(const it of PD.values()){cT(it.timer);it.onSettle?.();it.resolve(null);}PD.clear();IF.clear();rmH();}
+const n=IS.size;for(const it of[...IS.values()])dIn(it,false);
 if(n)emitB(gW(),{event:'dispose'});
-purgeOrphans(gD());activeHost=null;
+pOr(gD());aH=null;
 };
 
-const detCid=(node,multiPane=false)=>{
+const dCd=(n,ml=false)=>{
 try{
-const cid=gA(node?.closest?.(CID_S),CID_A);if(cid&&GUID_RE.test(cid))return cid;
-const cv=node?.closest?.(CV_S),cvCid=gA(cv,CID_A)||gA(qS(cv,CID_S),CID_A);if(cvCid&&GUID_RE.test(cvCid))return cvCid;
-if(!multiPane){const uc=extractUrlCid(gW());if(uc)return uc;}
+const c=gA(n?.closest?.(CID_S),CID_A);if(c&&GRE.test(c))return c;
+const cv=n?.closest?.(CV_S),cc=gA(cv,CID_A)||gA(qS(cv,CID_S),CID_A);if(cc&&GRE.test(cc))return cc;
+if(!ml){const u=eUC(gW());if(u)return u;}
 return null;
 }catch{return null;}
 };
-const estSnap=(node=null)=>{
-const doc=gD(),sc=node?.closest?.(CV_S)||doc,now=Date.now(),c=sc?locSnaps.get(sc):null;
-if(c&&now-c.at<5000)return c.snap;
-let model='Gemini 4',chars=0;
+const eSn=(n=null)=>{
+const d=gD(),sc=n?.closest?.(CV_S)||d,nw=N0(),c=sc?LS.get(sc):null;
+if(c&&nw-c.at<5000)return c.snap;
+let model='Gemini 4',ch=0;
 try{
-const tr=qS(sc,MS_S)||qS(doc,MS_S),lb=gA(tr,'aria-label')||tr?.textContent?.trim();if(lb)model=lb;
-const vw=sc&&sc!==doc?sc:qS(doc,CV_S),ts=qA(vw,'[data-testid="planner-response-text"],[data-testid="agent-response"],[data-testid="user-message-bubble"]');
-if(ts?.length>0){const n=Math.min(4,ts.length);let s=0;for(let i=ts.length-n;i<ts.length;i++)s+=(ts[i].textContent||'').length;chars=Math.round((s/n)*ts.length);}
-else if(isStr(vw?.textContent))chars=vw.textContent.length;
+const tr=qS(sc,MS_S)||qS(d,MS_S),lb=gA(tr,'aria-label')||tr?.textContent?.trim();if(lb)model=lb;
+const vw=sc&&sc!==d?sc:qS(d,CV_S),ts=qA(vw,'[data-testid="planner-response-text"],[data-testid="agent-response"],[data-testid="user-message-bubble"]');
+if(ts?.length>0){const k=mn(4,ts.length);let s=0;for(let i=ts.length-k;i<ts.length;i++)s+=(ts[i].textContent||'').length;ch=rd((s/k)*ts.length);}
+else if(isStr(vw?.textContent))ch=vw.textContent.length;
 }catch{}
-const maxTokens=512000,usedTokens=Math.max(4200,Math.min(maxTokens,Math.round(chars/3.2)+8400));
-const snap={connection:LE,speed:{model,tps:null,latestTps:null,ttftSeconds:null,rounds:0,cacheHitRate:null,totalTokens:usedTokens,context:{model,usedTokens,maxTokens,usedFraction:Math.min(.98,usedTokens/maxTokens),sampledAt:now}},groups:[]};
-if(sc)locSnaps.set(sc,{at:now,snap});
+const maxTokens=512000,usedTokens=mx(4200,mn(maxTokens,rd(ch/3.2)+8400));
+const snap={connection:LE,speed:{model,tps:null,latestTps:null,ttftSeconds:null,rounds:0,cacheHitRate:null,totalTokens:usedTokens,context:{model,usedTokens,maxTokens,usedFraction:mn(.98,usedTokens/maxTokens),sampledAt:nw}},groups:[]};
+if(sc)LS.set(sc,{at:nw,snap});
 return snap;
 };
-const getFbSnap=(cid,sc)=>(cid&&snapByCid.get(cid))||(!cid&&lastSnap)||estSnap(sc);
-const reqSnap=(inp,scopeNode=null,onSettle=null,syncUi=false)=>{
-const w=gW();bindHook();
-const si=inp&&typeof inp==='object'?{...inp}:{};if(si.usageSync)delete si.usageSync;
-const cid=isStr(si[CK])?si[CK]:null,fb=()=>getFbSnap(cid,scopeNode);
-if(w&&isFn(w[METRICS_BINDING])){
+const gFb=(c,sc)=>(c&&SC.get(c))||(!c&&lS)||eSn(sc);
+const rSn=(inp,scN=null,onS=null,sUi=false)=>{
+const w=gW();bHk();
+const si=inp&&typeof inp==='object'?{...inp}:{};if(si.usageSync)delete si.usageSync;if('maxAgeMs'in si)delete si.maxAgeMs;
+const cid=isStr(si[CK])?si[CK]:null,inc=si[IK]!==false,fb=()=>gFb(cid,scN);
+if(!si.force&&!si.freshContext&&!si.quotaRefresh&&!si.includeUsage&&!isStr(si.lastSig)){
+const lr=gLm().get(cid||'');
+si.lastSig=lr&&lr.sig&&lr.snap&&(!inc||lr.inc)?lr.sig:'';
+}
+if(w&&isFn(w[MB])){
 return new Promise(resolve=>{
-if(pend.size>=Math.max(8,insts.size*3)){onSettle?.();resolve(fb());return;}
-const id=++reqSeq,timer=setTimeout(()=>{pend.delete(id);onSettle?.();resolve(fb());},si.force||si.quotaRefresh?10000:4500);
-pend.set(id,{resolve,timer,cid,onSettle,syncUi});
-try{w[METRICS_BINDING](JSON.stringify({id,input:si}));}
-catch{cT(timer);pend.delete(id);onSettle?.();resolve(fb());}
+if(PD.size>=mx(8,IS.size*3)){onS?.();resolve(fb());return;}
+const id=++reqSeq,timer=setTimeout(()=>{PD.delete(id);onS?.();resolve(fb());},si.force||si.quotaRefresh?10000:4500);
+PD.set(id,{resolve,timer,cid,onSettle:onS,syncUi:sUi,inc});
+try{w[MB](JSON.stringify({id,input:si}));}
+catch{cT(timer);PD.delete(id);onS?.();resolve(fb());}
 });
 }
-onSettle?.();return Promise.resolve(estSnap(scopeNode));
+onS?.();return Promise.resolve(eSn(scN));
 };
-const getSfMap=()=>{const w=gW();return w?(w.__agPrismMetricsInflight||=new Map()):inFlight;};
-const reqSnapSF=(key,inp,scopeNode,syncUi=false)=>{
-const bypass=!!(inp?.force||inp?.freshContext||inp?.quotaRefresh),sf=getSfMap(),cid=isStr(inp?.[CK])?inp[CK]:'',inc=inp?.[IK]!==false;
+const gSf=()=>{const w=gW();return w?(w.__agPrismMetricsInflight||=new Map()):IF;};
+const rSF=(key,inp,scN,sUi=false)=>{
+const by=!!(inp?.force||inp?.freshContext||inp?.quotaRefresh),sf=gSf(),cid=isStr(inp?.[CK])?inp[CK]:'',inc=inp?.[IK]!==false;
 const k0=cid+':0',k1=cid+':1',rk=cid?(inc?k1:k0):`${key}:${inc?1:0}`;
-if(!bypass){
+if(!by){
+const mA=isFin(inp?.maxAgeMs)&&inp.maxAgeMs>0?inp.maxAgeMs:0;
+if(mA){const lr=gLm().get(cid||'');if(lr&&lr.snap&&lr.snap.connection!==LE&&(!inc||lr.inc)&&N0()-lr.at<mA)return Promise.resolve(lr.snap);}
 const hk=sf.has(k1)?k1:(!inc&&sf.has(k0))?k0:sf.has(rk)?rk:'',h=hk&&sf.get(hk);
 if(h)return new Promise(r=>{
-let d=0,tm=null,fin=(v,del)=>{if(d)return;d=1;cT(tm);if(del&&sf.get(hk)===h)sf.delete(hk);r(v||getFbSnap(cid,scopeNode));};
+let d=0,tm=null,fin=(v,dl)=>{if(d)return;d=1;cT(tm);if(dl&&sf.get(hk)===h)sf.delete(hk);r(v||gFb(cid,scN));};
 tm=stTm(()=>fin(0,1),4600);
 Promise.resolve(h).then(v=>fin(v,!v),()=>fin(0,1));
 });
 }
-let settled=false,p=null;
-const done=()=>{if(settled)return;settled=true;if(p&&sf.get(rk)===p)sf.delete(rk);};
-p=reqSnap(inp,scopeNode,done,syncUi);
-if(!settled){sf.set(rk,p);p.finally(done);}
+let st=false,p=null;
+const dn=()=>{if(st)return;st=true;if(p&&sf.get(rk)===p)sf.delete(rk);};
+p=rSn(inp,scN,dn,sUi);
+if(!st){sf.set(rk,p);p.finally(dn);}
 return p;
 };
 
-const resolveCurLang=()=>{const a=gA(gD()?.documentElement,AG+'lang');return normFbLang((a&&a!=='auto'?a:'')||(expLang&&expLang!=='auto'?expLang:''),gW());};
-const gStr=()=>FB_I18N[resolveCurLang()]||FB_I18N.en;
-const syncLblsFor=sr=>{
+const rCL=()=>{const a=gA(gD()?.documentElement,AG+'lang');return normFbLang((a&&a!=='auto'?a:'')||(eLng&&eLng!=='auto'?eLng:''),gW());};
+const gStr=()=>FB_I18N[rCL()]||FB_I18N.en;
+const sLb=sr=>{
 if(!sr)return;const t=gStr(),ns=qA(sr,'[data-fb-i18n]')||[];
 for(let i=0;i<ns.length;i++){const k=gA(ns[i],'data-fb-i18n');if(k&&isStr(t[k])&&ns[i].textContent!==t[k])ns[i].textContent=t[k];}
 };
-const applySnapToInst=(it,snap)=>{
+const apSn=(it,sn)=>{
 if(!it?.sr||!it.host)return;
-if(snap&&typeof snap==='object'){
-it.snap=snap;if(it.cid)putCidSnap(it.cid,snap);
-const act=resolveActiveInst();if(!lastSnap||!act||act===it)lastSnap=snap;
+it.pAt=N0();
+if(sn&&typeof sn==='object'){
+it.snap=sn;if(it.cid)pCS(it.cid,sn);
+const act=actIn();if(!lS||!act||act===it)lS=sn;
 }
-const sr=it.sr,fbEl=it.host,sp=snap?.speed||{},ctx=sp.context||{},gE=id=>sr.getElementById(id),sT=(id,v)=>{const e=gE(id),s=String(v);if(e&&e.textContent!==s)e.textContent=s;},wLvl=(e,r)=>{r<=.15?sA(e,DW,'2'):r<=.35?sA(e,DW,'1'):rA(e,DW);};
-const mT=ctx.maxTokens>0?ctx.maxTokens:512000,uf=isFin(ctx.usedFraction)?Math.max(0,Math.min(1,ctx.usedFraction)):.04,uT=isFin(ctx.usedTokens)?ctx.usedTokens:Math.round(uf*mT),pct=Math.round(uf*100);
+const sr=it.sr,fbEl=it.host,sp=sn?.speed||{},ctx=sp.context||{},gE=id=>sr.getElementById(id),sT=(id,v)=>{const e=gE(id),s=String(v);if(e&&e.textContent!==s)e.textContent=s;},wLvl=(e,r)=>{r<=.15?sA(e,DW,'2'):r<=.35?sA(e,DW,'1'):rA(e,DW);};
+const mT=ctx.maxTokens>0?ctx.maxTokens:512000,uf=isFin(ctx.usedFraction)?mx(0,mn(1,ctx.usedFraction)):.04,uT=isFin(ctx.usedTokens)?ctx.usedTokens:rd(uf*mT),pct=rd(uf*100);
 const model=ctx.model||sp.model||'Antigravity Model',tot=sp.taskUsage?.total?.totalTokens??sp.tokens?.totalTokens??sp.cache?.totalTokens??sp.totalTokens??0,hit=isFin(sp.cache?.hitRate)?sp.cache.hitRate:sp.cacheHitRate,subs=Number(sp.taskUsage?.subagents||0);
-if(snap?.collection?.state==='processing')sA(fbEl,'data-collection','processing');else rA(fbEl,'data-collection');
-const t=gStr();syncLblsFor(sr);
+if(sn?.collection?.state==='processing')sA(fbEl,'data-collection','processing');else rA(fbEl,'data-collection');
+const t=gStr();sLb(sr);
 sT('rounds',sp.rounds>0?`${sp.rounds}r`:'—');sT('tps',isFin(sp.tps)&&sp.tps>0?sp.tps.toFixed(1):'—');
 sT('cache-total',`${fmtTok(tot>0?tot:uT)} tok`);sT('cache-rate',isFin(hit)?`${(hit*100).toFixed(1)}%`:'—');
 const sb=gE('subagent-badge');if(sb){if(subs>0){sb.hidden=false;const bt=t.agents(subs);if(sb.textContent!==bt)sb.textContent=bt;}else sb.hidden=true;}
 sT('context-percent',`${pct}%`);sT('ttft',isFin(sp.ttftSeconds)?`${sp.ttftSeconds.toFixed(2)}s`:'—');
 sT('latest-rate',isFin(sp.latestTps)?`${sp.latestTps.toFixed(1)} tok/s`:'—');
-sT('context-summary',t.summary(pct,Math.max(0,100-pct)));sT('context-tokens',`${fmtTok(uT)} / ${fmtTok(mT)} tok`);sT('context-model',model);
+sT('context-summary',t.summary(pct,mx(0,100-pct)));sT('context-tokens',`${fmtTok(uT)} / ${fmtTok(mT)} tok`);sT('context-model',model);
 const nE=gE('context-note');if(nE){nE.hidden=true;if(nE.textContent)nE.textContent='';}
 const fl=gE('context-fill');if(fl?.style)fl.style.width=`${pct}%`;
-gE('context-ring')?.style?.setProperty?.('--used-angle',`${Math.round(uf*360)}deg`);
-const qGs=Array.isArray(snap?.groups)&&(snap.groups.length||snap.connection!==LE)?(it.lastGroups=snap.groups):it.lastGroups;
+gE('context-ring')?.style?.setProperty?.('--used-angle',`${rd(uf*360)}deg`);
+const qGs=Array.isArray(sn?.groups)&&(sn.groups.length||sn.connection!==LE)?(it.lastGroups=sn.groups):it.lastGroups;
 const g=qGrp(qGs,model,gW()),gn=g?.name||g?.id||'',w5=qWin(g?.windows?.['5h']||g?.fiveHour),wW=qWin(g?.windows?.weekly||g?.weekly);
-let s5=!!w5,sW=!!wW;if(quotaMode!=='both'&&w5&&wW){if(wW.r<w5.r)s5=false;else sW=false;}
+let s5=!!w5,sW=!!wW;if(qm!=='both'&&w5&&wW){if(wW.r<w5.r)s5=false;else sW=false;}
 const setQ=(chip,id,w0,lbl,vis)=>{
 if(!chip)return;
 if(!w0){chip.hidden=true;rA(chip,DW);rA(chip,'title');sT(id,'—');return;}
-const p=Math.round(w0.r*100),e=qEta(w0.t);
+const p=rd(w0.r*100),e=qEta(w0.t);
 chip.hidden=!vis;sT(id,`${p}%`);wLvl(chip,w0.r);sA(chip,'title',`${gn?gn+' · ':''}${lbl} ${p}%${e?` (${e})`:''}`);
 };
 setQ(it.fChip,'five-balance',w5,t.fiveShort,s5);setQ(it.wChip,'week-balance',wW,t.weekShort,sW);
 if(!s5&&!sW)sA(fbEl,'data-no-q','1');else rA(fbEl,'data-no-q');
-sA(fbEl,'data-quota-mode',quotaMode);
+sA(fbEl,'data-quota-mode',qm);
 for(const[id,w0]of[['context-five-quota',w5],['context-week-quota',wW]]){
 const el=gE(id);if(!el)continue;
 if(!w0){if(el.textContent!=='—')el.textContent='—';rA(el,DW);continue;}
-const p=Math.round(w0.r*100),e=qEta(w0.t),txt=`${p}%${e?` · ${e}`:''}`;
+const p=rd(w0.r*100),e=qEta(w0.t),txt=`${p}%${e?` · ${e}`:''}`;
 if(el.textContent!==txt)el.textContent=txt;wLvl(el,w0.r);
 }
 const sR=isFin(sp.tps)&&sp.tps>0?`${sp.tps.toFixed(1)} tok/s`:isFin(sp.latestTps)&&sp.latestTps>0?`${sp.latestTps.toFixed(1)} tok/s`:'',sF=isFin(sp.ttftSeconds)?`TTFT ${sp.ttftSeconds.toFixed(2)}s`:'';
 sT('context-speed',sR&&sF?`${sR} · ${sF}`:sR||sF||'—');
 const cH=isFin(hit)?`${(hit*100).toFixed(1)}%`:'',cS=subs>0?t.agents(subs):'';
 sT('context-cache',cH&&cS?`${cH} · ${cS}`:cH||cS||'—');
-emitB(gW(),{event:'render',data:snap,host:fbEl,[CK]:it.cid});
+emitB(gW(),{event:'render',data:sn,host:fbEl,[CK]:it.cid});
 };
 
-const HID_ANC_SEL='.agy-home,aside,'+TI('conversation-list-sidebar')+','+TI('conversation-row-sidebar')+',[hidden],[inert]';
-const isHidAnc=e=>!e||e.hidden===true||e.style?.display==='none'||!!e.closest?.(HID_ANC_SEL);
-const isTopWrap=p=>{if(!p)return true;const c=String(p.className||'').trim();return!!(c&&/\bmin-w-0\b/.test(c)&&!/\b(?:flex|inline-flex|agy-composer-footer)\b/.test(c));};
-const findAnchors=(doc,knownConv=false)=>{
-if(!doc)return[];const w=gW();if(!knownConv&&!isConv(doc,w))return[];
-const out=[],seen=new Set(),boxMap=new Map(),isFt=e=>/\bagy-composer-footer\b/.test(String(e.className||''));
-for(const ft of qAll(doc,FT_SEL)){
-if(!ft||seen.has(ft)||isHidAnc(ft)||(!knownConv&&!isConv(doc,w,ft)))continue;
-const box=ft.closest?.(IB_S)||null;
-if(box){const prev=boxMap.get(box);if(prev){if(isFt(ft)&&!isFt(prev)){const idx=out.indexOf(prev);if(idx>=0)out[idx]=ft;seen.delete(prev);seen.add(ft);boxMap.set(box,ft);}continue;}boxMap.set(box,ft);}
-seen.add(ft);out.push(ft);
+const HA_S='.agy-home,aside,'+TI('conversation-list-sidebar')+','+TI('conversation-row-sidebar')+',[hidden],[inert]';
+const iHA=e=>!e||e.hidden===true||e.style?.display==='none'||!!e.closest?.(HA_S);
+const iTW=p=>{if(!p)return true;const c=String(p.className||'').trim();return!!(c&&/\bmin-w-0\b/.test(c)&&!/\b(?:flex|inline-flex|agy-composer-footer)\b/.test(c));};
+const fAn=(d,kC=false)=>{
+if(!d)return[];const w=gW();if(!kC&&!isConv(d,w))return[];
+const out=[],sn=new Set(),bm=new Map(),iF=e=>/\bagy-composer-footer\b/.test(String(e.className||''));
+for(const ft of qAll(d,FT_S)){
+if(!ft||sn.has(ft)||iHA(ft)||(!kC&&!isConv(d,w,ft)))continue;
+const bx=ft.closest?.(IB_S)||null;
+if(bx){const pv=bm.get(bx);if(pv){if(iF(ft)&&!iF(pv)){const i=out.indexOf(pv);if(i>=0)out[i]=ft;sn.delete(pv);sn.add(ft);bm.set(bx,ft);}continue;}bm.set(bx,ft);}
+sn.add(ft);out.push(ft);
 }
 if(out.length)return out;
-for(const mb of qAll(doc,MS_S)){const anc=mb?.parentElement;if(anc&&!seen.has(anc)&&!isHidAnc(mb)&&!isTopWrap(anc)&&(knownConv||isConv(doc,w,mb))){seen.add(anc);out.push(anc);}}
+for(const mb of qAll(d,MS_S)){const a=mb?.parentElement;if(a&&!sn.has(a)&&!iHA(mb)&&!iTW(a)&&(kC||isConv(d,w,mb))){sn.add(a);out.push(a);}}
 return out;
 };
-const hasAnyAnchor=(doc,knownConv=false)=>{
-if(!doc)return false;const w=gW();if(!knownConv&&!isConv(doc,w))return false;
-const ft=qS(doc,FT_SEL);if(ft&&!isHidAnc(ft)&&(knownConv||isConv(doc,w,ft)))return true;
-const mb=qS(doc,MS_S),anc=mb?.parentElement;return!!(anc&&!isHidAnc(mb)&&!isTopWrap(anc)&&(knownConv||isConv(doc,w,mb)));
+const hAA=(d,kC=false)=>{
+if(!d)return false;const w=gW();if(!kC&&!isConv(d,w))return false;
+const ft=qS(d,FT_S);if(ft&&!iHA(ft)&&(kC||isConv(d,w,ft)))return true;
+const mb=qS(d,MS_S),a=mb?.parentElement;return!!(a&&!iHA(mb)&&!iTW(a)&&(kC||isConv(d,w,mb)));
 };
-const seatIn=(anc,el)=>{
+const sIn=(anc,el)=>{
 if(!anc||!el)return false;const k=anc.children||[];
 if(/\bagy-composer-footer\b/.test(String(anc.className||''))&&k.length>=2&&isFn(anc.insertBefore)){const l=k[k.length-1];if(l&&l!==el){anc.insertBefore(el,l);return true;}}
 anc.appendChild(el);return true;
 };
 
-const allChips=it=>[it.fChip,it.wChip,it.cChip,it.sChip,it.xChip];
-const closeCards=(it,notify=false)=>{
-if(!it)return false;clrHover(it);it.pinned=null;it.hoverOpen=false;
+const aCh=it=>[it.fChip,it.wChip,it.cChip,it.sChip,it.xChip];
+const clC=(it,nt=false)=>{
+if(!it)return false;cHv(it);it.pinned=null;it.hoverOpen=false;
 if((!it.xCard||it.xCard.hidden)&&(!it.sCard||it.sCard.hidden))return false;
 if(it.xCard)it.xCard.hidden=true;if(it.sCard)it.sCard.hidden=true;
-for(const c of allChips(it))sA(c,AE_A,'false');
-if(notify)emitB(gW(),{event:'card',host:it.host,open:false});
+for(const c of aCh(it))sA(c,AE_A,'false');
+if(nt)emitB(gW(),{event:'card',host:it.host,open:false});
+if(pTm!==null)sPl();
 return true;
 };
-const openCard=(it,card,btn,pin)=>{
-if(!it||!card)return;clrHover(it);activeHost=it.host;
-for(const o of insts.values())if(o!==it)closeCards(o,false);
+const opC=(it,cd,b,pn)=>{
+if(!it||!cd)return;cHv(it);aH=it.host;
+for(const o of IS.values())if(o!==it)clC(o,false);
 it.sCard.hidden=it.xCard.hidden=true;
-for(const c of allChips(it))sA(c,AE_A,'false');
-card.hidden=false;if(btn)sA(btn,AE_A,'true');
-it.pinned=pin?card:null;it.hoverOpen=!pin;void refreshInst(it);
-emitB(gW(),{event:'card',host:it.host,open:true,data:it.snap||lastSnap});
+for(const c of aCh(it))sA(c,AE_A,'false');
+cd.hidden=false;if(b)sA(b,AE_A,'true');
+it.pinned=pn?cd:null;it.hoverOpen=!pn;void rIn(it);
+emitB(gW(),{event:'card',host:it.host,open:true,data:it.snap||lS});
+if(pTm!==null)sPl();
 };
-const ensDocClick=doc=>{if(!docOff&&doc&&isFn(doc.addEventListener))docOff=on(doc,'click',ev=>{for(const it of insts.values())if(ev?.target!==it.host&&!it.host.contains?.(ev?.target))closeCards(it,true);});};
-const isStaleResult=(it,reqCid,reqGen,multi)=>{
-if(insts.get(it.anc)!==it||!isConn(gD(),it.host)||reqGen!==it.reqGen)return true;
-if(reqCid&&it.cid&&it.cid!==reqCid)return true;
-const liveCid=detCid(it.host,multi);return!!(reqCid&&liveCid&&liveCid!==reqCid);
+const eDC=d=>{if(!dOff&&d&&isFn(d.addEventListener))dOff=on(d,'click',ev=>{for(const it of IS.values())if(ev?.target!==it.host&&!it.host.contains?.(ev?.target))clC(it,true);});};
+const iSR=(it,rC,rG,ml)=>{
+if(IS.get(it.anc)!==it||!iC(gD(),it.host)||rG!==it.reqGen)return true;
+if(rC&&it.cid&&it.cid!==rC)return true;
+const lc=dCd(it.host,ml);return!!(rC&&lc&&lc!==rC);
 };
-const refreshInst=async it=>{
-const doc=gD();if(!it||!doc||!isConn(doc,it.host)||mode==='off')return null;
-const multi=insts.size>1,cid=detCid(it.host,multi);
+const rIn=async it=>{
+const d=gD();if(!it||!d||!iC(d,it.host)||md==='off')return null;
+const ml=IS.size>1,cid=dCd(it.host,ml);
 if(cid!==it.cid){it.cid=cid;it.reqGen++;}
-const reqGen=it.reqGen,snap=await reqSnapSF(cid||`__inst_${reqGen}`,{[CK]:cid,force:false,[IK]:isCardOpen(it)},it.host);
-if(!isStaleResult(it,cid,reqGen,multi))applySnapToInst(it,snap);
-return snap;
+const rg=it.reqGen,sn=await rSF(cid||`__inst_${rg}`,{[CK]:cid,force:false,[IK]:iCO(it)},it.host);
+if(!iSR(it,cid,rg,ml)&&!(sn&&sn===it.snap&&it.pAt&&N0()-it.pAt<30000))apSn(it,sn);
+return sn;
 };
 
-const createBarInst=(doc,anc)=>{
-const E=(t,a,k)=>mk(doc,t,a,k),host=E('div',HOST_ATTRS);
+const cBI=(d,anc)=>{
+const E=(t,a,k)=>mk(d,t,a,k),host=E('div',HOST_ATTRS);
 if(!isFn(host.attachShadow))return null;
 const sr=host.attachShadow({mode:'open'});sr.appendChild(E('style',{text:SHADOW_CSS}));
 const t0=gStr(),btn=(c,k,ex)=>E('button',{type:'button',cls:'chip','data-card':c,...ex},k),dl=rows=>E('dl',null,rows.flatMap(([k,id])=>[E('dt',{'data-fb-i18n':k,text:t0[k]}),E('dd',{id,text:'—'})]));
@@ -561,256 +584,257 @@ xCard=E('section',{cls:'card context-card',id:'context-card',hidden:true},[E('di
 sr.appendChild(E('div',{cls:'bar'},[fChip,wChip,sChip,cChip,xChip]));sr.appendChild(sCard);sr.appendChild(xCard);
 
 const it={...mkTier(anc,host),sr,fChip,wChip,sChip,cChip,xChip,sCard,xCard,pinned:null,hoverOpen:false,hOpenTm:null,hCloseTm:null,cid:null,snap:null,lastGroups:null,reqGen:0};
-const markAct=()=>{activeHost=host;};on(host,'pointerdown',markAct);on(host,'focusin',markAct);
-const tog=(card,b)=>{if(!card.hidden&&it.pinned===card)closeCards(it,true);else openCard(it,card,b,true);};
-const onEnter=b=>{it.hCloseTm=cT(it.hCloseTm);if(!it.pinned&&xCard.hidden&&it.hOpenTm===null&&mode!=='off')it.hOpenTm=stTm(()=>{it.hOpenTm=null;if(mode!=='off'&&isConn(gD(),it.host)&&!it.pinned&&xCard.hidden)openCard(it,xCard,b,false);},HOVER_OPEN_MS);};
-const onLeave=()=>{it.hOpenTm=cT(it.hOpenTm);if(!it.pinned&&it.hoverOpen&&!xCard.hidden&&it.hCloseTm===null)it.hCloseTm=stTm(()=>{it.hCloseTm=null;if(!it.pinned&&it.hoverOpen&&!xCard.hidden)closeCards(it,true);},HOVER_CLOSE_MS);};
-const onCardEnter=()=>{it.hCloseTm=cT(it.hCloseTm);};
-const onCardDown=()=>{if(it.hoverOpen&&!xCard.hidden){clrHover(it);it.pinned=xCard;it.hoverOpen=false;}};
-for(const c of allChips(it)){for(const ev of['pointerenter','mouseenter'])on(c,ev,()=>onEnter(c));for(const ev of['pointerleave','mouseleave'])on(c,ev,onLeave);on(c,'click',e=>{e?.stopPropagation?.();tog(c===sChip?sCard:xCard,c);});}
-for(const ev of['pointerenter','mouseenter'])on(xCard,ev,onCardEnter);for(const ev of['pointerleave','mouseleave'])on(xCard,ev,onLeave);on(xCard,'pointerdown',onCardDown);
+const mA=()=>{aH=host;};on(host,'pointerdown',mA);on(host,'focusin',mA);
+const tg=(cd,b)=>{if(!cd.hidden&&it.pinned===cd)clC(it,true);else opC(it,cd,b,true);};
+const oE=b=>{it.hCloseTm=cT(it.hCloseTm);if(!it.pinned&&xCard.hidden&&it.hOpenTm===null&&md!=='off')it.hOpenTm=stTm(()=>{it.hOpenTm=null;if(md!=='off'&&iC(gD(),it.host)&&!it.pinned&&xCard.hidden)opC(it,xCard,b,false);},HOM);};
+const oL=()=>{it.hOpenTm=cT(it.hOpenTm);if(!it.pinned&&it.hoverOpen&&!xCard.hidden&&it.hCloseTm===null)it.hCloseTm=stTm(()=>{it.hCloseTm=null;if(!it.pinned&&it.hoverOpen&&!xCard.hidden)clC(it,true);},HCM);};
+const oCE=()=>{it.hCloseTm=cT(it.hCloseTm);};
+const oCD=()=>{if(it.hoverOpen&&!xCard.hidden){cHv(it);it.pinned=xCard;it.hoverOpen=false;}};
+for(const c of aCh(it)){for(const ev of['pointerenter','mouseenter'])on(c,ev,()=>oE(c));for(const ev of['pointerleave','mouseleave'])on(c,ev,oL);on(c,'click',e=>{e?.stopPropagation?.();tg(c===sChip?sCard:xCard,c);});}
+for(const ev of['pointerenter','mouseenter'])on(xCard,ev,oCE);for(const ev of['pointerleave','mouseleave'])on(xCard,ev,oL);on(xCard,'pointerdown',oCD);
 
-seatIn(anc,host);insts.set(anc,it);instByHost.set(host,it);syncHostAttrs(host);attachTierRec(it);
-const initCid=detCid(host,insts.size>1);
-if(initCid){it.cid=initCid;const cached=getCidSnap(initCid);if(cached)applySnapToInst(it,cached);}
+sIn(anc,host);IS.set(anc,it);IH.set(host,it);syH(host);atT(it);
+const iCid=dCd(host,IS.size>1);
+if(iCid){it.cid=iCid;const c=gCS(iCid);if(c)apSn(it,c);}
 return it;
 };
 
-const reconcileBars=doc=>{
-const w=gW();if(!doc||!w)return{mounted:false,added:[],reseated:[]};
-const anchors=findAnchors(doc,true),ancSet=new Set(anchors);
-for(const[anc,it]of[...insts.entries()])if(!ancSet.has(anc)||!isConn(doc,anc))disposeInst(it,true);
+const recB=d=>{
+const w=gW();if(!d||!w)return{mounted:false,added:[],reseated:[]};
+const ancs=fAn(d,true),aS=new Set(ancs);
+for(const[a,it]of[...IS.entries()])if(!aS.has(a)||!iC(d,a))dIn(it,true);
 const added=[],reseated=[];
-for(const anc of anchors){
-const ex=insts.get(anc);
-if(ex){if(!isConn(doc,ex.host)||ex.host.parentElement!==anc)try{seatIn(anc,ex.host);reseated.push(ex);}catch{}attachTierRec(ex);}
-else{const cr=createBarInst(doc,anc);if(cr)added.push(cr);}
+for(const a of ancs){
+const ex=IS.get(a);
+if(ex){if(!iC(d,ex.host)||ex.host.parentElement!==a)try{sIn(a,ex.host);reseated.push(ex);}catch{}atT(ex);}
+else{const cr=cBI(d,a);if(cr)added.push(cr);}
 }
-syncPrimaryId();purgeOrphans(doc);
-if(insts.size){clrExtTiers();ensDocClick(doc);ensCompactWatch(doc);yielded=false;}else{if(docOff){try{docOff();}catch{}docOff=null;}clrCompactWatch();clrBurst();clrPoll();}
+syPI();pOr(d);
+if(IS.size){cET();eDC(d);enCW(d);yld=false;}else{if(dOff){try{dOff();}catch{}dOff=null;}clCW();cBs();cPl();}
 for(const x of added)emitB(w,{event:'mount',host:x.host});
 for(const x of reseated)emitB(w,{event:'mount',host:x.host});
-return{mounted:insts.size>0,added,reseated};
+return{mounted:IS.size>0,added,reseated};
 };
 
-const isHcPortal=el=>{
-if(!el||el.tagName==='BODY'||el.tagName==='HTML')return false;
-const h=(n,k)=>!!n?.hasAttribute?.(k),f=el.firstElementChild;
-return h(el,HC_A)||h(f,HC_A)||h(f?.firstElementChild,HC_A)||(h(el,'data-base-ui-portal')&&!!qS(el,'['+HC_A+']'));
+const iHP=e=>{
+if(!e||e.tagName==='BODY'||e.tagName==='HTML')return false;
+const h=(n,k)=>!!n?.hasAttribute?.(k),f=e.firstElementChild;
+return h(e,HC_A)||h(f,HC_A)||h(f?.firstElementChild,HC_A)||(h(e,'data-base-ui-portal')&&!!qS(e,'['+HC_A+']'));
 };
-const isIgnoredStreamNode=t=>{const el=t?.nodeType===1?t:t?.parentElement;return!!(el&&(isHcPortal(el)||(el.closest&&!el.closest(FT_SEL)&&el.closest(IGN_STREAM_SEL))));};
-const anchorsChanged=doc=>{
-const ancs=findAnchors(doc,true);if(ancs.length!==insts.size)return true;
-for(const a of ancs){const it=insts.get(a);if(!it||!isConn(doc,it.host)||it.host.parentElement!==a)return true;}
+const ignNd=t=>{const e=t?.nodeType===1?t:t?.parentElement;return!!(e&&(iHP(e)||(e.closest&&!e.closest(FT_S)&&e.closest(IGN_S))));};
+const aChg=d=>{
+const a=fAn(d,true);if(a.length!==IS.size)return true;
+for(const x of a){const it=IS.get(x);if(!it||!iC(d,it.host)||it.host.parentElement!==x)return true;}
 return false;
 };
 
-const readBoxText=n=>{const b=n?.closest?.(IB_S),ed=(b&&qS(b,'[contenteditable="true"],textarea,input'))||n;return String(ed?.value??ed?.innerText??ed?.textContent??'').replace(/\u200B/g,'').trim();};
-const hasBusyBtn=doc=>{const e=qS(doc,BUSY_SEL);return!!(e&&e.hidden!==true&&e.style?.display!=='none');};
-const isCompactedDrop=(b,s)=>{
+const rBT=n=>{const b=n?.closest?.(IB_S),ed=(b&&qS(b,'[contenteditable="true"],textarea,input'))||n;return String(ed?.value??ed?.innerText??ed?.textContent??'').replace(/\u200B/g,'').trim();};
+const hBs=d=>{const e=qS(d,BSY_S);return!!(e&&e.hidden!==true&&e.style?.display!=='none');};
+const iCD=(b,s)=>{
 const x=s?.speed?.context;if(!x||s?.connection===LE)return false;
 const u=isFin(x.usedTokens)?x.usedTokens:null,f=isFin(x.usedFraction)?x.usedFraction:null,c=!!(x.compacted||x.estimatedAfterCompaction);
 return(c&&(!b||!b.c||(u!==null&&b.u!==null&&u<b.u*.85)))||(b&&b.u>0&&u!==null&&u<b.u*.72)||!!(b&&b.f>.15&&f!==null&&f<b.f-.12);
 };
-const armCompactBurst=(sc=null,cidH=null,ds=null)=>{
-if(mode==='off'||isBlur()||!insts.size)return false;
-const bar=sc?getBarForView(sc):null,ins=(bar&&instByHost.get(bar))||resolveActiveInst();
-const cid=(isStr(cidH)&&GUID_RE.test(cidH)?cidH:null)||detCid(sc||ins?.host,insts.size>1)||ins?.cid||null;
-const p=ins?.snap?.speed?.context||(cid&&snapByCid.get(cid)?.speed?.context)||lastSnap?.speed?.context,seq=ds?.length?ds:BURST_STEPS;
-clrBurst();const gen=burstGen;burstCid=cid;
-burstBase=p?{u:isFin(p.usedTokens)?p.usedTokens:null,f:isFin(p.usedFraction)?p.usedFraction:null,c:!!(p.compacted||p.estimatedAfterCompaction)}:null;
-const tick=()=>{
-if(gen!==burstGen)return;
-burstTm=null;if(mode==='off'||isBlur()||!insts.size)return clrBurst();
-const tg=burstCid;
+const armB=(sc=null,cH=null,ds=null)=>{
+if(md==='off'||iBl()||!IS.size)return false;
+const b=sc?gBV(sc):null,ins=(b&&IH.get(b))||actIn();
+const cid=(isStr(cH)&&GRE.test(cH)?cH:null)||dCd(sc||ins?.host,IS.size>1)||ins?.cid||null;
+const p=ins?.snap?.speed?.context||(cid&&SC.get(cid)?.speed?.context)||lS?.speed?.context,sq=ds?.length?ds:BST;
+cBs();const gn=bGen;bCid=cid;
+bBase=p?{u:isFin(p.usedTokens)?p.usedTokens:null,f:isFin(p.usedFraction)?p.usedFraction:null,c:!!(p.compacted||p.estimatedAfterCompaction)}:null;
+const tk=()=>{
+if(gn!==bGen)return;
+bTm=null;if(md==='off'||iBl()||!IS.size)return cBs();
+const tg=bCid;
 void refresh({immediate:true,freshContext:true,cascadeId:tg}).then(s=>{
-if(gen!==burstGen||burstCid!==tg)return;
-if(isCompactedDrop(burstBase,s)||burstIdx>=seq.length)return clrBurst();
-burstTm=stTm(tick,seq[burstIdx++]);
-}).catch(()=>{if(gen===burstGen)clrBurst();});
+if(gn!==bGen||bCid!==tg)return;
+if(iCD(bBase,s)||bIdx>=sq.length)return cBs();
+bTm=stTm(tk,sq[bIdx++]);
+}).catch(()=>{if(gn===bGen)cBs();});
 };
-burstTm=stTm(tick,seq[burstIdx++]);return true;
+bTm=stTm(tk,sq[bIdx++]);return true;
 };
-const ensCompactWatch=doc=>{
-const w=gW();if(cmpOff||!doc||mode==='off')return;
-wasBusy=hasBusyBtn(doc);
-const hitPick=()=>pickCmpAt&&Date.now()-pickCmpAt<4000;
+const enCW=d=>{
+const w=gW();if(cOff||!d||md==='off')return;
+wBsy=hBs(d);
+const hP=()=>pCmpAt&&N0()-pCmpAt<4000;
 const u=[
-on(doc,'keydown',ev=>{if(mode!=='off'&&ev?.key==='Enter'&&!ev.shiftKey&&!ev.ctrlKey&&!ev.altKey&&!ev.metaKey&&!ev.isComposing){const t=ev.target;if(t?.closest?.(IB_S+',[contenteditable="true"],textarea')){const x=readBoxText(t);if(CMP_RE.test(x)||(hitPick()&&(!x||CMP_RE.test(x)))){pickCmpAt=0;armCompactBurst(t);}}}},true),
-on(doc,'click',ev=>{const t=ev?.target;if(mode==='off'||!t?.closest)return;const o=t.closest(SLASH_OPT_SEL);if(o&&/^\s*\/?compact(?:\s|$)/i.test(String(o.textContent||''))){pickCmpAt=Date.now();armCompactBurst(t,null,[700,1100,1500,2000]);return;}const b=t.closest(SEND_SEL);if(b&&(CMP_RE.test(readBoxText(b))||hitPick())){pickCmpAt=0;armCompactBurst(b);}},true),
-on(w,'ag-prism:compact',ev=>{if(mode!=='off')armCompactBurst(null,ev?.detail?.conversationId||null,ev?.detail?.delays||null);}),
+on(d,'keydown',ev=>{if(md!=='off'&&ev?.key==='Enter'&&!ev.shiftKey&&!ev.ctrlKey&&!ev.altKey&&!ev.metaKey&&!ev.isComposing){const t=ev.target;if(t?.closest?.(IB_S+',[contenteditable="true"],textarea')){const x=rBT(t);if(CMP_RE.test(x)||(hP()&&(!x||CMP_RE.test(x)))){pCmpAt=0;armB(t);}}}},true),
+on(d,'click',ev=>{const t=ev?.target;if(md==='off'||!t?.closest)return;const o=t.closest(SLO_S);if(o&&/^\s*\/?compact(?:\s|$)/i.test(String(o.textContent||''))){pCmpAt=N0();armB(t,null,[700,1100,1500,2000]);return;}const b=t.closest(SND_S);if(b&&(CMP_RE.test(rBT(b))||hP())){pCmpAt=0;armB(b);}},true),
+on(w,'ag-prism:compact',ev=>{if(md!=='off')armB(null,ev?.detail?.conversationId||null,ev?.detail?.delays||null);}),
 ];
-cmpOff=()=>{for(const f of u)f();};
+cOff=()=>{for(const f of u)f();};
 };
 
-const schedSwitchRefresh=tCid=>{clrPoll();clrSw();clrBurst();swTm=stTm(()=>{swTm=null;if(mode!=='off'&&insts.size)void refresh({immediate:true,cascadeId:tCid}).finally(()=>{if(insts.size&&mode!=='off'&&!isBlur())startPoll();});},SW_DEBOUNCE_MS);};
-const checkConvSwitch=(doc,w,fromRoute=false)=>{
-const cH=readRouteKey(w),uCh=cH!==lastHref,cUc=extractUrlCid(w),ucCh=!!(cUc&&cUc!==lastUrlCid);
-if(uCh)lastHref=cH;if(cUc)lastUrlCid=cUc;
-if(!insts.size)return false;
-const multi=insts.size>1;let sw=false,tCid=null;
-for(const it of insts.values()){
-if(!isConn(doc,it.host))continue;
-const nCid=!multi&&(fromRoute||ucCh)&&cUc?cUc:detCid(it.host,multi);
-if(nCid!==it.cid){sw=true;tCid=nCid;it.cid=nCid;it.reqGen++;const c=nCid?getCidSnap(nCid):null;if(c)applySnapToInst(it,c);}
-else if(fromRoute&&uCh){sw=true;tCid=nCid;it.reqGen++;}
+const sSR=tC=>{cPl();cSw();cBs();swTm=stTm(()=>{swTm=null;if(md!=='off'&&IS.size)void refresh({immediate:true,cascadeId:tC}).finally(()=>{if(IS.size&&md!=='off'&&!iBl())sPl();});},SWM);};
+const chkSw=(d,w,fR=false)=>{
+const cH=rRK(w),uC=cH!==lHr,cU=eUC(w),uU=!!(cU&&cU!==lUC);
+if(uC)lHr=cH;if(cU)lUC=cU;
+if(!IS.size)return false;
+const ml=IS.size>1;let sw=false,tC=null;
+for(const it of IS.values()){
+if(!iC(d,it.host))continue;
+const nC=!ml&&(fR||uU)&&cU?cU:dCd(it.host,ml);
+if(nC!==it.cid){sw=true;tC=nC;it.cid=nC;it.reqGen++;const c=nC?gCS(nC):null;if(c)apSn(it,c);}
+else if(fR&&uC){sw=true;tC=nC;it.reqGen++;}
 }
-if(sw)schedSwitchRefresh(tCid);
+if(sw)sSR(tC);
 return sw;
 };
 
-const ensSeatObs=()=>{
-const w=gW(),doc=gD();if(!w||!doc||mode==='off')return;
-if(!lastHref)lastHref=readRouteKey(w);if(!lastUrlCid)lastUrlCid=extractUrlCid(w)||'';
-const runHeal=()=>{
-healTm=null;lastHealAt=Date.now();if(mode==='off')return;
-const d=gD(),wn=gW();if(!d||!wn)return;
-if(!isConv(d,wn)){yielded=false;if(insts.size)unmountFb(true);hideExt(false);return;}
-if(mode==='on')hideExt(true);else{showExt();if(hasExt(null,true)){yielded=true;if(insts.size)unmountFb(true);ensTierObs();return;}}
-if(insts.size){const res=reconcileBars(d),sw=checkConvSwitch(d,wn,false);if(res.added.length&&!sw)void refresh();else if(insts.size)ensTierObs();}
-else if((mode==='on'||waitTm===null)&&findAnchors(d,true).length)mountFb();
+const eSO=()=>{
+const w=gW(),d=gD();if(!w||!d||md==='off')return;
+if(!lHr)lHr=rRK(w);if(!lUC)lUC=eUC(w)||'';
+const rH=()=>{
+hTm=null;lHlAt=N0();if(md==='off')return;
+const dc=gD(),wn=gW();if(!dc||!wn)return;
+if(!isConv(dc,wn)){yld=false;if(IS.size)uFb(true);hdEx(false);return;}
+if(md==='on')hdEx(true);else{sEx();if(hEx(null,true)){yld=true;if(IS.size)uFb(true);eTO();return;}}
+if(IS.size){const r=recB(dc),sw=chkSw(dc,wn,false);if(r.added.length&&!sw)void refresh();else if(IS.size)eTO();}
+else if((md==='on'||wTm===null)&&fAn(dc,true).length)mFb();
 };
-const schedHeal=(fast=false)=>{if(mode!=='off'&&healTm===null)healTm=stTm(runHeal,fast||Date.now()-lastHealAt>=180?45:180);};
-if(!seatObs&&(doc.body||doc.documentElement)){
-seatObs=subMo('pulse-seat',doc.body||doc.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:[CID_A]},recs=>{
-if(mode==='off')return;
-if(Array.isArray(recs)&&recs.length){
-const ignAll=l=>{if(l)for(let j=0;j<l.length;j++)if(!isIgnoredStreamNode(l[j]))return false;return true;};
-let rel=false;
-for(const r of recs){const a=r?.addedNodes,rm=r?.removedNodes;if(r?.type==='attributes'&&r?.attributeName===CID_A){rel=true;break;}if(isIgnoredStreamNode(r?.target)||(((a?.length||0)+(rm?.length||0))&&ignAll(a)&&ignAll(rm)))continue;rel=true;break;}
-if(!rel)return;
+const sH=(f=false)=>{if(md!=='off'&&hTm===null)hTm=stTm(rH,f||N0()-lHlAt>=180?45:180);};
+if(!sObs&&(d.body||d.documentElement)){
+sObs=subMo('pulse-seat',d.body||d.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:[CID_A]},rs=>{
+if(md==='off')return;
+if(Array.isArray(rs)&&rs.length){
+const iA=l=>{if(l)for(let j=0;j<l.length;j++)if(!ignNd(l[j]))return false;return true;};
+let rl=false;
+for(const r of rs){const a=r?.addedNodes,rm=r?.removedNodes;if(r?.type==='attributes'&&r?.attributeName===CID_A){rl=true;break;}if(ignNd(r?.target)||(((a?.length||0)+(rm?.length||0))&&iA(a)&&iA(rm)))continue;rl=true;break;}
+if(!rl)return;
 }
-const inC=isConv(doc,w);let bars=null;
-const gB=()=>bars||(bars=findExtBars(doc)),visB=b=>b&&gA(b,HID_ATTR)!=='1';
-if(!inC){if(insts.size||gB().some(visB))schedHeal(true);return;}
-if(insts.size){
-if(mode==='auto'&&hasExt(gB(),true)){schedHeal(true);return;}
-const nowB=hasBusyBtn(doc);
-if(wasBusy&&!nowB){wasBusy=false;armCompactBurst(null,null,[180,650,1100]);}else wasBusy=nowB;
-const sw=checkConvSwitch(doc,w,false);if(anchorsChanged(doc)){schedHeal(sw);return;}if(sw)return;
-}else if(waitTm===null&&!hasExt(gB(),true)&&hasAnyAnchor(doc,true)){schedHeal(true);return;}
-if(healTm!==null)return;
-const extMissingTier=gB().some(b=>visB(b)&&b.shadowRoot&&!qS(b.shadowRoot,`style[${TIER_STYLE_ATTR}="1"]`));
-let deadExt=false;for(const anc of extTiers.keys())if(!isConn(doc,anc)){deadExt=true;break;}
-if(deadExt||extMissingTier||(mode==='on'&&gB().some(b=>visB(b)&&gA(b,FALLBACK_ATTR)!=='1')))schedHeal(false);
+const inC=isConv(d,w);let bs=null;
+const gB=()=>bs||(bs=fEB(d)),vB=b=>b&&gA(b,HA)!=='1';
+if(!inC){if(IS.size||gB().some(vB))sH(true);return;}
+if(IS.size){
+if(md==='auto'&&hEx(gB(),true)){sH(true);return;}
+const nB=hBs(d);
+if(wBsy&&!nB){wBsy=false;armB(null,null,[180,650,1100]);}else wBsy=nB;
+const sw=chkSw(d,w,false);if(aChg(d)){sH(sw);return;}if(sw)return;
+}else if(wTm===null&&!hEx(gB(),true)&&hAA(d,true)){sH(true);return;}
+if(hTm!==null)return;
+const eMT=gB().some(b=>vB(b)&&b.shadowRoot&&!qS(b.shadowRoot,`style[${TSA}="1"]`));
+let dE=false;for(const a of ET.keys())if(!iC(d,a)){dE=true;break;}
+if(dE||eMT||(md==='on'&&gB().some(b=>vB(b)&&gA(b,FA)!=='1')))sH(false);
 },'low');
 }
-if(!popOff){
-const onRoute=()=>{if(mode==='off')return;const d=gD(),wn=gW();if(!d||!wn)return;if(!isConv(d,wn)||!insts.size){schedHeal(true);return;}checkConvSwitch(d,wn,true);if(anchorsChanged(d))schedHeal(true);};
-const offs=[isFn(w.addEventListener)?on(w,'popstate',onRoute):null,isFn(w.addEventListener)?on(w,'hashchange',onRoute):null,subHistory(w,onRoute)].filter(Boolean);
-if(offs.length)popOff=()=>{for(const f of offs)try{f();}catch{}};
+if(!pOff){
+const oR=()=>{if(md==='off')return;const dc=gD(),wn=gW();if(!dc||!wn)return;if(!isConv(dc,wn)||!IS.size){sH(true);return;}chkSw(dc,wn,true);if(aChg(dc))sH(true);};
+const os=[isFn(w.addEventListener)?on(w,'popstate',oR):null,isFn(w.addEventListener)?on(w,'hashchange',oR):null,subHistory(w,oR)].filter(Boolean);
+if(os.length)pOff=()=>{for(const f of os)try{f();}catch{}};
 }
 };
 
 async function refresh(opts){
-const w=gW(),doc=gD();
-if(!envOpts&&w?.__agPrismTelemetry&&w.__agPrismTelemetry!==api){unmountFb();return null;}
-if(!isConv(doc,w)){yielded=false;unmountFb(true);if(mode!=='off')hideExt();return null;}
-if(mode==='on')hideExt(true);else{showExt();if(hasExt(null,true)){yielded=true;unmountFb(true);ensTierObs();return null;}}
-if(mode!=='off'&&(insts.size||((mode==='on'||!hasExt(null,true))&&waitTm===null&&findAnchors(doc,true).length)))reconcileBars(doc);
-if(!insts.size)return null;
-if(opts?.immediate)clrSw();
-ensTierObs();
-const live=[...insts.values()].filter(it=>isConn(doc,it.host));if(!live.length)return null;
-wasBusy=hasBusyBtn(doc);
-const multi=live.length>1,force=!!opts?.force,fc=!!opts?.freshContext,hCid=!multi&&isStr(opts?.cascadeId)&&GUID_RE.test(opts.cascadeId)?opts.cascadeId:null;
-const reqByKey=new Map(),plan=[];
-for(let i=0;i<live.length;i++){
-const it=live[i],nCid=hCid||detCid(it.host,multi);
-if(nCid!==it.cid){it.cid=nCid;it.reqGen++;const c=nCid?getCidSnap(nCid):null;if(c)applySnapToInst(it,c);}
+const w=gW(),d=gD();
+if(!envOpts&&w?.__agPrismTelemetry&&w.__agPrismTelemetry!==api){uFb();return null;}
+if(!isConv(d,w)){yld=false;uFb(true);if(md!=='off')hdEx();return null;}
+if(md==='on')hdEx(true);else{sEx();if(hEx(null,true)){yld=true;uFb(true);eTO();return null;}}
+if(md!=='off'&&(IS.size||((md==='on'||!hEx(null,true))&&wTm===null&&fAn(d,true).length)))recB(d);
+if(!IS.size)return null;
+if(opts?.immediate)cSw();
+eTO();
+const lv=[...IS.values()].filter(it=>iC(d,it.host));if(!lv.length)return null;
+wBsy=hBs(d);
+const ml=lv.length>1,fc0=!!opts?.force,fc=!!opts?.freshContext,iP=!!opts?.poll,hC=!ml&&isStr(opts?.cascadeId)&&GRE.test(opts.cascadeId)?opts.cascadeId:null;
+const rBK=new Map(),pl=[];
+for(let i=0;i<lv.length;i++){
+const it=lv[i],nC=hC||dCd(it.host,ml);
+if(nC!==it.cid){it.cid=nC;it.reqGen++;const c=nC?gCS(nC):null;if(c)apSn(it,c);}
 else if(fc)it.reqGen++;
-const key=it.cid||`__pane_${i}`;
-plan.push({it,reqCid:it.cid,reqGen:it.reqGen,key});
-if(!reqByKey.has(key))reqByKey.set(key,reqSnapSF(key,{[CK]:it.cid,force,[IK]:isCardOpen(it),...(fc?{freshContext:true}:{})},it.host));
+const key=it.cid||`__pane_${i}`,op=iCO(it);
+pl.push({it,rC:it.cid,rG:it.reqGen,key});
+if(!rBK.has(key))rBK.set(key,rSF(key,{[CK]:it.cid,force:fc0,[IK]:op,...(fc?{freshContext:true}:{}),...(iP&&!fc0&&!fc?{maxAgeMs:(op||wBsy)?2400:4500}:{})},it.host));
 }
-const snaps=new Map();
-await Promise.all([...reqByKey.entries()].map(async([k,p])=>{snaps.set(k,await p);}));
-let actSnap=null;const act=resolveActiveInst();
-for(let i=0;i<plan.length;i++){
-const{it,reqCid,reqGen,key}=plan[i],snap=snaps.get(key)||null;
-if(isStaleResult(it,reqCid,reqGen,multi))continue;
-applySnapToInst(it,snap);if(it===act||(!act&&i===0))actSnap=snap;
+const sns=new Map();
+await Promise.all([...rBK.entries()].map(async([k,p])=>{sns.set(k,await p);}));
+let aS=null;const act=actIn();
+for(let i=0;i<pl.length;i++){
+const{it,rC,rG,key}=pl[i],sn=sns.get(key)||null;
+if(iSR(it,rC,rG,ml))continue;
+if(!(sn&&sn===it.snap&&it.pAt&&N0()-it.pAt<30000))apSn(it,sn);
+if(it===act||(!act&&i===0))aS=sn;
 }
-return actSnap??lastSnap;
+return aS??lS;
 }
 
-function mountFb(){
-const w=gW(),doc=gD();
-if(!w||!doc||(typeof doc.attachShadow==='undefined'&&!isFn(doc.createElement)))return false;
-if(!envOpts&&w.__agPrismTelemetry&&w.__agPrismTelemetry!==api){unmountFb();return false;}
-if(mode==='off')return false;
-if(!isConv(doc,w)){yielded=false;unmountFb(true);hideExt();ensSeatObs();return false;}
-if(mode==='on')hideExt(true);else if(hasExt(null,true)){yielded=true;unmountFb(true);ensSeatObs();return false;}
-const res=reconcileBars(doc);ensSeatObs();if(!res.mounted)return false;
-ensHost();ensTierObs();ensBlur();lastHref=readRouteKey(w);lastUrlCid=extractUrlCid(w)||'';
-if(res.added.length||pollTm===null){void refresh();startPoll();}
+function mFb(){
+const w=gW(),d=gD();
+if(!w||!d||(typeof d.attachShadow==='undefined'&&!isFn(d.createElement)))return false;
+if(!envOpts&&w.__agPrismTelemetry&&w.__agPrismTelemetry!==api){uFb();return false;}
+if(md==='off')return false;
+if(!isConv(d,w)){yld=false;uFb(true);hdEx();eSO();return false;}
+if(md==='on')hdEx(true);else if(hEx(null,true)){yld=true;uFb(true);eSO();return false;}
+const r=recB(d);eSO();if(!r.mounted)return false;
+eHs();eTO();eBl();lHr=rRK(w);lUC=eUC(w)||'';
+if(r.added.length||pTm===null){void refresh();sPl();}
 return true;
 }
 
-const getBars=()=>{const doc=gD(),out=[];for(const it of insts.values())if(isConn(doc,it.host))out.push(it.host);return out;};
-const getBarForView=node=>{
-const doc=gD();if(!node||!doc)return null;
-const d=instByHost.get(node);if(d&&isConn(doc,d.host))return d.host;
-const sel=CV_S+','+IB_S+',.agy-composer-footer',cv=node.matches?.(sel)?node:node.closest?.(sel);
+const getBars=()=>{const d=gD(),o=[];for(const it of IS.values())if(iC(d,it.host))o.push(it.host);return o;};
+const gBV=n=>{
+const d=gD();if(!n||!d)return null;
+const x=IH.get(n);if(x&&iC(d,x.host))return x.host;
+const s=CV_S+','+IB_S+',.agy-composer-footer',cv=n.matches?.(s)?n:n.closest?.(s);
 if(cv){
-for(const it of insts.values())if(isConn(doc,it.host)&&(cv===it.anc||cv.contains?.(it.anc)||it.anc.contains?.(cv)))return it.host;
-const ext=qS(cv,`#${BAR_ID},[data-ag-pulse-bar="true"]`);if(ext&&usableExt(doc,ext))return ext;
+for(const it of IS.values())if(iC(d,it.host)&&(cv===it.anc||cv.contains?.(it.anc)||it.anc.contains?.(cv)))return it.host;
+const ex=qS(cv,`#${BI},[data-ag-pulse-bar="true"]`);if(ex&&uEx(d,ex))return ex;
 }
 return null;
 };
-const setActiveBar=target=>{
-const doc=gD();if(!target){activeHost=null;return null;}
-const h=instByHost.has(target)?target:getBarForView(target);if(!h||!isConn(doc,h))return null;
-activeHost=h;emitB(gW(),{event:'focus',host:h,data:instByHost.get(h)?.snap||lastSnap});return h;
+const setActiveBar=t=>{
+const d=gD();if(!t){aH=null;return null;}
+const h=IH.has(t)?t:gBV(t);if(!h||!iC(d,h))return null;
+aH=h;emitB(gW(),{event:'focus',host:h,data:IH.get(h)?.snap||lS});return h;
 };
 const getSnapshotForBar=x=>{
-if(!x)return resolveActiveInst()?.snap||lastSnap;
-if(isStr(x))return snapByCid.get(x)||lastSnap;
-const it=instByHost.get(x)||instByHost.get(getBarForView(x));
-return it?.snap||(it?.cid&&snapByCid.get(it.cid))||lastSnap;
+if(!x)return actIn()?.snap||lS;
+if(isStr(x))return SC.get(x)||lS;
+const it=IH.get(x)||IH.get(gBV(x));
+return it?.snap||(it?.cid&&SC.get(it.cid))||lS;
 };
 const getState=()=>{
-const doc=gD();let n=0;for(const it of insts.values())if(isConn(doc,it.host))n++;
-const m=n>0,bl=isBlur();if(m&&bl&&pollTm!==null){pollSusp=true;clrPoll();}
-return{mode,quotaMode,mountedFallback:m,mountedCount:n,waitingForExternal:waitTm!==null,yieldedToExternal:!!(mode==='auto'&&(yielded||hasExt())),hasExternal:hasExt(),pollSuspended:!!(m&&(pollSusp||bl))};
+const d=gD();let n=0;for(const it of IS.values())if(iC(d,it.host))n++;
+const m=n>0,bl=iBl();if(m&&bl&&pTm!==null){pSp=true;cPl();}
+return{mode:md,quotaMode:qm,mountedFallback:m,mountedCount:n,waitingForExternal:wTm!==null,yieldedToExternal:!!(md==='auto'&&(yld||hEx())),hasExternal:hEx(),pollSuspended:!!(m&&(pSp||bl)),pollIntervalMs:m&&pTm!==null?gPM():0};
 };
 
 function sync(cfg){
-if(cfg&&isStr(cfg.language)&&cfg.language)expLang=cfg.language.trim().toLowerCase()==='auto'?'':normFbLang(cfg.language,gW());
-if(cfg&&Object.hasOwn(cfg,'telemetryQuotaMode'))quotaMode=cfg.telemetryQuotaMode==='both'?'both':'compact';
-else{const aQm=readAttrQuotaMode();if(aQm)quotaMode=aQm;}
-const raw=cfg?.telemetryModule;mode=raw==='on'||raw==='off'?raw:'auto';
-if(insts.size&&mode!=='off')for(const it of insts.values()){syncLblsFor(it.sr);if(it.snap||lastSnap)applySnapToInst(it,it.snap||lastSnap);}
-if(mode==='off'){yielded=false;unmountFb();hideExt();return getState();}
-ensBridge();ensSeatObs();
-const doc=gD(),w=gW();
-if(!isConv(doc,w)){yielded=false;unmountFb(true);hideExt();ensHost();return getState();}
-if(mode==='on'){yielded=false;clrWait();hideExt(true);ensHost();mountFb();return getState();}
-showExt();
-if(hasExt()){
-yielded=true;unmountFb(true);ensHost();ensTierObs();
-if(detAt>0&&rescTm===null)rescTm=stTm(()=>{rescTm=null;if(mode!=='off'&&!hasExt())mountFb();},GRACE_MS+60);
+if(cfg&&isStr(cfg.language)&&cfg.language)eLng=cfg.language.trim().toLowerCase()==='auto'?'':normFbLang(cfg.language,gW());
+if(cfg&&Object.hasOwn(cfg,'telemetryQuotaMode'))qm=cfg.telemetryQuotaMode==='both'?'both':'compact';
+else{const a=rdQm();if(a)qm=a;}
+const raw=cfg?.telemetryModule;md=raw==='on'||raw==='off'?raw:'auto';
+if(IS.size&&md!=='off')for(const it of IS.values()){sLb(it.sr);if(it.snap||lS)apSn(it,it.snap||lS);}
+if(md==='off'){yld=false;uFb();hdEx();return getState();}
+eBr();eSO();
+const d=gD(),w=gW();
+if(!isConv(d,w)){yld=false;uFb(true);hdEx();eHs();return getState();}
+if(md==='on'){yld=false;cWt();hdEx(true);eHs();mFb();return getState();}
+sEx();
+if(hEx()){
+yld=true;uFb(true);eHs();eTO();
+if(dAt>0&&rTm===null)rTm=stTm(()=>{rTm=null;if(md!=='off'&&!hEx())mFb();},GM+60);
 return getState();
 }
-if(insts.size){reconcileBars(doc);if(insts.size)return getState();}
-if(findExtBars(doc).some(b=>b&&gA(b,FALLBACK_ATTR)!=='1'&&isConn(doc,b)&&!usableExt(doc,b))){clrWait();mountFb();return getState();}
-if(waitTm===null)waitTm=stTm(waitTimerDone,isFin(cfg?.__fallbackDelayMs)&&cfg.__fallbackDelayMs>=0?cfg.__fallbackDelayMs:WAIT_MS);
+if(IS.size){recB(d);if(IS.size)return getState();}
+if(fEB(d).some(b=>b&&gA(b,FA)!=='1'&&iC(d,b)&&!uEx(d,b))){cWt();mFb();return getState();}
+if(wTm===null)wTm=stTm(wTD,isFin(cfg?.__fallbackDelayMs)&&cfg.__fallbackDelayMs>=0?cfg.__fallbackDelayMs:WM);
 return getState();
 }
-function waitTimerDone(){
-waitTm=null;if(mode!=='auto')return;
-if(!isConv(gD(),gW())){unmountFb(true);hideExt();return;}
-if(hasExt()){yielded=true;unmountFb(true);ensHost();ensTierObs();return;}
-mountFb();
+function wTD(){
+wTm=null;if(md!=='auto')return;
+if(!isConv(gD(),gW())){uFb(true);hdEx();return;}
+if(hEx()){yld=true;uFb(true);eHs();eTO();return;}
+mFb();
 }
 function destroy(){
-clrWait();clrSw();clrBurst();clrCompactWatch();clrSeat();unmountFb();showExt();snapByCid.clear();inFlight.clear();
-const w=gW();if(w){if(mApi&&w.__agPrismMetricsBridge===mApi)delete w.__agPrismMetricsBridge;if(mRes&&w.__agPrismMetricsResolve===mRes)delete w.__agPrismMetricsResolve;}
-yielded=false;lastSig='';detAt=0;lastSnap=null;lastHref='';lastUrlCid='';
+cWt();cSw();cBs();clCW();cSt();uFb();sEx();SC.clear();IF.clear();LM.clear();
+const w=gW();if(w){w.__agPrismMetricsLast?.clear?.();if(mApi&&w.__agPrismMetricsBridge===mApi)delete w.__agPrismMetricsBridge;if(mRes&&w.__agPrismMetricsResolve===mRes)delete w.__agPrismMetricsResolve;}
+yld=false;lSg='';dAt=0;lS=null;lHr='';lUC='';pxM=false;
 }
 
-const notifyCompact=(cid=null,delays=null)=>armCompactBurst(null,cid,delays);
-const api={BAR_ID,PRISM_BAR_ID,PRISM_BAR_ATTR,FALLBACK_ATTR,METRICS_BINDING,sync,destroy,refresh,notifyCompact,chooseQuotaGroupFallback,getLatestSnapshot:()=>resolveActiveInst()?.snap||lastSnap,getSnapshotForBar,getBars,getPrimaryBar:()=>getPrimaryInst()?.host||null,getActiveBar:()=>resolveActiveInst()?.host||null,setActiveBar,getBarForView,getState,createTelemetryController};
+const notifyCompact=(cid=null,delays=null)=>armB(null,cid,delays);
+const api={BAR_ID:BI,PRISM_BAR_ID:PI,PRISM_BAR_ATTR:PA,FALLBACK_ATTR:FA,METRICS_BINDING:MB,sync,destroy,refresh,notifyCompact,chooseQuotaGroupFallback,getLatestSnapshot:()=>actIn()?.snap||lS,getSnapshotForBar,getBars,getPrimaryBar:()=>gPI()?.host||null,getActiveBar:()=>actIn()?.host||null,setActiveBar,getBarForView:gBV,getState,createTelemetryController};
 return api;
 }
 

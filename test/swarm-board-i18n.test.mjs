@@ -1242,3 +1242,124 @@ test('swarm-board-i18n dirtyNodes incremental queue (PR #120): scans targeted mu
   assert.equal(addedBtn.textContent, 'Graph');
   assert.equal(tabOverview.textContent, 'Overview');
 });
+
+test('Wave P3-D: Swarm OOPIF skips 34KB re-injection when presence probe confirms mounted or target URL+codeHash unchanged, and heals on true reload', async () => {
+  const { SwarmSessionManager } = await import('../src/daemon/swarm-session-manager.mjs');
+  const { handleBrowserTargetEvent } = await import('../src/daemon/browser-discovery.mjs');
+
+  const evals = [];
+  let mounted = false;
+  let currentHash = 'hash-v1';
+  let seq = 1;
+  const sessionEventMap = new Map();
+  const fakeBrowser = {
+    closed: false,
+    async send(method, params = {}, _timeout = 5000, sessionId = null) {
+      if (method === 'Target.attachToTarget') return { sessionId: `sid-${seq++}` };
+      if (method === 'Page.enable') return {};
+      if (method === 'Page.addScriptToEvaluateOnNewDocument') return { identifier: `scr-${seq++}` };
+      if (method === 'Page.removeScriptToEvaluateOnNewDocument') return {};
+      if (method === 'Runtime.evaluate') {
+        const expr = String(params.expression || '');
+        const isProbe = expr.length < 1000 && expr.includes('__agPrismSwarmI18n');
+        evals.push({ sessionId, isProbe, len: expr.length, contextId: params.contextId || null });
+        if (isProbe) return { result: { value: { mounted, lang: 'zh-CN', hash: currentHash } } };
+        mounted = true;
+        return { result: { value: { ok: true, status: 'active' } } };
+      }
+      return {};
+    },
+    onSessionEvent(sid, method, cb) {
+      if (!sessionEventMap.has(sid)) sessionEventMap.set(sid, new Map());
+      const m = sessionEventMap.get(sid);
+      if (!m.has(method)) m.set(method, []);
+      m.get(method).push(cb);
+    },
+    offSession(sid) {
+      sessionEventMap.delete(sid);
+    },
+  };
+
+  let codeHash = 'hash-v1';
+  const makeBigExpr = (h) => `(() => { const targetHash = "${h}"; ${'/* pad */'.repeat(4000)} return { ok: true, status: 'active' }; })()`;
+  const mgr = new SwarmSessionManager({
+    getBrowserSession: () => fakeBrowser,
+    isRunning: () => true,
+    getCdp: () => ({
+      isSwarmSidecarUrl: cdp.isSwarmSidecarUrl,
+      shouldEnableSwarmI18n: () => true,
+      buildSwarmI18nExpression: () => makeBigExpr(codeHash),
+      readConfig: () => ({ hostLocalization: 'on', language: 'zh-CN' }),
+      redactSensitiveUrl: (u) => u,
+    }),
+    log() {},
+  });
+
+  const target = { targetId: 'sw-1', type: 'iframe', url: 'plugin://swarm--swarm_board-4808/?token=t1&conversationId=c1' };
+  const bigCount = () => evals.filter((e) => !e.isProbe && e.len > 10000).length;
+
+  // 1) Initial attach injects 35KB script once
+  await mgr.attachSwarmTarget(target);
+  assert.equal(bigCount(), 1, 'Initial attach must inject full Swarm script once');
+
+  // 2) Repeat attachSwarmTarget with same URL & hash skips 35KB re-injection
+  await mgr.attachSwarmTarget(target);
+  assert.equal(bigCount(), 1, 'Same targetId+frameUrl+codeHash attach must skip 35KB re-injection');
+
+  // 3) Spurious Page.loadEventFired / domContentLoadedEventFired while mounted=true skips 35KB re-injection
+  const sid = mgr.swarmSessions.get('sw-1').sessionId;
+  for (const cb of sessionEventMap.get(sid)?.get('Page.loadEventFired') || []) await cb();
+  await new Promise((r) => setTimeout(r, 150));
+  assert.equal(bigCount(), 1, 'Reload event while presence probe reports mounted=true must skip 35KB re-injection');
+
+  // 4) syncSwarmSessionsForConfig with unchanged codeHash skips 35KB re-injection
+  await mgr.syncSwarmSessionsForConfig();
+  assert.equal(bigCount(), 1, 'Config sync with unchanged codeHash must skip 35KB re-injection');
+
+  // 5) Sub-frame injection injects once on fresh sub-frame and skips repeat 35KB payload when contextId+codeHash unchanged
+  const subEntry = {
+    mainFrameId: 'main-f0',
+    swarmSubFrames: new Map([['sub-f1', { contextId: 99, mounted: false, codeHash: '' }]]),
+    session: {
+      closed: false,
+      async send(method, params = {}) {
+        if (method === 'Runtime.evaluate') {
+          const expr = String(params.expression || '');
+          const isProbe = expr.length < 1000 && expr.includes('__agPrismSwarmI18n');
+          evals.push({ sessionId: 'sub', isProbe, len: expr.length, contextId: params.contextId || null });
+          return { result: { value: { ok: true } } };
+        }
+        return {};
+      },
+    },
+  };
+  await mgr.injectSwarmIntoSubFrame(subEntry, 'sub-f1', 99);
+  assert.equal(bigCount(), 2, 'First sub-frame inject must inject 35KB payload once');
+  await mgr.injectSwarmIntoSubFrame(subEntry, 'sub-f1', 99);
+  assert.equal(bigCount(), 2, 'Repeat sub-frame inject with same contextId+codeHash must skip 35KB payload');
+
+  // 6) True document reload (mounted=false) immediately heals via Page.loadEventFired
+  mounted = false;
+  for (const cb of sessionEventMap.get(sid)?.get('Page.loadEventFired') || []) await cb();
+  await new Promise((r) => setTimeout(r, 150));
+  assert.equal(bigCount(), 3, 'True reload (mounted=false) must re-inject Swarm script to heal');
+
+  // 7) browser-discovery deduplicates repeat unchanged Swarm Target.targetInfoChanged events
+  let discoveredCalls = 0;
+  let hasSession = false;
+  const reg = {
+    sessions: new Map(),
+    _swarmTargetUrls: new Map(),
+    _deps: {
+      isSwarmTargetInfo: (info) => cdp.isSwarmSidecarUrl(info?.url),
+      hasSwarmSession: () => hasSession,
+      onSwarmTargetEvent: async () => { discoveredCalls += 1; hasSession = true; },
+    },
+  };
+  handleBrowserTargetEvent(reg, { targetInfo: target });
+  const dupRes = handleBrowserTargetEvent(reg, { targetInfo: { ...target, title: 'Noisy title update' } });
+  assert.equal(dupRes.skipped, true, 'Duplicate Swarm targetInfoChanged with identical URL must short-circuit');
+  assert.equal(discoveredCalls, 1, 'Unchanged Swarm iframe URL must not re-trigger onSwarmTargetEvent on title churn');
+  handleBrowserTargetEvent(reg, { targetInfo: { ...target, url: 'plugin://swarm--swarm_board-4808/?token=t1&conversationId=c2' } });
+  assert.equal(discoveredCalls, 2, 'Changed Swarm iframe URL must trigger onSwarmTargetEvent');
+});

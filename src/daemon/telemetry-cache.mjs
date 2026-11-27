@@ -145,7 +145,8 @@ export async function ensureMetricsCollector(tel) {
             .catch(() => null);
         }
       }
-      return { ...base, usage: usageSnap };
+      const transportMode = tel._lazyStore?.client?.server?.mode === 'renderer-proxy' ? 'renderer-proxy' : '';
+      return { ...base, ...(transportMode ? { transport: transportMode } : {}), usage: usageSnap };
     };
   }
   const telemetryDataDir = resolveTelemetryDataDir(tel);

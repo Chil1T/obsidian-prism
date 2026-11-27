@@ -22,6 +22,38 @@ function normalizeDocUrlWithoutHashOrTab(rawUrl) {
   }
 }
 
+const SPA_CONV_PATH_RE = /^\/(?:c\/[0-9a-f-]{8,}\/?)?$/i;
+
+function normalizeSwarmUrlKey(rawUrl) {
+  const s = String(rawUrl || '').trim();
+  if (!s) return '';
+  const hashIdx = s.indexOf('#');
+  return hashIdx >= 0 ? s.slice(0, hashIdx) : s;
+}
+
+/**
+ * 判断两次 URL 变化是否属于同源 HTTP(S) SPA 内的普通对话切换（例如 /c/<id1> -> /c/<id2> 或 / <-> /c/<id>），
+ * 仅在同协议、同 host、同 remoteAuthority 且同 scopeKey 时返回 true；跨 HTML 文档（如 vscode-file://）或跨源绝不放行。
+ */
+export function isSameSpaConversationRoute(prevUrl, nextUrl) {
+  if (!prevUrl || !nextUrl || typeof prevUrl !== 'string' || typeof nextUrl !== 'string') return false;
+  if (prevUrl === nextUrl) return true;
+  try {
+    const a = new URL(prevUrl);
+    const b = new URL(nextUrl);
+    if ((a.protocol !== 'http:' && a.protocol !== 'https:') || a.protocol !== b.protocol || a.host !== b.host) {
+      return false;
+    }
+    const raA = a.searchParams.get('remoteAuthority') || '';
+    const raB = b.searchParams.get('remoteAuthority') || '';
+    if (raA !== raB) return false;
+    if (extractScopeKeyFromUri(prevUrl) !== extractScopeKeyFromUri(nextUrl)) return false;
+    return SPA_CONV_PATH_RE.test(a.pathname) && SPA_CONV_PATH_RE.test(b.pathname);
+  } catch {
+    return false;
+  }
+}
+
 export function isSameDocumentIgnoringHashAndTab(prevUrl, nextUrl) {
   if (!prevUrl || !nextUrl || typeof prevUrl !== 'string' || typeof nextUrl !== 'string') return false;
   if (prevUrl === nextUrl) return true;
@@ -37,6 +69,7 @@ export function closeBrowserDiscovery(reg) {
     reg._discoverTimer = null;
   }
   reg._discoverTimerTargetAt = 0;
+  reg._swarmTargetUrls?.clear?.();
   reg._deps.onSwarmCloseAllLocal?.();
   if (reg.browserSession) {
     const bs = reg.browserSession;
@@ -88,7 +121,18 @@ export function handleBrowserTargetEvent(reg, params) {
   const info = params?.targetInfo;
   if (!info) return { handled: false, dirty: false };
   const tid = info.targetId || info.id || '';
-  if (reg._deps.isSwarmTargetInfo?.(info) || (tid && reg._deps.hasSwarmSession?.(tid))) {
+  const isSwarmInfo = Boolean(reg._deps.isSwarmTargetInfo?.(info));
+  const hasSwarm = Boolean(tid && reg._deps.hasSwarmSession?.(tid));
+  if (isSwarmInfo || hasSwarm) {
+    if (!(reg._swarmTargetUrls instanceof Map)) reg._swarmTargetUrls = new Map();
+    const normSwarmUrl = normalizeSwarmUrlKey(info.url);
+    if (hasSwarm && isSwarmInfo && normSwarmUrl && reg._swarmTargetUrls.get(tid) === normSwarmUrl) {
+      return { handled: true, dirty: false, swarm: true, skipped: true };
+    }
+    if (tid) {
+      if (isSwarmInfo && normSwarmUrl) reg._swarmTargetUrls.set(tid, normSwarmUrl);
+      else reg._swarmTargetUrls.delete(tid);
+    }
     void reg._deps.onSwarmTargetEvent?.(info)?.catch?.(() => {});
     return { handled: true, dirty: false, swarm: true };
   }
@@ -112,7 +156,9 @@ export function handleBrowserTargetEvent(reg, params) {
           typeof info.url === 'string' &&
           info.url &&
           info.url !== prevUrl &&
-          (isSameSpaDocumentRoute(prevUrl, info.url) || isSameDocumentIgnoringHashAndTab(prevUrl, info.url))
+          (isSameSpaDocumentRoute(prevUrl, info.url) ||
+            isSameDocumentIgnoringHashAndTab(prevUrl, info.url) ||
+            isSameSpaConversationRoute(prevUrl, info.url))
       );
       if (typeof info.url === 'string' && info.url) {
         existing.url = info.url;
@@ -175,11 +221,15 @@ export async function ensureBrowserDiscovery(reg, port) {
     bSession.on('Target.targetInfoChanged', onTargetEvent);
     bSession.on('Target.targetDestroyed', (params) => {
       const tid = String(params?.targetId || '').trim();
-      if (tid) reg._deps.onSwarmCleanupLocal?.(tid);
+      if (tid) {
+        reg._swarmTargetUrls?.delete?.(tid);
+        reg._deps.onSwarmCleanupLocal?.(tid);
+      }
     });
     bSession.on('Target.detachedFromTarget', (params) => {
       const tid = String(params?.targetId || '').trim();
       if (tid && reg._deps.hasSwarmSession?.(tid)) {
+        reg._swarmTargetUrls?.delete?.(tid);
         reg._deps.onSwarmCleanupLocal?.(tid);
         return;
       }

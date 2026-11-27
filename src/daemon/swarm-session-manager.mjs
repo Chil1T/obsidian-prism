@@ -33,6 +33,24 @@ export class SwarmSessionManager {
     this.swarmI18nCodeHash = '';
   }
 
+  _normalizeFrameUrl(rawUrl) {
+    const s = String(rawUrl || '').trim();
+    if (!s) return '';
+    const hashIdx = s.indexOf('#');
+    return hashIdx >= 0 ? s.slice(0, hashIdx) : s;
+  }
+
+  _buildPresenceProbeExpr(expectedHash) {
+    const h = JSON.stringify(String(expectedHash || ''));
+    return `(()=>{try{const s=window.__agPrismSwarmI18n;const st=s&&typeof s.getStatus==='function'?s.getStatus():null;return{mounted:Boolean(s&&s.__prismCodeHash===${h}&&st&&(st.status==='active'||st.status==='yielded'))};}catch{return{mounted:false};}})()`;
+  }
+
+  async _isSwarmI18nMounted(session, expectedHash, timeoutMs = 1200) {
+    if (!session || session.closed || !expectedHash) return false;
+    const res = await session.evaluate(this._buildPresenceProbeExpr(expectedHash), false, timeoutMs).catch(() => null);
+    return Boolean(res && res.mounted === true);
+  }
+
   isSwarmI18nEnabled(cfgOverride = null) {
     try {
       const cdp = this._getCdp();
@@ -230,13 +248,16 @@ export class SwarmSessionManager {
 
     const safeUrl = this._redact(info.url || '');
     const safeTitle = this._redact(info.title || info.url || 'Swarm');
+    const normFrameUrl = this._normalizeFrameUrl(safeUrl);
 
     const existing = this.swarmSessions.get(targetId);
     if (existing && !existing.session.closed) {
+      const sameFrameUrl = Boolean(normFrameUrl && existing.frameUrl === normFrameUrl);
       existing.url = safeUrl;
+      existing.frameUrl = normFrameUrl;
       existing.title = safeTitle;
       const swarmExpr = this.ensureSwarmI18nExpr(cfg);
-      if (swarmExpr && existing.codeHash !== this.swarmI18nCodeHash) {
+      if (swarmExpr && (existing.codeHash !== this.swarmI18nCodeHash || !existing.scriptId)) {
         if (existing.scriptId) {
           await existing.session
             .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: existing.scriptId }, 1800)
@@ -247,7 +268,10 @@ export class SwarmSessionManager {
           .send('Page.addScriptToEvaluateOnNewDocument', { source: swarmExpr }, 2000)
           .catch(() => null);
         if (addRes && addRes.identifier) existing.scriptId = addRes.identifier;
-        await existing.session.evaluate(swarmExpr, false, 3500).catch(() => null);
+        const alreadyMounted = sameFrameUrl && (await this._isSwarmI18nMounted(existing.session, this.swarmI18nCodeHash));
+        if (!alreadyMounted) {
+          await existing.session.evaluate(swarmExpr, false, 3500).catch(() => null);
+        }
         existing.codeHash = this.swarmI18nCodeHash;
       }
       return existing;
@@ -288,6 +312,7 @@ export class SwarmSessionManager {
         parentSession: bSession,
         session: child,
         url: safeUrl,
+        frameUrl: normFrameUrl,
         title: safeTitle,
         scriptId: addRes && addRes.identifier ? addRes.identifier : null,
         codeHash: this.swarmI18nCodeHash,
@@ -303,7 +328,7 @@ export class SwarmSessionManager {
           managedTimers?.delete(entry._reloadTimer);
           entry._reloadTimer = null;
         }
-        const t = setTimeout(() => {
+        const t = setTimeout(async () => {
           entry._reloadTimer = null;
           managedTimers?.delete(t);
           if (!this._isRunning() || child.closed || this.swarmSessions.get(targetId) !== entry) return;
@@ -313,9 +338,15 @@ export class SwarmSessionManager {
             return;
           }
           const exprNow = this.ensureSwarmI18nExpr(reloadCfg);
-          if (exprNow) {
-            void child.evaluate(exprNow, false, 3500).catch(() => {});
+          if (!exprNow) return;
+          // 优先极轻存在性检查：Page.addScriptToEvaluateOnNewDocument 已生效或未重载时跳过 34.7KB 重复注入
+          if (this.swarmI18nCodeHash && (await this._isSwarmI18nMounted(child, this.swarmI18nCodeHash))) {
+            entry.codeHash = this.swarmI18nCodeHash;
+            return;
           }
+          if (!this._isRunning() || child.closed || this.swarmSessions.get(targetId) !== entry) return;
+          await child.evaluate(exprNow, false, 3500).catch(() => {});
+          entry.codeHash = this.swarmI18nCodeHash;
         }, 60);
         if (typeof t.unref === 'function') t.unref();
         entry._reloadTimer = t;
@@ -324,7 +355,8 @@ export class SwarmSessionManager {
       child.on('Page.domContentLoadedEventFired', reapplyOnReload);
       child.on('Page.loadEventFired', reapplyOnReload);
 
-      const evalRes = await child.evaluate(swarmExpr, false, 3500).catch(() => null);
+      const preMounted = this.swarmI18nCodeHash && (await this._isSwarmI18nMounted(child, this.swarmI18nCodeHash));
+      const evalRes = preMounted ? { ok: true, status: 'reused' } : await child.evaluate(swarmExpr, false, 3500).catch(() => null);
       this._log(`[✓] Attached Swarm board i18n: ${safeTitle} (${evalRes?.status || 'ok'})`);
       return entry;
     } catch {
@@ -387,6 +419,9 @@ export class SwarmSessionManager {
     const expr = this.ensureSwarmI18nExpr(cfg);
     if (!expr) return;
     const sub = entry.swarmSubFrames?.get(frameId);
+    if (sub && sub.mounted && sub.contextId === ctxId && sub.codeHash && sub.codeHash === this.swarmI18nCodeHash) {
+      return;
+    }
     const evalRes = await entry.session
       .send('Runtime.evaluate', { contextId: ctxId, expression: expr, returnByValue: true }, 3500)
       .catch(() => null);
@@ -432,6 +467,14 @@ export class SwarmSessionManager {
         await Promise.allSettled(
           entries.map(async (entry) => {
             if (!entry || entry.session.closed) return;
+            if (
+              entry.scriptId &&
+              this.swarmI18nCodeHash &&
+              entry.codeHash === this.swarmI18nCodeHash &&
+              (await this._isSwarmI18nMounted(entry.session, this.swarmI18nCodeHash))
+            ) {
+              return;
+            }
             if (entry.scriptId) {
               await entry.session
                 .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.scriptId }, 1800)

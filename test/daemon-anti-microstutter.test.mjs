@@ -790,14 +790,30 @@ test('5. Target.targetInfoChanged title / #hash+?tab= jitter preserves healthySt
   const healSkip = await verifyAndHealEntryUnlocked(orch, entry, false);
   assert.equal(healSkip.skipped, true, 'Healthy streak 5 with browserSession live must stay in 45s backoff');
 
-  // Cross-document pathname change must still invalidate immediately
-  const r2 = handleBrowserTargetEvent(reg, {
+  // Same-origin SPA conversation switch (/c/<id1> -> /c/<id2>) must preserve healthyStreak & skip probe storm
+  const rSpaConv = handleBrowserTargetEvent(reg, {
     targetInfo: {
       targetId: 'p1',
       type: 'page',
       attached: true,
       title: 'Conv B - Antigravity',
       url: `https://127.0.0.1:8798/c/${CID_2}?tab=file__b`,
+    },
+  });
+  assert.equal(rSpaConv.dirty, false);
+  assert.equal(rSpaConv.sameSpaRoute, true);
+  assert.equal(entry.healthyStreak, 5);
+  assert.equal(entry.verifyDirty, false);
+  assert.equal(tickCalls, 0);
+
+  // Genuine cross-document pathname change must still invalidate immediately
+  const r2 = handleBrowserTargetEvent(reg, {
+    targetInfo: {
+      targetId: 'p1',
+      type: 'page',
+      attached: true,
+      title: 'Workbench - Antigravity',
+      url: 'https://127.0.0.1:8798/workbench.html?tab=file__b',
     },
   });
   assert.equal(r2.dirty, true);
@@ -978,5 +994,205 @@ test('7. telemetry-cache 0-JSON.stringify dirty diff, DaemonLogger async buffer 
     JSON.stringify = origStringify;
     fs.appendFileSync = origAppendSync;
     fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('8. Wave P3-D: Metrics delta {unchanged:true} protocol, client.mjs incremental trajectory passthrough, shared __agPrismMetricsLast & renderer-proxy smart throttling', async () => {
+  const { computeMetricsSnapshotSig, buildMetricsBindingReply } = await import('../src/daemon/metrics-delta.mjs');
+  const { isSameSpaConversationRoute } = await import('../src/daemon/browser-discovery.mjs');
+  const { AntigravityClient } = await import('../vendor/pulse-dashboard/sidecars/panel/client.mjs');
+
+  // 8a. Core-field signature ignores transient serverTime and shrinks unchanged RPC payload >97%
+  const baseSnap = {
+    connection: 'live',
+    transport: 'renderer-proxy',
+    serverTime: 1000,
+    groups: [{ id: 'gemini', name: 'Gemini', windows: { '5h': { remainingFraction: 0.82, available: true, resetAt: '2026-11-28T00:00:00Z' } } }],
+    speed: {
+      model: 'Gemini 4 Carbon',
+      tps: 68.4,
+      latestTps: 71.2,
+      ttftSeconds: 0.42,
+      rounds: 7,
+      cacheHitRate: 0.91,
+      context: { model: 'Gemini 4 Carbon', usedTokens: 96000, maxTokens: 512000, usedFraction: 0.1875, sampledAt: 1700000000000 },
+    },
+    conversations: Array.from({ length: 60 }, (_, i) => ({ id: `conv-${i}`, title: 'Padding '.repeat(12), steps: 10 + i })),
+  };
+  const sameSnapNewTime = { ...baseSnap, serverTime: 999999 };
+  const changedSnap = {
+    ...baseSnap,
+    speed: { ...baseSnap.speed, context: { ...baseSnap.speed.context, usedTokens: 104000, usedFraction: 0.203125 } },
+  };
+  const sig1 = computeMetricsSnapshotSig(baseSnap, false);
+  assert.equal(sig1, computeMetricsSnapshotSig(sameSnapNewTime, false), 'Transient serverTime must not change snapshot signature');
+  assert.notEqual(sig1, computeMetricsSnapshotSig(changedSnap, false), 'Real token change must change snapshot signature');
+
+  // Legacy caller without lastSig gets full payload without breaking deepEqual expectations
+  const legacyReply = buildMetricsBindingReply(baseSnap, { includeConversations: true });
+  assert.equal(legacyReply.unchanged, undefined);
+  assert.equal(legacyReply.sig, undefined);
+  assert.equal(legacyReply.conversations.length, 60);
+
+  // RpcDispatcher delta wire test
+  let currentSnap = baseSnap;
+  const sentExprs = [];
+  const dispatcher = new RpcDispatcher({
+    telemetrySubsystem: {
+      _customMetricsProvider: true,
+      _telemetryInFlight: 0,
+      isDisabled: () => false,
+      beginActivity() {},
+      endActivity() {},
+      releaseIdle() {},
+      ensureMetricsCollector: async () => async () => currentSnap,
+    },
+  });
+  const entry = {
+    mainFrameId: 'F1',
+    hasFrameTree: true,
+    contextFrames: new Map([[1, { isDefault: true, type: 'default', frameId: 'F1' }]]),
+    session: { closed: false, async send(m, p) { if (m === 'Runtime.evaluate') sentExprs.push(p.expression); return {}; } },
+  };
+  await dispatcher.handleBindingCall(entry, {
+    name: '__agPrismMetricsCall',
+    payload: JSON.stringify({ id: 201, input: { conversationId: CID_1, includeConversations: true, lastSig: '' } }),
+    executionContextId: 1,
+  });
+  let firstPayload = null;
+  vm.runInNewContext(sentExprs[0], { window: { __agPrismMetricsResolve: (_id, d) => { firstPayload = d; } } });
+  assert.ok(typeof firstPayload.sig === 'string' && firstPayload.sig.length === 16);
+  assert.ok(sentExprs[0].length > 5000, 'First full payload should be >5KB');
+
+  // Second poll with matching lastSig and mutated serverTime -> tiny { unchanged: true } (< 180 B, 0 JSON.parse)
+  currentSnap = sameSnapNewTime;
+  await dispatcher.handleBindingCall(entry, {
+    name: '__agPrismMetricsCall',
+    payload: JSON.stringify({ id: 202, input: { conversationId: CID_1, includeConversations: true, lastSig: firstPayload.sig } }),
+    executionContextId: 1,
+  });
+  assert.ok(sentExprs[1].length < 180, `Unchanged delta reply must be tiny (<180 B), got ${sentExprs[1].length} B`);
+  assert.equal(sentExprs[1].includes('JSON.parse'), false, 'Tiny unchanged delta reply must avoid JSON.parse');
+  let deltaPayload = null;
+  vm.runInNewContext(sentExprs[1], { window: { __agPrismMetricsResolve: (_id, d) => { deltaPayload = d; } } });
+  assert.equal(deltaPayload.unchanged, true);
+  assert.equal(deltaPayload.sig, firstPayload.sig);
+  assert.equal(deltaPayload.transport, 'renderer-proxy');
+
+  // Third poll after real token change -> full updated snapshot with new sig
+  currentSnap = changedSnap;
+  await dispatcher.handleBindingCall(entry, {
+    name: '__agPrismMetricsCall',
+    payload: JSON.stringify({ id: 203, input: { conversationId: CID_1, includeConversations: true, lastSig: firstPayload.sig } }),
+    executionContextId: 1,
+  });
+  let updatedPayload = null;
+  vm.runInNewContext(sentExprs[2], { window: { __agPrismMetricsResolve: (_id, d) => { updatedPayload = d; } } });
+  assert.equal(updatedPayload.unchanged, undefined);
+  assert.equal(updatedPayload.speed.context.usedTokens, 104000);
+  assert.notEqual(updatedPayload.sig, firstPayload.sig);
+
+  // 8b. client.mjs forwards lastStepCount & lastStepSig to GetCascadeTrajectory proxy RPC and fast-paths unchanged
+  const rpcCalls = [];
+  const client = new AntigravityClient();
+  client.setRendererRpc(async (action, payload) => {
+    rpcCalls.push({ action, payload });
+    return { ok: true, unchanged: true, stepCount: payload.lastStepCount, lastStepSig: payload.lastStepSig };
+  });
+  client.server = { mode: 'renderer-proxy', pid: 0 };
+  client.discoveredAt = Date.now();
+  const trajRes = await client.trajectory(CID_1, { lastStepCount: 42, lastStepSig: 'sig-42' });
+  assert.equal(rpcCalls.length, 1);
+  assert.equal(rpcCalls[0].action, 'GetCascadeTrajectory');
+  assert.equal(rpcCalls[0].payload.lastStepCount, 42);
+  assert.equal(rpcCalls[0].payload.lastStepSig, 'sig-42');
+  assert.equal(trajRes.unchanged, true);
+
+  // 8c. Same-origin SPA conversation route helper
+  assert.equal(isSameSpaConversationRoute(`https://127.0.0.1:8798/c/${CID_1}`, `https://127.0.0.1:8798/c/${CID_2}`), true);
+  assert.equal(isSameSpaConversationRoute(`https://127.0.0.1:8798/`, `https://127.0.0.1:8798/c/${CID_1}`), true);
+  assert.equal(isSameSpaConversationRoute(`https://127.0.0.1:8798/c/${CID_1}`, 'https://127.0.0.1:8798/workbench.html'), false);
+  assert.equal(isSameSpaConversationRoute(`https://127.0.0.1:8798/c/${CID_1}`, `https://127.0.0.1:9999/c/${CID_2}`), false);
+  assert.equal(
+    isSameSpaConversationRoute(
+      `https://127.0.0.1:8798/c/${CID_1}?remoteAuthority=ssh-remote%2Ba`,
+      `https://127.0.0.1:8798/c/${CID_2}?remoteAuthority=ssh-remote%2Bb`
+    ),
+    false
+  );
+
+  // 8d. Dual-frontend shared __agPrismMetricsLast + renderer-proxy smart throttling + unchanged restore
+  const env = createTelemetryTestDom({ cascadeId: CID_1 });
+  let cdpCount = 0;
+  let lastReqInput = null;
+  let replyMode = 'full';
+  const proxySnap = {
+    connection: 'live',
+    transport: 'renderer-proxy',
+    sig: 'abcd1234ef567890',
+    groups: [{ id: 'gemini', name: 'Gemini', windows: { '5h': { remainingFraction: 0.78, available: true } } }],
+    speed: {
+      model: 'Gemini 4',
+      tps: 44.0,
+      context: { model: 'Gemini 4', usedTokens: 51200, maxTokens: 512000, usedFraction: 0.1, sampledAt: '2020-01-01T00:00:00Z' },
+    },
+  };
+  env.win.__agPrismMetricsCall = (raw) => {
+    cdpCount += 1;
+    const req = JSON.parse(raw);
+    lastReqInput = req.input;
+    const payload = replyMode === 'unchanged'
+      ? { unchanged: true, sig: proxySnap.sig, transport: 'renderer-proxy' }
+      : proxySnap;
+    queueMicrotask(() => env.win.__agPrismMetricsResolve?.(req.id, payload));
+  };
+
+  const ctl = inlineFallbackMod.createTelemetryController({ window: env.win, document: env.doc });
+  const prevDoc = globalThis.document;
+  delete globalThis.document;
+  let bridge;
+  try {
+    ctl.sync({ telemetryModule: 'on' });
+    await new Promise((r) => setTimeout(r, 15));
+    assert.equal(cdpCount, 1);
+    assert.ok(env.win.__agPrismMetricsLast instanceof Map);
+    assert.equal(env.win.__agPrismMetricsLast.get(CID_1)?.sig, proxySnap.sig);
+    assert.equal(ctl.getState().pollIntervalMs, 6000, 'inline-fallback collapsed idle under renderer-proxy must throttle to 6000ms');
+
+    // Periodic background poll within fresh window reuses __agPrismMetricsLast with 0 extra CDP calls
+    const beforePoll = cdpCount;
+    await ctl.refresh({ poll: true });
+    assert.equal(cdpCount, beforePoll, 'Periodic inline-fallback poll within fresh window must hit __agPrismMetricsLast (0 CDP)');
+
+    // Mount pulse-vial-bridge with autoPoll=true: under renderer-proxy + __prismFallback, closed idle must throttle to 6000ms
+    bridge = pulseBridgeMod.mountPulseVialBridge({
+      win: env.win,
+      doc: env.doc,
+      storage: env.win.localStorage,
+      vialCore,
+      autoPoll: true,
+      pollIntervalMs: 2000,
+      allowMultiple: true,
+    });
+    await new Promise((r) => setTimeout(r, 15));
+    assert.equal(bridge.getDebugState().pollIntervalMs, 6000, 'pulse-vial-bridge closed idle under renderer-proxy must throttle to 6000ms');
+
+    // Open context card -> both pollers tighten back to responsive 2500-2800ms cadence
+    const bar = ctl.getPrimaryBar();
+    const ctxChip = bar.shadowRoot.querySelector('[data-card="context"]');
+    ctxChip.dispatchEvent({ type: 'click', stopPropagation() {} });
+    await new Promise((r) => setTimeout(r, 15));
+    assert.equal(ctl.getState().pollIntervalMs, 2800, 'Open context card must restore responsive 2800ms polling in inline-fallback');
+    assert.equal(bridge.getDebugState().pollIntervalMs, 2500, 'Open context card must restore responsive 2500ms polling in pulse-vial-bridge');
+
+    // Server returns { unchanged: true } on next explicit refresh -> frontend restores cached full snapshot cleanly
+    replyMode = 'unchanged';
+    const restored = await ctl.refresh();
+    assert.equal(lastReqInput.lastSig, proxySnap.sig, 'Frontend must send cached lastSig on subsequent requests');
+    assert.equal(restored.speed.context.usedTokens, 51200, 'Unchanged delta response must restore cached full snapshot');
+  } finally {
+    bridge?.destroy();
+    ctl.destroy();
+    if (prevDoc !== undefined) globalThis.document = prevDoc;
   }
 });

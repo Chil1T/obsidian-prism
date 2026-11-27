@@ -15,6 +15,12 @@ import {
   transitionEntryState,
 } from './session-fsm.mjs';
 import { evalFireAndForgetSafe } from './channel-sync-engine.mjs';
+import { isAutomatedTestRuntime } from './pid-lock.mjs';
+import {
+  DEFAULT_COMPILE_CACHE_CLEANUP_DELAY_MS,
+  resolveDefaultCompileCacheDir,
+  scheduleCompileCacheMaintenance,
+} from './compile-cache-guard.mjs';
 
 const require = createRequire(import.meta.url);
 const runInBgRecovery = require('../platform/run-in-bg-recovery.cjs');
@@ -71,6 +77,9 @@ export class DaemonLoop {
     invokeApplyToEntry = null,
     invokeVerifyAndHealEntry = null,
     invokeLog = null,
+    enableCompileCacheGuard = !isAutomatedTestRuntime(),
+    compileCacheDir = '',
+    compileCacheCleanupDelayMs = DEFAULT_COMPILE_CACHE_CLEANUP_DELAY_MS,
   } = {}) {
     this.pollIntervalMs = Math.max(200, Number(pollIntervalMs) || 3000);
     this.enabledCheck = enabledCheck;
@@ -107,6 +116,10 @@ export class DaemonLoop {
     this._portRetryTimers = new Set();
     this._reloadTimer = null;
     this._pendingTick = false;
+    this._enableCompileCacheGuard = Boolean(enableCompileCacheGuard);
+    this._compileCacheDir = typeof compileCacheDir === 'string' && compileCacheDir.trim() ? compileCacheDir.trim() : '';
+    this._compileCacheCleanupDelayMs = Math.max(0, Number(compileCacheCleanupDelayMs) || 0);
+    this._compileCacheMaint = null;
   }
 
   log(msg) {
@@ -616,6 +629,15 @@ export class DaemonLoop {
     this._scheduleNextPollTimer();
     void this._tick();
     upd.startTimers();
+    if (this._enableCompileCacheGuard) {
+      this._compileCacheMaint?.cancel?.();
+      this._compileCacheMaint = scheduleCompileCacheMaintenance({
+        dirPath: this._compileCacheDir || resolveDefaultCompileCacheDir(),
+        delayMs: this._compileCacheCleanupDelayMs,
+        isRunning: () => this.running,
+        log: (m) => this.log(m),
+      });
+    }
   }
 
   async stop(cleanPageDom = false, _testOverrides = null) {
@@ -630,6 +652,8 @@ export class DaemonLoop {
 
     ch.services.markStopping();
     this.running = false;
+    this._compileCacheMaint?.cancel?.();
+    this._compileCacheMaint = null;
     upd.stopTimers();
     if (this.timer) {
       clearTimeout(this.timer);

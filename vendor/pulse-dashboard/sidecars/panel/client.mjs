@@ -379,16 +379,14 @@ export class AntigravityClient {
   }
 
   async _getProxyTrajectory(cascadeId, force = false, summaryOrOpts = null) {
-    const isOptsObj = Boolean(
-      summaryOrOpts && typeof summaryOrOpts === 'object' &&
-      ('summary' in summaryOrOpts || 'isCurrent' in summaryOrOpts || 'scopeKey' in summaryOrOpts || 'freshContext' in summaryOrOpts)
-    );
+    const isOptsObj = Boolean(summaryOrOpts && typeof summaryOrOpts === 'object' && ('summary' in summaryOrOpts || 'isCurrent' in summaryOrOpts || 'scopeKey' in summaryOrOpts || 'freshContext' in summaryOrOpts || 'lastStepCount' in summaryOrOpts || 'lastStepSig' in summaryOrOpts));
     const scope = this._resolveScopeKey(isOptsObj && typeof summaryOrOpts.scopeKey === 'string' ? summaryOrOpts.scopeKey : '');
     const freshContext = Boolean(isOptsObj && summaryOrOpts.freshContext);
     const key = `${scope}::${String(cascadeId || '').toLowerCase()}`;
     const now = this.now();
     const sumStamp = this._proxySummaryStamp(isOptsObj ? summaryOrOpts.summary || null : summaryOrOpts);
     const cached = !force ? this._proxyTrajCache.get(key) : null;
+    let peekChanged = false;
     if (cached) {
       const age = now - cached.at;
       const stampChanged = Boolean(sumStamp && cached.sumStamp && sumStamp !== cached.sumStamp);
@@ -396,9 +394,8 @@ export class AntigravityClient {
         const settled = this._isProxySettled(cached.data);
         const ttl = this._resolveProxyTrajectoryTtl(cached, sumStamp);
         if (age < ttl) {
-          let peekChanged = false;
-          const canSettledPeek = settled && !sumStamp && (freshContext || (age >= 3500 && (!cached.peekAt || now - cached.peekAt >= 2000)));
-          const canActivePeek = !settled && (freshContext || (ttl >= 12000 && age >= 3500 && (!cached.peekAt || now - cached.peekAt >= 2500)));
+          const canSettledPeek = settled && !sumStamp && (freshContext || (age >= 3500 && (!cached.peekAt || now - cached.peekAt >= 3500)));
+          const canActivePeek = !settled && (freshContext || (ttl >= 12000 && age >= 3500 && (!cached.peekAt || now - cached.peekAt >= 3000)));
           if (canSettledPeek || canActivePeek) {
             cached.peekAt = now;
             try {
@@ -452,7 +449,16 @@ export class AntigravityClient {
     if (existing) return existing;
 
     const req = (async () => {
-      const data = await this.rendererRpc('GetCascadeTrajectory', { cascadeId });
+      const allowDelta = !force && !peekChanged && !freshContext;
+      const reqSteps = allowDelta && isOptsObj && Number.isInteger(summaryOrOpts.lastStepCount) ? summaryOrOpts.lastStepCount : (allowDelta && Number.isInteger(cached?.data?.numTotalSteps) ? cached.data.numTotalSteps : null);
+      const reqSig = allowDelta && isOptsObj && typeof summaryOrOpts.lastStepSig === 'string' && summaryOrOpts.lastStepSig ? summaryOrOpts.lastStepSig : (allowDelta && typeof cached?.data?.lastStepSig === 'string' ? cached.data.lastStepSig : '');
+      const rpcBody = reqSteps !== null && reqSig ? { cascadeId, lastStepCount: reqSteps, lastStepSig: reqSig } : { cascadeId };
+      const data = await this.rendererRpc('GetCascadeTrajectory', rpcBody);
+      if (data && data.unchanged === true) {
+        const fetchedAt = this.now();
+        if (cached?.data) { cached.at = fetchedAt; cached.peekAt = fetchedAt; if (sumStamp) cached.sumStamp = sumStamp; return cached.data; }
+        return data;
+      }
       let bytes = estimateJsonBytes(data || {}, MAX_PROXY_BYTES + PROXY_BYTES_EXACT_MARGIN);
       if (bytes >= MAX_PROXY_BYTES - PROXY_BYTES_EXACT_MARGIN && bytes <= MAX_PROXY_BYTES + PROXY_BYTES_EXACT_MARGIN) {
         bytes = Buffer.byteLength(JSON.stringify(data || {}));
@@ -769,9 +775,8 @@ export class AntigravityClient {
         throw new Error('后台已重新连接，请等待刷新');
       }
       const data = await this._getProxyTrajectory(id, Boolean(options?.force), {
-        summary: options?.summary || null,
-        scopeKey: scope,
-        freshContext: Boolean(options?.freshContext),
+        summary: options?.summary || null, scopeKey: scope, freshContext: Boolean(options?.freshContext),
+        ...(Number.isInteger(options?.lastStepCount) && typeof options?.lastStepSig === 'string' && options.lastStepSig ? { lastStepCount: options.lastStepCount, lastStepSig: options.lastStepSig } : {}),
       });
       if (options?.isCurrent && options.isCurrent() !== true) {
         throw new Error('后台已重新连接，请等待刷新');

@@ -419,14 +419,31 @@ test('SPA ?tab= route debounce, 0-existsSync steady-state backoff, scoped trajec
     assert.equal(entry.detectedScopeKey, 'local');
     assert.equal(tickCalls, 0);
 
-    // Pathname change still triggers immediate invalidation
-    const pathRes = daemon._handleBrowserTargetEvent({
+    // Same-origin SPA conversation route switch (/c/A -> /c/B) preserves healthyStreak & skips dirty invalidation
+    const convRes = daemon._handleBrowserTargetEvent({
       targetInfo: {
         targetId: 'page-spa',
         type: 'page',
         attached: true,
         title: 'Antigravity',
         url: 'https://127.0.0.1:8798/c/22222222-2222-4222-8222-222222222222?tab=file__b',
+      },
+    });
+    assert.equal(convRes.dirty, false);
+    assert.equal(convRes.sameSpaRoute, true);
+    assert.equal(entry.verifyDirty, false);
+    assert.equal(entry.healthyStreak, 4);
+    assert.equal(entry.detectedScopeKey, 'local');
+    assert.equal(tickCalls, 0);
+
+    // Genuine cross-document pathname change still triggers immediate invalidation
+    const pathRes = daemon._handleBrowserTargetEvent({
+      targetInfo: {
+        targetId: 'page-spa',
+        type: 'page',
+        attached: true,
+        title: 'Antigravity',
+        url: 'https://127.0.0.1:8798/workbench.html?tab=file__b',
       },
     });
     assert.equal(pathRes.dirty, true);

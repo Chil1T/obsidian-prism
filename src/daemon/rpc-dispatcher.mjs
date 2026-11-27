@@ -20,6 +20,7 @@ import { isAutomatedTestRuntime } from './pid-lock.mjs';
 import { INLINE_DIFF_MAX_PAYLOAD_BYTES, INLINE_DIFF_MAX_URI_LENGTH } from './inline-diff-filter.mjs';
 import { readSafeInlineDiff } from './inline-diff-service.mjs';
 import { deliverPeriodicPickerFullToEntry } from './channel-sync-engine.mjs';
+import { buildMetricsBindingReply } from './metrics-delta.mjs';
 
 // 统一 Fire-and-Forget 回调派发：强制 returnByValue:false / awaitPromise:false 且表达式末尾 ;void 0，防 V8 Inspector objectId 泄漏
 function sendFireAndForgetEval(session, expr, executionContextId = null, timeoutMs = 0, { rethrow = false } = {}) {
@@ -232,10 +233,7 @@ async function handleMetricsBinding(rpc, entry, payload, executionContextId) {
       }
     }
   }
-  const includeConversations = parsed?.input?.includeConversations !== false;
-  if (!includeConversations && result && typeof result === 'object' && Array.isArray(result.conversations) && result.conversations.length > 0) {
-    result = { ...result, conversations: [] };
-  }
+  result = buildMetricsBindingReply(result, parsed?.input);
   const safeId = Number(reqId) | 0;
   const expr = `window.__agPrismMetricsResolve && window.__agPrismMetricsResolve(${safeId}, ${formatJsonArgForEval(result)})`;
   await sendFireAndForgetEval(entry.session, expr, executionContextId);
