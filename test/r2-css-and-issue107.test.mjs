@@ -528,3 +528,106 @@ test('5. Chrome 152 native CSS Anchor Positioning (0 Forced Reflow), scroll-driv
   const spLine = lines.find((l) => l.includes('[data-testid="step-plan-item"]{')) || '';
   assert.equal(spLine.includes('drop-shadow('), false, 'Completed step-plan checkmark must not use filter:drop-shadow');
 });
+
+test('6. Issue #142: hot-reload with unchanged cssHash + changed codeHash preserves __agPrismCssMgr and stylesheet, heals cross-version legacy destroy, and keeps explicit destroy()', () => {
+  class MockCSSStyleSheet {
+    constructor() { this.text = ''; this.replaceCalls = 0; }
+    replaceSync(t) { this.text = String(t); this.replaceCalls++; }
+  }
+
+  const hostSheet = new MockCSSStyleSheet();
+  hostSheet.replaceSync('/* host-owned-sheet */');
+
+  const html = makeMiniEl('html');
+  const head = makeMiniEl('head');
+  const body = makeMiniEl('body', { className: 'theme-dark' });
+  html.appendChild(head);
+  html.appendChild(body);
+  body.appendChild(makeMiniEl('div', { attrs: { 'data-testid': 'conversation-view' } }));
+
+  const doc = {
+    documentElement: html,
+    head,
+    body,
+    hidden: false,
+    readyState: 'complete',
+    adoptedStyleSheets: [hostSheet],
+    createElement: (t) => makeMiniEl(t),
+    getElementById: (id) => html.querySelector('#' + id),
+    querySelector: (s) => html.querySelector(s),
+    querySelectorAll: (s) => html.querySelectorAll(s),
+    addEventListener() {},
+    removeEventListener() {},
+  };
+
+  const sandbox = {
+    document: doc,
+    CSSStyleSheet: MockCSSStyleSheet,
+    navigator: { language: 'zh-CN' },
+    location: { pathname: '/', href: 'vscode-file://vscode-app/index.html' },
+    addEventListener() {},
+    removeEventListener() {},
+    getComputedStyle: () => ({ getPropertyValue: () => '' }),
+    matchMedia: () => ({ matches: false }),
+    MutationObserver: class { observe() {} disconnect() {} },
+    ResizeObserver: class { observe() {} disconnect() {} },
+    requestAnimationFrame: () => 1,
+    cancelAnimationFrame() {},
+    setTimeout: () => 1,
+    clearTimeout() {},
+    setInterval: () => 1,
+    clearInterval() {},
+    performance: { now: () => 1000 },
+    Math, Date, JSON, Map, Set, Array, Object, String, Number, Boolean, Promise, Uint8Array, Float32Array, Intl, Symbol,
+  };
+  sandbox.window = sandbox;
+  sandbox.globalThis = sandbox;
+
+  const expr1 = cdp.buildInjectExpression({ ...cdp.DEFAULT_CONFIG, palette: 'obsidian', motionLevel: 'standard' }, { noDiskCache: true });
+  const res1 = vm.runInNewContext(expr1, sandbox);
+  assert.equal(res1.status, 'ok');
+  const mgr1 = sandbox.window.__agPrismCssMgr;
+  assert.ok(mgr1 && !mgr1._disposed);
+  assert.equal(doc.adoptedStyleSheets.length, 2);
+  const sheet1 = doc.adoptedStyleSheets[1];
+  assert.equal(sheet1.replaceCalls, 1);
+
+  // Hot-reload with identical cssHash and changed codeHash: reused __agPrismCssMgr must NOT be disposed
+  const hash2 = res1.codeHash === 'hotreload02' ? 'hotreload02b' : 'hotreload02';
+  const expr2 = expr1.replaceAll(JSON.stringify(res1.codeHash), JSON.stringify(hash2));
+  assert.notEqual(expr2, expr1, 'test must actually mutate codeHash in inject expression');
+  const res2 = vm.runInNewContext(expr2, sandbox);
+  assert.equal(res2.status, 'ok');
+  assert.equal(res2.codeHash, hash2);
+  assert.equal(sandbox.window.__agPrismCssMgr, mgr1, 'unchanged cssHash hot-reload must reuse existing __agPrismCssMgr');
+  assert.equal(mgr1._disposed, false, 'reused __agPrismCssMgr must stay alive after JS-only hot-reload');
+  assert.equal(mgr1._hold, 0, 'transient _hold guard must be cleared after hot-reload');
+  assert.deepEqual(Array.from(doc.adoptedStyleSheets), [hostSheet, sheet1], 'adoptedStyleSheets must retain main stylesheet');
+  assert.equal(sheet1.replaceCalls, 1, 'reused stylesheet must not re-parse on JS-only hot-reload');
+  assert.ok(doc.getElementById('ag-prism-css'), 'sentinel <style id="ag-prism-css"> must remain mounted');
+
+  // Cross-version upgrade from legacy pre-fix api.destroy (which unconditionally disposes W.__agPrismCssMgr)
+  const prevApi = sandbox.window.__agPrism;
+  const origDestroy = prevApi.destroy.bind(prevApi);
+  prevApi.destroy = (...a) => {
+    sandbox.window.__agPrismCssMgr?.destroy?.();
+    return origDestroy(...a);
+  };
+  const hash3 = 'hotreload03';
+  const expr3 = expr1.replaceAll(JSON.stringify(res1.codeHash), JSON.stringify(hash3));
+  const res3 = vm.runInNewContext(expr3, sandbox);
+  assert.equal(res3.status, 'ok');
+  assert.equal(res3.codeHash, hash3);
+  const mgr3 = sandbox.window.__agPrismCssMgr;
+  assert.ok(mgr3 && !mgr3._disposed, 'cross-version fallback must rebuild disposed __agPrismCssMgr');
+  assert.equal(doc.adoptedStyleSheets.length, 2, 'cross-version fallback must restore main adoptedStyleSheet');
+  assert.equal(doc.adoptedStyleSheets[0], hostSheet);
+  assert.ok(doc.adoptedStyleSheets[1].text.includes('.ag-cs-crab'), 'restored main stylesheet must contain full Prism rules');
+  assert.ok(doc.getElementById('ag-prism-css'));
+
+  // Explicit window.__agPrism.destroy() still disposes current __agPrismCssMgr and unmounts stylesheet
+  sandbox.window.__agPrism.destroy();
+  assert.equal(mgr3._disposed, true, 'explicit destroy() must dispose __agPrismCssMgr');
+  assert.deepEqual(Array.from(doc.adoptedStyleSheets), [hostSheet], 'explicit destroy() must remove only Prism sheet');
+  assert.equal(doc.getElementById('ag-prism-css'), null, 'explicit destroy() must remove sentinel style element');
+});

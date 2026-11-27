@@ -348,8 +348,8 @@ function createCh1Templates({
       const hookApiCssMgr = (api) => {
         if (!api || api.__agCssMgrHooked) return;
         api.__agCssMgrHooked = true;
-        const d = isF(api.destroy) ? api.destroy.bind(api) : null;
-        if (d) api.destroy = (...a) => { T(() => W.__agPrismCssMgr?.destroy?.()); return d(...a); };
+        const own = W.__agPrismCssMgr, d = isF(api.destroy) ? api.destroy.bind(api) : null;
+        if (d) api.destroy = (...a) => { T(() => { const m = W.__agPrismCssMgr; if (m && !m._hold && (!own || m === own)) m.destroy?.(); }); return d(...a); };
       };
 
       const mkRpc = (bk, lim, onTo, onErr, disp) => {
@@ -487,7 +487,10 @@ function createCh1Templates({
             T(() => qa('[data-ag-prism-fallback="1"]').forEach((n) => n.remove()));
             __AG_INJ_BUNDLE__();
             autoPm();
-            if (isF(G.__agCsUiMain)) G.__agCsUiMain(bootCfg);
+            const km = W.__agPrismCssMgr;
+            if (km) km._hold = 1;
+            try { if (isF(G.__agCsUiMain)) G.__agCsUiMain(bootCfg); } finally { if (km) km._hold = 0; }
+            if (W.__agPrismCssMgr?._disposed || (D.head && !W.__agPrismCssMgr)) applyStyle();
           }
           if (W.__agClaudeStyle && !W.__agPrism) W.__agPrism = W.__agClaudeStyle;
           else if (W.__agPrism) W.__agClaudeStyle = W.__agPrism;
