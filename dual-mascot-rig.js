@@ -1289,12 +1289,11 @@
     const PP_OPEN = 'data-ag-pp-open';
     const PERF_M = 'data-ag-cs-perf-mode';
     const isDocHidden = () => !!(doc?.hidden);
-    const isPpOpen = () => {
-      const root = doc?.documentElement;
-      if (!root || !isFn(root.getAttribute) || root.getAttribute(PP_OPEN) !== '1') return false;
-      const pm = String(root.dataset?.agCsPerfMode || root.getAttribute(PERF_M) || '').trim().toLowerCase();
+    const isPerf = () => {
+      const r = doc?.documentElement, pm = String(r?.dataset?.agCsPerfMode || r?.getAttribute?.(PERF_M) || '').trim().toLowerCase();
       return pm === 'performance' || pm === 'eco';
     };
+    const isPpOpen = () => doc?.documentElement?.getAttribute?.(PP_OPEN) === '1' && isPerf();
     const isAttrB = () => {
       const root = doc?.documentElement;
       if (!root) return false;
@@ -1310,7 +1309,7 @@
       if (!root) return false;
       return isFn(root.getAttribute) && root.getAttribute(PM) === 'chat';
     };
-    const readDpr = () => min((win?.devicePixelRatio) || 1, 2);
+    const readDpr = () => min((win?.devicePixelRatio) || 1, isPerf() ? 1 : 2);
     let dpr = readDpr();
     const rand = (a, b) => a + random() * (b - a);
     const ticksIn = (minMs, maxMs) => max(1, round(rand(minMs, maxMs) / TICK));

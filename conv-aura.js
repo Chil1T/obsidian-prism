@@ -225,8 +225,9 @@
     const ga = (k) => getHtml()?.getAttribute?.(k);
     const rw = () => G.__agPrismRippleWorker || null;
     const getPerfMode = () => String(getHtml()?.dataset?.agCsPerfMode || ga(PM_A) || '').trim().toLowerCase();
+    const isPerf = (m = getPerfMode()) => m === 'performance' || m === 'eco';
     const isAB = () => ga(WB) === '1';
-    const isPpOpen = () => ga(PP_OPEN) === '1' && /^(performance|eco)$/.test(getPerfMode());
+    const isPpOpen = () => ga(PP_OPEN) === '1' && isPerf();
     const isH = () => !!(getD()?.hidden);
     const isP = () => !!(isH() || isAB() || wb || isPpOpen());
 
@@ -348,15 +349,17 @@
       return a.phase;
     }
 
+    const stopTimers = (a) => {
+      detachFocusWakeListeners(a);
+      for (const k of ['timer', 'resizeTimer', 'recTimer']) if (a[k]) { clearTimeout(a[k]); a[k] = 0; }
+      if (a.rafId && typeof cancelAnimationFrame === 'function') { cancelAnimationFrame(a.rafId); a.rafId = 0; }
+    };
+
     function unmount() {
       preferredView = null;
       if (!convAura) return;
       const a = convAura;
-      detachFocusWakeListeners(a);
-      if (a.timer) clearTimeout(a.timer);
-      if (a.resizeTimer) { clearTimeout(a.resizeTimer); a.resizeTimer = 0; }
-      if (a.recTimer) { clearTimeout(a.recTimer); a.recTimer = 0; }
-      if (a.rafId && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(a.rafId);
+      stopTimers(a);
       a.ro?.disconnect();
       a.uW?.();
       try { a.glow?.dispose?.(); } catch {}
@@ -367,11 +370,7 @@
     function park() {
       const a = convAura;
       if (!a) return;
-      detachFocusWakeListeners(a);
-      if (a.timer) { clearTimeout(a.timer); a.timer = 0; }
-      if (a.resizeTimer) { clearTimeout(a.resizeTimer); a.resizeTimer = 0; }
-      if (a.recTimer) { clearTimeout(a.recTimer); a.recTimer = 0; }
-      if (a.rafId && typeof cancelAnimationFrame === 'function') { cancelAnimationFrame(a.rafId); a.rafId = 0; }
+      stopTimers(a);
       try { a.ro?.disconnect(); } catch {}
       a.host?.remove(); a.seatParent = a.convView = null; a.releaseBacking?.(); a.sleeping = a.parked = true;
     }
@@ -446,7 +445,7 @@
       host.appendChild(glowCanvas);
       seatParent.insertBefore(host, seatParent.firstChild);
 
-      const NOOP_GLOW = { mode: 'none', resize() {}, clear() {}, draw() {}, drawStaticSnapshot() {}, dispose() {} };
+      const N = () => {}, NOOP_GLOW = { mode: 'none', resize: N, clear: N, draw: N, drawStaticSnapshot: N, dispose: N };
       const state = {
         seatParent, convView, host, canvas: glowCanvas,
         width: -1, height: -1, dpr: 0, phase: initPhase, phaseAt: initNow,
@@ -512,7 +511,7 @@
             return rippleCore.mountBrandHorizonGlow(glowCanvas, { prefer2D: true, width: 0, height: 0, onContextLost: onLost });
           };
           g = mk(p2d);
-          if (rippleCore?.mountBrandHorizonGlow && g?.mode === 'none' && !p2d) { try { g.dispose?.(true); } catch {} swapCv(); g = mk(1); }
+          if (rippleCore?.mountBrandHorizonGlow && g?.mode === 'none' && !p2d && !isPerf()) { try { g.dispose?.(true); } catch {} swapCv(); g = mk(1); }
         }
         state.glow = g; gLost = false;
         if (glowCanvas?.style) glowCanvas.style.display = (!rippleCore?.mountBrandHorizonGlow || g?.mode !== 'none') ? '' : 'none';
@@ -534,18 +533,17 @@
 
       mountGlow(0, 0);
 
-      function clearResizeTimer() {
-        if (state.resizeTimer) { clearTimeout(state.resizeTimer); state.resizeTimer = 0; }
-      }
+      const clearResizeTimer = () => { if (state.resizeTimer) { clearTimeout(state.resizeTimer); state.resizeTimer = 0; } };
+      const clrPend = () => { hasPendingResize = false; pendingW = pendingH = 0; };
 
       function flushPendingResize() {
         state.resizeTimer = 0;
         if (isDestroyed() || convAura !== state) return;
-        if (isH()) { hasPendingResize = false; pendingW = pendingH = 0; return releaseBacking(); }
+        if (isH()) { clrPend(); return releaseBacking(); }
         if (isResizing()) { state.resizeTimer = setTimeout(flushPendingResize, RESIZE_DEBOUNCE_MS); return; }
         if (!hasPendingResize) return;
         const tw = pendingW, th = pendingH;
-        hasPendingResize = false; pendingW = pendingH = 0;
+        clrPend();
         const prevW = state.width, prevH = state.height;
         if (tw > 0 && th > 0) applySize(tw, th);
         else layout(true);
@@ -554,7 +552,7 @@
 
       function releaseBacking() {
         clearResizeTimer();
-        hasPendingResize = false; pendingW = pendingH = 0;
+        clrPend();
         enterAuraSleep('hidden');
         if (bkRel && !hasCvBuf()) return;
         try { state.glow?.releaseBackingStore?.(); } catch {}
@@ -577,11 +575,10 @@
         if (isH()) return releaseBacking();
         const h = parentH > 0 ? M.max(1, M.round(parentH * CONV_AURA_HEIGHT_RATIO)) : 0;
         const rawDpr = (typeof window !== 'undefined' && Number(window.devicePixelRatio)) || 1;
-        const pm = getPerfMode();
-        const dpr = pm
-          ? (rw()?.resolveGlowDpr ? rw().resolveGlowDpr(rawDpr, getD() || docRef) : rippleCore?.resolveHorizonDpr ? rippleCore.resolveHorizonDpr(rawDpr, pm === 'performance' ? 0.55 : pm === 'quality' ? 1 : 0.7, pm) : M.min(rawDpr, 1) * 0.7)
-          : (rippleCore?.resolveHorizonDpr ? rippleCore.resolveHorizonDpr(rawDpr, 0.72) : M.min(rawDpr, 1) * 0.72);
+        const pm = getPerfMode(), pmChg = pm !== lastPerfKey;
+        const dpr = (pm && rw()?.resolveGlowDpr?.(rawDpr, getD() || docRef)) || (rippleCore?.resolveHorizonDpr ? rippleCore.resolveHorizonDpr(rawDpr, pm ? 0.7 : 0.72, pm) : M.min(rawDpr, 1) * (pm ? 0.7 : 0.72));
         lastPerfKey = pm;
+        if (pmChg && rippleCore?.mountBrandHorizonGlow && (isPerf(pm) ? state.glow?.mode === '2d' : state.glow?.mode === 'none')) { mountGlow(0, 1); drawnOnce = false; }
         const need = bkRel || (w > 0 && h > 0 && !hasCvBuf());
         if (!need && w === state.width && h === state.height && dpr === state.dpr) return;
         state.width = w; state.height = h; state.dpr = dpr;
@@ -617,6 +614,7 @@
         frameWanted = false;
         if (isDestroyed() || convAura !== state) return;
         if (isH()) { releaseBacking(); return; }
+        if (rippleCore?.mountBrandHorizonGlow && state.glow?.mode === 'none') { enterAuraSleep('settled'); return; }
 
         const ambient = resolveAmbient();
         if (ambient <= 0) {
@@ -650,11 +648,11 @@
           );
         }
 
-        // Split-Rate 300Hz VSync throttle; on real WebGL2/Worker, every targetFps (including 'native', which reports minGap 0)
-        // drives VSync-paced ~60fps (15ms floor, or 16.67ms under performance mode) for active phases and ~30fps (33ms) for pre-sleep phases.
+        // Split-Rate VSync throttle (14.5ms VSync-safe 60fps floor / 33ms pre-sleep)
         const isGpuGlow = !!(state.glow && (state.glow.mode === 'webgl2' || state.glow.mode === 'worker-webgl2'));
         const smoothGpu = isGpuGlow && typeof getMinFrameGapMs === 'function';
-        const perfGap = rw()?.getPerfMinGapMs?.(getD() || docRef) || (getPerfMode() === 'performance' ? 16.67 : 0);
+        const rawPGap = rw()?.getPerfMinGapMs?.(getD() || docRef) || 0;
+        const perfGap = rawPGap > 0 ? rawPGap * 0.88 : (isPerf() ? 14.5 : 0);
         const minGap = smoothGpu ? M.max(perfGap, Number(getMinFrameGapMs()) || 0) : perfGap;
         const isPreSleepPhase = !inLiftoffEbb && (phase === 'idle' || phase === 'awaiting-decision' || phase === 'long-task-complete');
         const smoothActiveGpu = smoothGpu && !isPreSleepPhase;
@@ -669,7 +667,7 @@
         const effectiveMinGap = smoothPreSleep
           ? M.max(31, schedFrameMs - 2)
           : smoothActiveGpu
-          ? M.max(15, minGap)
+          ? M.max(14.5, minGap)
           : isBurstTransient
           ? burstGap
           : M.max(minGap, M.max(0, schedFrameMs - 2));
@@ -747,14 +745,10 @@
         state.sleeping = false; state.sleepReason = '';
         if (host.hasAttribute('data-aura-sleep')) host.removeAttribute('data-aura-sleep');
 
+        const PHASE_DUR = { start: CONV_AURA_START_MS, complete: CONV_AURA_COMPLETE_MS, 'awaiting-decision': CONV_AURA_DECISION_BREATH_MS, 'error-halted': CONV_AURA_ERROR_MS, 'long-task-complete': CONV_AURA_LONG_COMPLETE_MS, idle: CONV_AURA_IDLE_SLEEP_MS };
         let nextDelay = isBurstTransient ? burstGap : schedFrameMs;
         if (inLiftoffEbb) nextDelay = M.min(nextDelay, M.max(8, 520 - liftElapsed + 4));
-        else if (phase === 'start') nextDelay = M.min(nextDelay, M.max(16, CONV_AURA_START_MS - phaseElapsed + 4));
-        else if (phase === 'complete') nextDelay = M.min(nextDelay, M.max(16, CONV_AURA_COMPLETE_MS - phaseElapsed + 4));
-        else if (phase === 'awaiting-decision') nextDelay = M.min(nextDelay, M.max(16, CONV_AURA_DECISION_BREATH_MS - phaseElapsed + 4));
-        else if (phase === 'error-halted') nextDelay = M.min(nextDelay, M.max(16, CONV_AURA_ERROR_MS - phaseElapsed + 4));
-        else if (phase === 'long-task-complete') nextDelay = M.min(nextDelay, M.max(16, CONV_AURA_LONG_COMPLETE_MS - phaseElapsed + 4));
-        else if (phase === 'idle') nextDelay = M.min(nextDelay, M.max(20, CONV_AURA_IDLE_SLEEP_MS - phaseElapsed + 4));
+        else if (PHASE_DUR[phase]) nextDelay = M.min(nextDelay, M.max(phase === 'idle' ? 20 : 16, PHASE_DUR[phase] - phaseElapsed + 4));
         clearTimeout(state.timer);
         if (smoothActiveGpu) { wake(false); return; }
         state.timer = setTimeout(() => wake(false), nextDelay);
@@ -847,7 +841,7 @@
             clearResizeTimer(); state.resizeTimer = setTimeout(flushPendingResize, RESIZE_DEBOUNCE_MS);
             return;
           }
-          clearResizeTimer(); hasPendingResize = false; pendingW = pendingH = 0;
+          clearResizeTimer(); clrPend();
           const prevW = state.width, prevH = state.height;
           if (hasCr) applySize(nextW, nextH); else layout(true);
           if (state.width !== prevW || state.height !== prevH) wake(true);

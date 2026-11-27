@@ -15,7 +15,7 @@
     OFF_P + 'button,[role="button"],[role="menuitem"],[role="option"],[role="tab"],[role="switch"],div[role="dialog"],.agy-overlay,.agy-overlay-item,.agy-fastpick,.agy-selection-pill,.agy-toast,.surface-composer-card,.agy-composer-footer,.ag-cs-home-panel,.ag-cs-ctx-menu,.ag-cs-ctx-toast,.ag-cs-model-glyph,.ag-cs-thinking-spark,.ag-cs-smooth-caret,.ag-cs-stream-chunk,.ag-cs-thought-chunk,.ag-cs-code-scan,.ag-prism-thought-chunk,.ag-cs-liftoff-veil,.ag-cs-liftoff-ring,[data-testid="conversation-row-sidebar"],[data-testid="conversation-row-history"],[data-testid="step-plan"],[data-testid="step-plan-item"],[data-testid="queued-messages-card"],[data-testid="interaction-takeover-card"],[data-ag-cs-overview-shell="1"],[data-ag-row-stagger="1"],[data-ag-cs-sonar="1"],' + OFF_PS + '),' +
     OFF_P + OFF_PS + ')::before,' + OFF_P + OFF_PS + ')::after{animation:none!important;transition:none!important}';
   const PERF_CAPS_TABLE = Object.freeze({
-    performance: Object.freeze({ mode: 'performance', maxFps: 60, minFrameGapMs: 15.2, maxDpr: 1, disableHeavyBlur: true, lowPriorityThrottleMs: 200, chunkBudgetMs: 2.5 }),
+    performance: Object.freeze({ mode: 'performance', maxFps: 60, minFrameGapMs: 14.5, maxDpr: 1, disableHeavyBlur: true, lowPriorityThrottleMs: 200, chunkBudgetMs: 2.5 }),
     balanced: Object.freeze({ mode: 'balanced', maxFps: 180, minFrameGapMs: 0, maxDpr: 1.5, disableHeavyBlur: false, lowPriorityThrottleMs: 180, chunkBudgetMs: 3.5 }),
     quality: Object.freeze({ mode: 'quality', maxFps: 0, minFrameGapMs: 0, maxDpr: 2, disableHeavyBlur: false, lowPriorityThrottleMs: 160, chunkBudgetMs: 4.5 }),
   });

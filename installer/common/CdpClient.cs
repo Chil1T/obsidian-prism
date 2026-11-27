@@ -3564,25 +3564,28 @@ namespace AgyClaudeStyle
                     "    if (nextCfg.__pmAuto) try { (window.__agDomBus || globalThis.__agDomBus)?.resolveAutoBootPerfMode?.(nextCfg, window); } catch {}\n" +
                     "    api.refreshConfig(nextCfg);\n" +
                     "    const liveState = typeof api.getState === 'function' ? api.getState() : null;\n" +
-                    "    const effectiveCfg = (liveState && liveState.cfg) || nextCfg;\n" +
-                    "    try { window.__agPrismTelemetry?.sync?.(effectiveCfg); } catch {}\n" +
-                    "    try { window.__agPrismEffortSlider?.sync?.(effectiveCfg); } catch {}\n" +
-                    "    try { window.__agPrismThought?.sync?.(effectiveCfg); } catch {}\n" +
-                    "    try { window.__agPrismInlineDiff?.sync?.(effectiveCfg); } catch {}\n" +
-                    "    try { if (effectiveCfg.omniModule === 'off') window.__agPrismOmni?.destroy?.(); else window.__agPrismOmni?.sync?.(effectiveCfg, window.__agPrismOmniServerMeta || null); } catch {}\n" +
-                    "    if (effectiveCfg && effectiveCfg.sidebarStudio !== 'on') {\n" +
-                    "      try { window.__agPrismSidebar?.sync?.(effectiveCfg, window.__agPrismSidebarMeta || null); } catch {}\n" +
-                    "      try { window.__agPrismSidebar?.destroy?.(); } catch {}\n" +
-                    "      try { delete window.__agPrismSidebar; } catch {}\n" +
-                    "      try { if (document.documentElement) ['data-ag-prism-mode', 'data-ag-prism-chat-kind', 'data-ag-prism-chat-telemetry', 'data-ag-cs-space', 'data-ag-cs-space-palette', 'data-ag-cs-space-accent'].forEach((a) => document.documentElement.removeAttribute(a)); } catch {}\n" +
+                    "    const e = (liveState && liveState.cfg) || nextCfg, w = window, de = document.documentElement;\n" +
+                    "    try { w.__agPrismTelemetry?.sync?.(e); } catch {}\n" +
+                    "    try { w.__agPrismEffortSlider?.sync?.(e); } catch {}\n" +
+                    "    try { w.__agPrismThought?.sync?.(e); } catch {}\n" +
+                    "    try { w.__agPrismInlineDiff?.sync?.(e); } catch {}\n" +
+                    "    try { if (e.omniModule === 'off') w.__agPrismOmni?.destroy?.(); else w.__agPrismOmni?.sync?.(e, w.__agPrismOmniServerMeta || null); } catch {}\n" +
+                    "    if (e && e.sidebarStudio !== 'on') {\n" +
+                    "      try { w.__agPrismSidebar?.sync?.(e, w.__agPrismSidebarMeta || null); } catch {}\n" +
+                    "      try { w.__agPrismSidebar?.destroy?.(); } catch {}\n" +
+                    "      try { delete w.__agPrismSidebar; } catch {}\n" +
+                    "      try { if (de) ['data-ag-prism-mode', 'data-ag-prism-chat-kind', 'data-ag-prism-chat-telemetry', 'data-ag-cs-space', 'data-ag-cs-space-palette', 'data-ag-cs-space-accent'].forEach((a) => de.removeAttribute(a)); } catch {}\n" +
                     "    } else {\n" +
-                    "      try { window.__agPrismSidebar?.sync?.(effectiveCfg, window.__agPrismSidebarMeta || null); } catch {}\n" +
+                    "      try { w.__agPrismSidebar?.sync?.(e, w.__agPrismSidebarMeta || null); } catch {}\n" +
                     "    }\n" +
-                    "    try { const hiMode = effectiveCfg.hostLocalization; const hiLang = effectiveCfg.language; const navL = String((typeof navigator !== 'undefined' && ((navigator.languages && navigator.languages[0]) || navigator.language)) || '').trim(); if (hiMode === 'off') window.__agPrismHostI18n?.setMode?.('off'); else if (hiMode === 'on') window.__agPrismHostI18n?.setMode?.('on'); else if ((hiLang && hiLang !== 'zh-CN' && hiLang !== 'tr' && hiLang !== 'auto') || ((!hiLang || hiLang === 'auto') && navL && !/^(?:zh(?:$|-(?:cn|hans|sg)(?:-|$))|tr(?:$|-))/i.test(navL))) window.__agPrismHostI18n?.destroy?.(); else window.__agPrismHostI18n?.setMode?.('auto'); } catch {}\n" +
-                    "    if (document.documentElement) {\n" +
-                    "      if (effectiveCfg && effectiveCfg.thoughtTranslate && effectiveCfg.thoughtTranslate !== 'off') document.documentElement.setAttribute('data-ag-prism-thought-view', effectiveCfg.thoughtView === 'bilingual' ? 'bilingual' : 'immersive');\n" +
-                    "      else document.documentElement.removeAttribute('data-ag-prism-thought-view');\n" +
-                    "      document.documentElement.setAttribute('data-ag-prism-sidebar-studio', effectiveCfg && effectiveCfg.sidebarStudio === 'on' ? 'on' : 'off');\n" +
+                    "    try { const hiMode = e.hostLocalization; const hiLang = e.language; const navL = String((typeof navigator !== 'undefined' && ((navigator.languages && navigator.languages[0]) || navigator.language)) || '').trim(); if (hiMode === 'off') window.__agPrismHostI18n?.setMode?.('off'); else if (hiMode === 'on') w.__agPrismHostI18n?.setMode?.('on'); else if ((hiLang && hiLang !== 'zh-CN' && hiLang !== 'tr' && hiLang !== 'auto') || ((!hiLang || hiLang === 'auto') && navL && !/^(?:zh(?:$|-(?:cn|hans|sg)(?:-|$))|tr(?:$|-))/i.test(navL))) w.__agPrismHostI18n?.destroy?.(); else w.__agPrismHostI18n?.setMode?.('auto'); } catch {}\n" +
+                    "    if (de) {\n" +
+                    "      if (e && e.thoughtTranslate && e.thoughtTranslate !== 'off') de.setAttribute('data-ag-prism-thought-view', e.thoughtView === 'bilingual' ? 'bilingual' : 'immersive');\n" +
+                    "      else de.removeAttribute('data-ag-prism-thought-view');\n" +
+                    "      de.setAttribute('data-ag-prism-sidebar-studio', e && e.sidebarStudio === 'on' ? 'on' : 'off');\n" +
+                    "      const pm = e && e.performanceMode, bus = w.__agPrismDomBus || w.__agDomBus || globalThis.__agDomBus;\n" +
+                    "      if (bus?.applyPerformanceMode) { try { bus.applyPerformanceMode(pm, document, w); } catch {} }\n" +
+                    "      else if (pm) de.setAttribute('data-ag-cs-perf-mode', pm === 'eco' ? 'performance' : pm === 'auto' ? 'balanced' : pm);\n" +
                     "    }\n" +
                     "    return { ok: true, refreshed: true, state: liveState };\n  })()"
                 );

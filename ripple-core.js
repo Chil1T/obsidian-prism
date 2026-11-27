@@ -1083,13 +1083,22 @@ color = vec4(rgb * a, a);
     if (owner && typeof owner.hidden === 'boolean') return owner.hidden;
     return typeof document !== 'undefined' && Boolean(document && document.hidden === true);
   }
+  const readPerfMode = (m) => {
+    if (typeof m === 'string') return m.trim().toLowerCase();
+    const h = m?.documentElement || m?.ownerDocument?.documentElement || (typeof document !== 'undefined' ? document.documentElement : null);
+    return String(h?.dataset?.agCsPerfMode || h?.getAttribute?.('data-ag-cs-perf-mode') || '').trim().toLowerCase();
+  };
+  const pickRen = (cv, o, glFn, c2dFn) => {
+    if (o?.externalRenderer) return o.externalRenderer;
+    const h2 = Boolean(o?.force2D) || (typeof globalThis !== 'undefined' && globalThis.__agRippleForce2D === true);
+    const m = readPerfMode(cv);
+    return (h2 || o?.prefer2D ? null : glFn()) || (!h2 && (o?.no2DFallback || m === 'performance' || m === 'eco') ? null : c2dFn());
+  };
   function createGlyphField(canvas, columns, rows, waves, options) {
     columns = clampDim(columns);
     rows = clampDim(rows);
-    const force2D = Boolean(options && (options.prefer2D || options.force2D)) || (typeof globalThis !== 'undefined' && globalThis.__agRippleForce2D === true);
-    const extRen = options && options.externalRenderer ? options.externalRenderer : null;
     const renderer = (columns > 0 && rows > 0)
-      ? (extRen || (force2D ? null : createWebGL2Renderer(canvas, columns, rows)) || create2DRenderer(canvas, columns, rows))
+      ? pickRen(canvas, options, () => createWebGL2Renderer(canvas, columns, rows), () => create2DRenderer(canvas, columns, rows))
       : null;
     const isGpuMod = Boolean(renderer && (renderer.gpuIdleMod || renderer.mode === 'webgl2' || renderer.mode === 'worker-webgl2'));
     const { cellWidth, cellHeight } = RIPPLE;
@@ -1543,12 +1552,7 @@ color = vec4(rgb * a, a);
 
   function resolveHorizonDpr(devicePixelRatio = 1, baseScale = 0.72, modeOrDoc) {
     const raw = Number.isFinite(Number(devicePixelRatio)) && Number(devicePixelRatio) > 0 ? Number(devicePixelRatio) : 1;
-    let mode = '';
-    if (typeof modeOrDoc === 'string') mode = modeOrDoc.trim().toLowerCase();
-    else {
-      const h = (modeOrDoc && modeOrDoc.documentElement) || (typeof document !== 'undefined' && document.documentElement);
-      mode = String((h && ((h.dataset && h.dataset.agCsPerfMode) || (h.getAttribute && h.getAttribute('data-ag-cs-perf-mode')))) || '').trim().toLowerCase();
-    }
+    const mode = readPerfMode(modeOrDoc);
     if (mode === 'performance') return M.max(0.5, M.min(0.95, +(raw * 0.55).toFixed(3)));
     if (mode === 'quality') return M.max(0.75, M.min(2.0, +raw.toFixed(3)));
     if (mode === 'balanced') {
@@ -2060,8 +2064,7 @@ outColor = clamp(vec4(premulRgb, outAlpha), 0.0, 1.0);
       };
     }
     const extRen = opts.externalRenderer || null;
-    const force2D = Boolean(opts.prefer2D || opts.force2D) || (typeof globalThis !== 'undefined' && globalThis.__agRippleForce2D === true);
-    const ren = extRen || (force2D ? null : createBrandHorizonGLRenderer(canvas)) || createBrandHorizon2DRenderer(canvas);
+    const ren = pickRen(canvas, opts, () => createBrandHorizonGLRenderer(canvas), () => createBrandHorizon2DRenderer(canvas));
     let cssW = M.max(0, Number(opts.width ?? canvas.clientWidth ?? 0)), cssH = M.max(0, Number(opts.height ?? canvas.clientHeight ?? 0));
     const maxDpr = extRen ? 2 : 1.75;
     let dpr = M.max(0.5, M.min(maxDpr, Number(opts.dpr || 1)));

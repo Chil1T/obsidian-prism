@@ -83,8 +83,8 @@
 
     const rimOff = () => {
       if (motionReduced?.()) return true;
-      const m = ga(getHtml(), 'data-ag-cs-motion') || '';
-      return m === 'off' || m === 'subtle';
+      const h = getHtml(), m = ga(h, 'data-ag-cs-motion') || '', p = ga(h, 'data-ag-cs-perf-mode') || '';
+      return m === 'off' || m === 'subtle' || p === 'performance' || p === 'eco';
     };
 
     const isH = () => !!(getDoc()?.hidden);

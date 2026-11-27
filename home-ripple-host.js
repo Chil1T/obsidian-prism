@@ -10,14 +10,18 @@
   const PP_OPEN = 'data-ag-pp-open';
   const SB = 'aside,[data-side-panel-body]', GCLS = 'ag-cs-brand-glow', GTID = 'onboarding-brand-glow', RCLS = 'ag-cs-ripple-canvas';
   const CP = { subtle: [0.6, 0.4, 0.45, 0.55, 32, 340, 72, 196, 0.62, 0.28, 0.72], medium: [0.85, 0.75, 0.75, 0.82, 22, 270, 54, 215, 0.85, 0.34, 0.88], full: [1, 1, 1, 1, 16, 220, 42, 230, 1, 0.4, 1] };
-  const isF = (v) => typeof v === 'function', ga = (e, k) => e?.getAttribute?.(k);
+  const isF = (v) => typeof v === 'function', ga = (e, k) => e?.getAttribute?.(k), T = (f) => { try { return f(); } catch {} };
   const ra = (e, k) => { if (e?.hasAttribute?.(k)) e.removeAttribute(k); };
   const hasH = (e) => ga(e, HA) === 'true' || ga(e, DHA) === 'true';
-  const docOf = () => (typeof document !== 'undefined' ? document : null);
+  const docOf = () => (typeof document !== 'undefined' ? document : null), winOf = () => (typeof window !== 'undefined' ? window : null);
   const nowOf = () => performance.now(), cl = (v, a, b) => M.max(a, M.min(b, v));
+  const hasRaf = () => typeof requestAnimationFrame === 'function';
   const cAF = (id) => { if (id && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(id); return 0; };
-  const rAF = (fn) => (typeof requestAnimationFrame === 'function' ? requestAnimationFrame(fn) : 0);
+  const rAF = (fn) => (hasRaf() ? requestAnimationFrame(fn) : 0);
   const cT = (id) => { if (id) clearTimeout(id); return 0; };
+  const N = () => {}, NF = () => false;
+  const NOOP_F = { mode: 'none', dispose: N, invalidate: N, draw: N, needsDraw: NF, busy: NF };
+  const NOOP_G = { mode: 'none', resize: N, draw: N, clear: N, dispose: N };
   const pAmb = (r) => G.__agPrismRipple?.parseAmbientScale ? G.__agPrismRipple.parseAmbientScale(r) : r == null || r === '' ? 1 : cl(Number(r) > 1 ? Number(r) / 100 : Number.isFinite(Number(r)) ? Number(r) : 1, 0, 1);
 
   function createHomeRippleController({ rippleCore: rc, isDestroyed: isD, isAllowed, isConvAllowed, getConvLevel, isConvRunning, isDarkTheme, motionReduced: mRed, getMinFrameGapMs, getAmbientIntensity, getAccentTone, setAttrIfChanged: sa, onPointerPressMascot }) {
@@ -84,10 +88,12 @@
     const clrRec = () => { recT = cT(recT); recRaf = cAF(recRaf); };
     const detR = (m) => { if (m?.root) { bindR(m.root, m, false); m.root = null; } };
 
+    const stopM = (m) => { stopT(m); clrRec(); rzT = cT(rzT); ro?.disconnect(); };
+
     function parkRipple() {
       setCS(false, null);
       if (!rm) return;
-      stopT(rm); clrRec(); rzT = cT(rzT); ro?.disconnect(); detR(rm);
+      stopM(rm); detR(rm);
       rm.host.remove(); rm.reclaim?.(); rm.sleeping = rm.parked = true;
     }
 
@@ -95,7 +101,7 @@
       setCS(false, null);
       if (!rm) return;
       const m = rm;
-      stopT(m); clrRec(); rzT = cT(rzT); ro?.disconnect(); unWin?.(); detR(m);
+      stopM(m); unWin?.(); detR(m);
       m.field?.dispose?.(); m.glow?.dispose?.(); m.host.remove();
       rm = ro = unWin = syncMFn = strChk = refLv = null;
     }
@@ -149,24 +155,26 @@
 
       const st = {
         mode, convLevel: lv, root: tr, host, glowCanvas: null, canvas: cv, width: -1, height: -1, dpr: 0, sleeping: false, parked: false,
-        aura: { reach: 0.47, strength: 1.0 }, waves: { active: () => false, disturb() {}, advance() {} }, glow: null,
-        field: { mode: 'none', dispose() {}, invalidate() {}, draw() {}, needsDraw: () => false, busy: () => false }, rafId: 0,
+        aura: { reach: 0.47, strength: 1.0 }, waves: { active: NF, disturb: N, advance: N }, glow: null,
+        field: NOOP_F, rafId: 0,
       };
-      const dead = () => isD() || st.parked;
-      const isAB = () => ga(html(), WB) === '1', isPp = () => ga(html(), PP_OPEN) === '1' && (st.mode !== 'conv' || /^(?:performance|eco)$/.test(pMode())), isRz = () => ga(html(), RZA) === '1';
+      const { cellWidth: CW, cellHeight: CH } = rc.RIPPLE;
+      const dead = () => isD() || st.parked, hasDim = () => st.width > 0 && st.height > 0;
+      const isPerf = (m = pMode()) => m === 'performance' || m === 'eco';
+      const isAB = () => ga(html(), WB) === '1', isPp = () => ga(html(), PP_OPEN) === '1' && (st.mode !== 'conv' || isPerf()), isRz = () => ga(html(), RZA) === '1';
       const isStr = () => st.mode === 'conv' && isF(isConvRunning) && Boolean(isConvRunning());
       const hP = () => Boolean(d.hidden || wb || isAB() || isPp() || (st.mode === 'conv' && isCB()));
-      const hasSz = (c) => Boolean(c && c.width > 0 && c.height > 0);
-      const isWGl = () => st.glow?.mode === 'worker-webgl2', isWF = () => st.field?.mode === 'worker-webgl2';
-      const hasFSz = () => Boolean(cv && (isWF() ? st.field.getBufferSize?.().width > 0 && st.field.getBufferSize?.().height > 0 : hasSz(cv)));
-      const hasGSz = () => { const gc = st.glowCanvas; return Boolean(gc && (isWGl() ? st.glow.getBufferSize?.().width > 0 && st.glow.getBufferSize?.().height > 0 : hasSz(gc))); };
+      const hasSz = (c) => Boolean(c && c.width > 0 && c.height > 0), isW = (i) => i?.mode === 'worker-webgl2';
+      const hasBuf = (c, i) => Boolean(c && (isW(i) ? i.getBufferSize?.().width > 0 && i.getBufferSize?.().height > 0 : hasSz(c)));
+      const hasFSz = () => hasBuf(cv, st.field), hasGSz = () => hasBuf(st.glowCanvas, st.glow);
       const invAll = () => { st.field?.invalidate?.(); st.glow?.invalidate?.(); };
       const setV = (el, on) => { if (el?.style) el.style.display = on ? '' : 'none'; };
-      const isLost = (c, i) => Boolean(i?.isContextLost?.() || (i?.mode !== '2d' && i?.mode !== 'worker-webgl2' && c?.getContext?.('webgl2')?.isContextLost?.()));
-      const hasG = isF(rc.mountBrandHorizonGlow);
-      const rDpr = () => { const r = (typeof window !== 'undefined' && window.devicePixelRatio) || 1, w = rw(); return w?.resolveRippleDpr ? w.resolveRippleDpr(r, d) : M.min(r, pMode() === 'performance' ? 1 : pMode() === 'balanced' ? 1.5 : 2); };
-      const gDpr = () => { const r = (typeof window !== 'undefined' && window.devicePixelRatio) || 1, w = rw(); return w?.resolveGlowDpr ? w.resolveGlowDpr(r, d, 0.7) : pMode() === 'performance' ? 0.55 : pMode() === 'balanced' ? 0.7 : pMode() === 'quality' ? M.min(r, 2) : 0.6; };
-      const pGap = () => rw()?.getPerfMinGapMs?.(d) || (pMode() === 'performance' ? 16.67 : 0);
+      const isLost = (c, i) => Boolean(i?.isContextLost?.() || (i?.mode !== '2d' && !isW(i) && c?.getContext?.('webgl2')?.isContextLost?.()));
+      const hasG = isF(rc.mountBrandHorizonGlow), rawDpr = () => winOf()?.devicePixelRatio || 1;
+      const gridOf = (w = st.width, h = st.height) => [M.ceil(w / CW), M.ceil(h / CH)];
+      const rDpr = () => { const r = rawDpr(), m = pMode(); return rw()?.resolveRippleDpr?.(r, d) ?? M.min(r, isPerf(m) ? 1 : m === 'balanced' ? 1.5 : 2); };
+      const gDpr = () => { const r = rawDpr(), m = pMode(); return rw()?.resolveGlowDpr?.(r, d, 0.7) ?? (isPerf(m) ? 0.55 : m === 'balanced' ? 0.7 : m === 'quality' ? M.min(r, 2) : 0.6); };
+      const pGap = () => { const g = rw()?.getPerfMinGapMs?.(d); return g > 0 ? g * 0.88 : isPerf() ? 14.5 : 0; };
 
       function swapCv(o, cls, tid, bf) {
         const n = mkEl('canvas', cls);
@@ -174,9 +182,11 @@
         o?.replaceWith ? o.replaceWith(n) : o?.parentNode?.replaceChild ? o.parentNode.replaceChild(n, o) : (o?.remove?.(), bf && host.insertBefore ? host.insertBefore(n, cv) : host.appendChild(n));
         return n;
       }
+      const swG = () => (st.glowCanvas = swapCv(st.glowCanvas, GCLS, GTID, 1)), swF = () => (cv = st.canvas = swapCv(cv, RCLS));
+      const lostG = () => onLost(0), lostF = () => onLost(1);
 
-      const setCvSz = (cols, rows, skip) => { if (!skip && !isWF()) { cv.width = pw; cv.height = ph; } cv.style.width = `${cols * rc.RIPPLE.cellWidth}px`; cv.style.height = `${rows * rc.RIPPLE.cellHeight}px`; };
-      const resyncG = () => { if (st.width > 0 && st.height > 0) { syncG(st.width, st.height); wake(true); } };
+      const setCvSz = (cols, rows, skip) => { if (!skip && !isW(st.field)) { cv.width = pw; cv.height = ph; } cv.style.width = `${cols * CW}px`; cv.style.height = `${rows * CH}px`; };
+      const resyncG = () => { if (hasDim()) { syncG(st.width, st.height); wake(true); } };
 
       function onLost(isF0) {
         if (dead()) return;
@@ -184,46 +194,49 @@
         if (recN >= 3 || recT || recRaf) return;
         const run = () => { recT = recRaf = 0; recoverLost(); };
         const tid = typeof setTimeout === 'function' ? setTimeout(run, 32) : 0;
-        if (tid) recT = tid; else if (typeof requestAnimationFrame === 'function') recRaf = rAF(run); else run();
+        if (tid) recT = tid; else if (hasRaf()) recRaf = rAF(run); else run();
       }
 
       function mountGlow(p2d, sw) {
         if (!st.glowCanvas) return;
-        if (sw) { try { st.glow?.dispose?.(true); } catch {} st.glowCanvas = swapCv(st.glowCanvas, GCLS, GTID, 1); }
+        if (sw) { T(() => st.glow?.dispose?.(true)); swG(); }
+        const pf = isPerf();
+        if (pf && p2d) { st.glow = NOOP_G; gLost = false; setV(st.glowCanvas, 0); return; }
         const wm = rw();
         let g = hasG && wm?.mountManagedGlow ? wm.mountManagedGlow({
-          getCanvas: () => st.glowCanvas, swapCanvas: () => (st.glowCanvas = swapCv(st.glowCanvas, GCLS, GTID, 1)),
-          rippleCore: rc, doc: d, prefer2D: !!p2d, allowWorker: !wFail, onContextLost: () => onLost(0),
-          onFallbackDone: () => { wFail = true; if (!dead() && st.glowCanvas) { try { st.glow?.dispose?.(); } catch {} mountGlow(0, 1); resyncG(); } },
+          getCanvas: () => st.glowCanvas, swapCanvas: swG, rippleCore: rc, doc: d, prefer2D: !!p2d, allowWorker: !wFail, onContextLost: lostG,
+          onFallbackDone: () => { wFail = true; if (!dead() && st.glowCanvas) { T(() => st.glow?.dispose?.()); mountGlow(0, 1); resyncG(); } },
           onUpgradeReady: () => { if (!dead() && !wFail && st.mode === 'home' && st.glow?.mode === 'webgl2') { mountGlow(0, 1); resyncG(); } },
         }) : null;
         if (!g) {
-          const mk = (u) => (hasG ? rc.mountBrandHorizonGlow(st.glowCanvas, { prefer2D: !!u, width: 0, height: 0, onContextLost: () => onLost(0) }) : { mode: 'none', resize() {}, draw() {}, dispose() {} });
+          const mk = (u) => (hasG ? rc.mountBrandHorizonGlow(st.glowCanvas, { prefer2D: !!u, width: 0, height: 0, onContextLost: lostG }) : NOOP_G);
           g = mk(p2d);
-          if (hasG && g?.mode === 'none' && !p2d) { try { g.dispose?.(true); } catch {} st.glowCanvas = swapCv(st.glowCanvas, GCLS, GTID, 1); g = mk(1); }
+          if (hasG && g?.mode === 'none' && !p2d && !pf) { T(() => g.dispose?.(true)); swG(); g = mk(1); }
         }
         st.glow = g; gLost = false; setV(st.glowCanvas, !hasG || g?.mode !== 'none');
       }
 
-      const remountF = () => { st.field = mountField(M.ceil(st.width / rc.RIPPLE.cellWidth), M.ceil(st.height / rc.RIPPLE.cellHeight), 0, 1); tok = sampleTok(cv); cRect = null; updateCalm(); f1 = true; wake(true); return st.field; };
+      const remountF = () => { st.field = mountField(...gridOf(), 0, 1); tok = sampleTok(cv); cRect = null; updateCalm(); f1 = true; wake(true); return st.field; };
       function mountField(cols, rows, p2d, sw) {
-        if (sw) cv = st.canvas = swapCv(cv, RCLS);
+        if (sw) swF();
+        const pf = isPerf();
+        if (pf && p2d) { fLost = false; setV(cv, 0); return NOOP_F; }
         const wm = rw();
         let f = null;
         if (cols > 0 && rows > 0 && wm?.mountManagedField && !p2d && !fWFail) {
           setCvSz(cols, rows, 1);
           f = wm.mountManagedField({
-            getCanvas: () => cv, swapCanvas: () => { cv = st.canvas = swapCv(cv, RCLS); setCvSz(cols, rows, 0); return cv; },
-            cols, rows, dpr: st.dpr || rDpr(), waves: st.waves, rippleCore: rc, prefer2D: false, allowWorker: !fWFail, onContextLost: () => onLost(1),
-            onFallbackDone: () => { fWFail = true; if (dead()) return null; try { st.field?.dispose?.(); } catch {} return remountF(); },
-            onUpgradeReady: () => { if (!dead() && !fWFail && st.field?.mode === 'webgl2' && st.width > 0 && st.height > 0) { try { st.field.dispose?.(); } catch {} remountF(); } },
+            getCanvas: () => cv, swapCanvas: () => { swF(); setCvSz(cols, rows, 0); return cv; },
+            cols, rows, dpr: st.dpr || rDpr(), waves: st.waves, rippleCore: rc, doc: d, prefer2D: false, allowWorker: !fWFail, onContextLost: lostF,
+            onFallbackDone: () => { fWFail = true; if (dead()) return null; T(() => st.field?.dispose?.()); return remountF(); },
+            onUpgradeReady: () => { if (!dead() && !fWFail && st.field?.mode === 'webgl2' && hasDim()) { T(() => st.field.dispose?.()); remountF(); } },
           });
-          if (f && f.mode !== 'worker-webgl2') setCvSz(cols, rows, 0);
+          if (f && !isW(f)) setCvSz(cols, rows, 0);
         } else {
           setCvSz(cols, rows, 0);
-          const mk = (u) => rc.createGlyphField(cv, cols, rows, st.waves, { prefer2D: !!u, onContextLost: () => onLost(1) });
+          const mk = (u) => rc.createGlyphField(cv, cols, rows, st.waves, { prefer2D: !!u, onContextLost: lostF });
           f = mk(p2d);
-          if (cols > 0 && rows > 0 && f?.mode === 'none' && !p2d) { try { f.dispose?.(true); } catch {} cv = st.canvas = swapCv(cv, RCLS); setCvSz(cols, rows, 0); f = mk(1); }
+          if (cols > 0 && rows > 0 && f?.mode === 'none' && !p2d && !pf) { T(() => f.dispose?.(true)); swF(); setCvSz(cols, rows, 0); f = mk(1); }
         }
         fLost = false; setV(cv, cols <= 0 || rows <= 0 || f?.mode !== 'none');
         return f;
@@ -234,20 +247,20 @@
         if (d.hidden) return reclaim();
         const nf = fLost, ng = gLost; fLost = gLost = false;
         const p2d = ++recN >= 2;
-        if (nf && st.width > 0 && st.height > 0) {
-          try { st.field?.dispose?.(true); } catch {}
-          st.field = mountField(M.ceil(st.width / rc.RIPPLE.cellWidth), M.ceil(st.height / rc.RIPPLE.cellHeight), p2d, 1);
+        if (nf && hasDim()) {
+          T(() => st.field?.dispose?.(true));
+          st.field = mountField(...gridOf(), p2d, 1);
           tok = sampleTok(cv); cRect = null; updateCalm();
         }
         if (ng && st.glowCanvas && st.mode === 'home') {
           mountGlow(p2d, 1);
-          if (st.width > 0 && st.height > 0 && st.glow?.mode !== 'none') st.glow?.resize?.(st.width, st.height, gDpr());
+          if (hasDim() && st.glow?.mode !== 'none') st.glow?.resize?.(st.width, st.height, gDpr());
         }
         f1 = true; drawn = false; invAll(); wake(true);
       }
 
       syncMFn = (nm) => {
-        if (nm === 'conv') { gLost = false; try { st.glow?.dispose?.(); } catch {} st.glow = null; st.glowCanvas?.remove?.(); st.glowCanvas = null; tideAt = 0; }
+        if (nm === 'conv') { gLost = false; T(() => st.glow?.dispose?.()); st.glow = null; st.glowCanvas?.remove?.(); st.glowCanvas = null; tideAt = 0; }
         else if (!st.glowCanvas) {
           const gc = mkEl('canvas', GCLS); gc.setAttribute('data-testid', GTID);
           host.insertBefore ? host.insertBefore(gc, st.canvas) : host.appendChild(gc);
@@ -265,17 +278,16 @@
         if (!cur || (hasG && st.glow?.mode === 'none')) return;
         const gd = gDpr();
         st.glow?.resize?.(w, h, gd);
-        if (!isWGl() && (!cur.width || !cur.height)) { cur.width = M.max(1, M.round(w * gd)); cur.height = M.max(1, M.round(h * gd)); }
+        if (!isW(st.glow) && (!cur.width || !cur.height)) { cur.width = M.max(1, M.round(w * gd)); cur.height = M.max(1, M.round(h * gd)); }
       }
 
       const reclaim = () => {
         rzT = cT(rzT); rzPend = false; enterIdleSleep();
         const gc = st.glowCanvas;
         if (shrunk && !hasFSz() && !hasGSz()) return;
-        try { st.glow?.releaseBackingStore?.(); } catch {}
-        try { st.field?.releaseBackingStore?.(); } catch {}
-        if (!isWF()) cv.width = cv.height = 0;
-        if (gc && !isWGl()) gc.width = gc.height = 0;
+        for (const x of [st.glow, st.field]) T(() => x?.releaseBackingStore?.());
+        if (!isW(st.field)) cv.width = cv.height = 0;
+        if (gc && !isW(st.glow)) gc.width = gc.height = 0;
         shrunk = f1 = true; drawn = false;
       };
 
@@ -300,19 +312,21 @@
           cRect = null;
           if (shrunk || gLost || isLost(gc, st.glow) || (pw > 0 && ph > 0 && (!hasFSz() || (gc && !hasGSz())))) {
             shrunk = drawn = false; f1 = true;
-            if (isWF()) st.field.resize(M.ceil(w / rc.RIPPLE.cellWidth), M.ceil(h / rc.RIPPLE.cellHeight), st.waves, dpr);
+            if (isW(st.field)) st.field.resize(...gridOf(w, h), st.waves, dpr);
             else { cv.width = pw; cv.height = ph; }
             syncG(w, h); invAll();
           }
           return;
         }
-        const cw = rc.RIPPLE.cellWidth, ch = rc.RIPPLE.cellHeight, cols = M.ceil(w / cw), rows = M.ceil(h / ch);
-        const was2d = st.field?.mode === '2d', inPlace = !lostF && cols > 0 && rows > 0 && st.field?.mode !== 'none' && isF(st.field?.resize);
-        st.width = w; st.height = h; st.dpr = dpr; pw = M.round(cols * cw * dpr); ph = M.round(rows * ch * dpr);
-        shrunk = drawn = false; f1 = true; syncG(w, h);
+        const [cols, rows] = gridOf(w, h), pf = isPerf(pm), was2d = st.field?.mode === '2d', drop2d = pChg && pf && was2d;
+        const inPlace = !lostF && !drop2d && cols > 0 && rows > 0 && st.field?.mode !== 'none' && isF(st.field?.resize);
+        st.width = w; st.height = h; st.dpr = dpr; pw = M.round(cols * CW * dpr); ph = M.round(rows * CH * dpr);
+        shrunk = drawn = false; f1 = true;
+        if (pChg && gc && ((pf && st.glow?.mode === '2d') || (!pf && st.glow?.mode === 'none'))) mountGlow(0, 1);
+        syncG(w, h);
         st.waves = rc.createWaveField(cols, rows);
         if (inPlace) { setCvSz(cols, rows); st.field.resize(cols, rows, st.waves, dpr); }
-        else { st.field.dispose(true); st.field = mountField(cols, rows, was2d && !lostF, lostF || isWF()); }
+        else { st.field.dispose(true); st.field = mountField(cols, rows, was2d && !lostF && !pf, lostF || isW(st.field) || drop2d); }
         tok = sampleTok(cv); cRect = null; updateCalm();
       }
 
@@ -321,12 +335,14 @@
         st.glow?.setPaused?.(true); sa(host, 'data-ripple-sleep', '1');
       }
 
+      const noRen = () => st.field?.mode === 'none' && (!st.glowCanvas || st.glow?.mode === 'none');
       function wake(imm = false) {
         timer = cT(timer);
         if (dead()) return;
         if (d.hidden) return reclaim();
         if (st.mode === 'conv' && isCB()) return parkRipple();
         if (shrunk) layout();
+        if (noRen()) return enterIdleSleep();
         st.sleeping = false; ra(host, 'data-ripple-sleep');
         if (hP() || isStr()) { if ((!drawn || f1) && hasFSz()) drawFrame(nowOf()); return enterIdleSleep(); }
         if (imm) { st.rafId = cAF(st.rafId); wanted = false; f1 = true; return drawFrame(nowOf()); }
@@ -384,7 +400,7 @@
           }
           st.field.draw(aT, pal, still); drawn = true;
         }
-        if (isD() || hP() || still || !(inT || busy || inI || aRec)) enterIdleSleep(); else wake();
+        if (isD() || hP() || still || noRen() || !(inT || busy || inI || aRec)) enterIdleSleep(); else wake();
       }
 
       st.wake = wake; st.reclaim = reclaim;
@@ -392,10 +408,10 @@
       st.reattach = () => {
         timer = cT(timer); clrRec(); rzT = cT(rzT); rzPend = false; fLost = gLost = false; recN = 0; prev = nowOf(); wSlp = 1; aWk = 0; wanted = false; f1 = true; as.active = false; lx = ly = null; carry = 0;
         const runRe = () => { if (dead()) return; const pw0 = st.width, ph0 = st.height; layout(); if (st.width !== pw0 || st.height !== ph0 || st.mode === 'conv') updateCalm(); invAll(); wake(true); };
-        if (!shrunk && st.width > 0 && st.height > 0 && !d.hidden && typeof requestAnimationFrame === 'function') { st.rafId = cAF(st.rafId); st.rafId = rAF(() => { st.rafId = 0; runRe(); }); } else runRe();
+        if (!shrunk && hasDim() && !d.hidden && hasRaf()) { st.rafId = cAF(st.rafId); st.rafId = rAF(() => { st.rafId = 0; runRe(); }); } else runRe();
       };
 
-      const invNG = () => { if (st.field?.mode !== 'webgl2' && st.field?.mode !== 'worker-webgl2') st.field?.invalidate?.(); };
+      const invNG = () => { if (st.field?.mode !== 'webgl2' && !isW(st.field)) st.field?.invalidate?.(); };
       st.onMove = (ev) => {
         if (mRed()) return;
         if (!isAB()) wb = false;
@@ -408,7 +424,7 @@
         const now = nowOf();
         if (lx !== null && ly !== null) {
           const dist = M.hypot(x - lx, y - ly), spd = dist / M.max(0.004, (now - lsa) / 1000), ms = cp ? cp[5] : 220, cs = cp ? cp[6] : 42;
-          if (spd >= ms) { carry += dist; if (carry >= cs) { carry = M.min(20, carry - cs); st.waves.skimmer?.(M.floor(x / rc.RIPPLE.cellWidth), M.floor(y / rc.RIPPLE.cellHeight), cl((spd - ms) / 1800, 0.05, 1) * (cp ? cp[3] : 1)); } }
+          if (spd >= ms) { carry += dist; if (carry >= cs) { carry = M.min(20, carry - cs); st.waves.skimmer?.(M.floor(x / CW), M.floor(y / CH), cl((spd - ms) / 1800, 0.05, 1) * (cp ? cp[3] : 1)); } }
           else carry *= 0.85;
         }
         lx = x; ly = y; lsa = now;
@@ -425,7 +441,7 @@
         const cp = c ? CP[st.convLevel] || CP.medium : null, r = cv.getBoundingClientRect();
         cRect = r; cRectAt = nowOf();
         if (st.sleeping) prev = cRectAt;
-        st.waves.disturb(M.floor((ev.clientX - r.left) / rc.RIPPLE.cellWidth), M.floor((ev.clientY - r.top) / rc.RIPPLE.cellHeight), cp && st.convLevel !== 'full' ? { amplitudeScale: cp[3], radiusScale: 0.72 + 0.28 * cp[3], duration: cp[9], loadWeight: cp[10] } : undefined);
+        st.waves.disturb(M.floor((ev.clientX - r.left) / CW), M.floor((ev.clientY - r.top) / CH), cp && st.convLevel !== 'full' ? { amplitudeScale: cp[3], radiusScale: 0.72 + 0.28 * cp[3], duration: cp[9], loadWeight: cp[10] } : undefined);
         st.field.invalidate(); wake();
         if (!c) onPointerPressMascot?.(ev.clientX);
       };
@@ -443,13 +459,13 @@
       };
       const onBlur = () => { wb = true; enterIdleSleep(); }, onFocus = () => { wb = false; onVis(); };
       d.addEventListener('visibilitychange', onVis);
-      const wRef = typeof window !== 'undefined' ? window : null;
+      const wRef = winOf();
       wRef?.addEventListener?.('blur', onBlur); wRef?.addEventListener?.('focus', onFocus);
       const mos = [], unsubs = [], hA = [WB, PP_OPEN, PMA, 'data-ag-prism-wallpaper', HA, DHA, 'data-ag-cs-motion'];
       const onAttr = () => { if (!isAB()) wb = false; onVis(); };
       const dBus = wRef && (wRef.__agDomBus || wRef.__agPrismDomBus);
-      if (dBus?.subscribe) { try { unsubs.push(dBus.subscribe('home-ripple-root', onAttr, { priority: 'high', attributes: true, attributeFilter: hA, filter: (m) => m?.type === 'attributes' && (m.target === html() || m.target === d.body) && hA.includes(m.attributeName), observeOptions: { childList: false, subtree: true, attributes: true, attributeFilter: hA } })); } catch {} }
-      if (!unsubs.length && typeof MutationObserver === 'function') { for (const [el, af] of [[html(), hA], [d.body, [HA, DHA]]]) if (el) { try { const mo = new MutationObserver(onAttr); mo.observe(el, { attributes: true, attributeFilter: af }); mos.push(mo); } catch {} } }
+      if (dBus?.subscribe) T(() => unsubs.push(dBus.subscribe('home-ripple-root', onAttr, { priority: 'high', attributes: true, attributeFilter: hA, filter: (m) => m?.type === 'attributes' && (m.target === html() || m.target === d.body) && hA.includes(m.attributeName), observeOptions: { childList: false, subtree: true, attributes: true, attributeFilter: hA } })));
+      if (!unsubs.length && typeof MutationObserver === 'function') for (const [el, af] of [[html(), hA], [d.body, [HA, DHA]]]) if (el) T(() => { const mo = new MutationObserver(onAttr); mo.observe(el, { attributes: true, attributeFilter: af }); mos.push(mo); });
       unWin = () => { rRaf = cAF(rRaf); rzT = cT(rzT); rzPend = false; d.removeEventListener('visibilitychange', onVis); wRef?.removeEventListener?.('blur', onBlur); wRef?.removeEventListener?.('focus', onFocus); unsubs.forEach((u) => u?.()); mos.forEach((mo) => mo.disconnect()); };
 
       if (typeof ResizeObserver === 'function') {
@@ -469,15 +485,15 @@
         const doLay = () => { rRaf = 0; if (!dead()) d.hidden ? reclaim() : applyLay(1); };
         ro = new ResizeObserver(() => {
           if (d.hidden) { rzT = cT(rzT); rzPend = false; return reclaim(); }
-          const now = nowOf(), live = !shrunk && st.width > 0 && st.height > 0 && hasFSz() && !fLost && !isLost(cv, st.field);
+          const now = nowOf(), live = !shrunk && hasDim() && hasFSz() && !fLost && !isLost(cv, st.field);
           if (live && (isRz() || rzPend || (lastLayAt >= 0 && now > lastLayAt && now - lastLayAt <= RZ_WIN))) {
             rRaf = cAF(rRaf); rzPend = true; rzT = cT(rzT); rzT = setTimeout(flushLay, RZ_MS); return;
           }
-          typeof requestAnimationFrame !== 'function' ? doLay() : !rRaf && (rRaf = rAF(doLay));
+          !hasRaf() ? doLay() : !rRaf && (rRaf = rAF(doLay));
         });
       }
       mountR(st, mode, tr); rm = st; layout();
-      st.refreshTheme = () => { tok = sampleTok(cv); f1 = true; invAll(); d.hidden ? reclaim() : wake(); };
+      st.refreshTheme = () => { if (pMode() !== lastPM) layout(); tok = sampleTok(cv); f1 = true; invAll(); d.hidden ? reclaim() : wake(); };
       wake();
     }
 
@@ -486,13 +502,13 @@
       if (!rm || rm.mode !== 'home' || !isF(rm.field?.triggerLiftoffBurst)) return;
       const r = rm.canvas?.getBoundingClientRect?.(), ok = cr && r?.width > 0 && r?.height > 0;
       const nx = ok ? cl((cr.left + cr.width * 0.5 - r.left) / r.width, 0.05, 0.95) : 0.5, ny = ok ? cl((cr.top + cr.height * 0.5 - r.top) / r.height, 0.05, 0.95) : 0.62;
-      try { rm.field.triggerLiftoffBurst(nx, ny); rm.field.invalidate?.(); rm.wake?.(); } catch {}
+      T(() => { rm.field.triggerLiftoffBurst(nx, ny); rm.field.invalidate?.(); rm.wake?.(); });
     }
     function triggerTideSwell() {
       if (!rm) syncRipple();
       if (!rm || rm.mode !== 'home') return;
       tideAt = nowOf(); rm.aura.reach = 0.2; rm.aura.strength = 0.32;
-      try { rm.field?.triggerTideSwell?.(); rm.field?.invalidate?.(); rm.wake?.(); } catch {}
+      T(() => { rm.field?.triggerTideSwell?.(); rm.field?.invalidate?.(); rm.wake?.(); });
     }
 
     return { sync: syncRipple, park: parkRipple, unmount: unmountRipple, refreshTheme, triggerLiftoffBurst, triggerTideSwell, getMount: () => rm };

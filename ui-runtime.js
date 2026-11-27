@@ -222,6 +222,7 @@ return [key, value];
 const routeConfigDirtyFlags = (prevCfg, nextCfg, patch) => {
 dirtyFlags.g = true;
 const any = (s) => s.split('|').some((k) => prevCfg[k] !== nextCfg[k] || O.hasOwn(patch, k));
+if (any('performanceMode')) dirtyFlags.t = dirtyFlags.c = dirtyFlags.r = true;
 if (any('palette|lightPreset|accentTone|ambientIntensity|darkAura|darkAuraStyle|cornerStyle|chatFont|chatFontCustom|codeFont|codeFontCustom|codeLigatures')) dirtyFlags.t = true;
 if (any('accentTone|composerRestyle|placeholderStyle|mascot|smoothCaret|telemetryModule|motionLevel|ignoreReducedMotion|language')) dirtyFlags.c = true;
 if (any('homeLayout|homeRipple|convRipple|motionLevel|ignoreReducedMotion|language')) dirtyFlags.r = true;
@@ -824,12 +825,12 @@ const invRim = () => { prismRimCtl.invalidateMetrics?.(); prismRimCtl.markDirty(
 function applyRootAttrs(forceAbsorbed = false) {
 const html = D.documentElement;
 if (!html) return;
-const palette = getEffectivePalette(), lightPreset = getLightPreset(), lang = getLang(), motionLv = getMotionLevel();
+const palette = getEffectivePalette(), lightPreset = getLightPreset(), lang = getLang(), motionLv = getMotionLevel(), perfMode = normPerfMode(cfg.performanceMode);
 const targetFps = getTargetFps(), telemetryMod = getTelemetryMode(), effortSliderMod = getEffortSliderMode(), dark = isDarkTheme();
 runGuardedMut(() => {
 const csA = {
 style: '1', theme: dark ? 'dark' : 'light', palette, 'light-preset': lightPreset, motion: motionLv,
-'perf-mode': normPerfMode(cfg.performanceMode), 'target-fps': targetFps, telemetry: telemetryMod, 'telemetry-quota': cfg.telemetryQuotaMode, 'effort-slider': effortSliderMod,
+'perf-mode': perfMode, 'target-fps': targetFps, telemetry: telemetryMod, 'telemetry-quota': cfg.telemetryQuotaMode, 'effort-slider': effortSliderMod,
 'thought-translate': getThoughtTranslateMode(), accent: getAccentTone(), corners: getCornerStyle(),
 'scroll-bottom': cfg.scrollBottomMotion, 'code-font': getCodeFont(), ligatures: isCodeLigaturesEnabled() ? '1' : '0',
 ambient: getAmbientCssValue(), 'dark-aura': cfg.darkAura, 'dark-aura-style': cfg.darkAuraStyle, home: cfg.homeLayout,
@@ -855,7 +856,7 @@ if (getThoughtTranslateMode() === 'off') clrA(tv); else setAttrIfChanged(html, t
 syncCaretListeners(cfg.smoothCaret !== false);
 if (telemetryMod !== lastAppliedTelemetry) { const prevTel = lastAppliedTelemetry; lastAppliedTelemetry = telemetryMod; if (prevTel) ensurePulseBridge(telemetryMod !== 'off'); }
 const refreshOptics = () => { rippleCtl.refreshTheme(); convAuraCtl.sync(); convAuraCtl.refreshTheme(); invRim(); };
-const motionKey = `${motionLv}|${igRm ? 1 : 0}`;
+const motionKey = `${motionLv}|${igRm ? 1 : 0}|${perfMode}`;
 if (motionKey !== lastAppliedMotion) {
 const prevMotion = lastAppliedMotion; lastAppliedMotion = motionKey;
 if (prevMotion) try { rippleCtl.sync?.(); } catch {}
@@ -865,7 +866,7 @@ if (prevMotion) { dirtyFlags.c = true; syncHostAnimatedIcons(null); streamChoreo
 if (lang !== lastAppliedLang) { const prevLang = lastAppliedLang; lastAppliedLang = lang; if (prevLang) refreshOpenUiForLanguage(); }
 const themeKey = `${palette}|${lightPreset}|${dark ? 'd' : 'l'}|${getAccentTone()}|${getAmbientIntensitySetting()}|${cfg.darkAura}|${cfg.darkAuraStyle}|${getCornerStyle()}`;
 if (themeKey !== lastThemeKey) { lastThemeKey = themeKey; refreshOptics(); try { hostEnhancerCtl.onThemeChange?.(); } catch {} }
-const metricsKey = `${lang}|${cfg.chatFont}|${cfg.chatFontCustom}|${getCodeFont()}|${cfg.codeFontCustom}|${isCodeLigaturesEnabled() ? 1 : 0}|${getCornerStyle()}|${cfg.composerRestyle === false ? 0 : 1}`;
+const metricsKey = `${lang}|${cfg.chatFont}|${cfg.chatFontCustom}|${getCodeFont()}|${cfg.codeFontCustom}|${isCodeLigaturesEnabled() ? 1 : 0}|${getCornerStyle()}|${cfg.composerRestyle === false ? 0 : 1}|${perfMode}`;
 if (metricsKey !== lastMetricsKey) { const hadPrev = lastMetricsKey !== ''; lastMetricsKey = metricsKey; if (hadPrev) { invRim(); smoothCaretCtl.bumpMetricsEpoch(); smoothCaretCtl.queue(false, true, true); } }
 });
 }
