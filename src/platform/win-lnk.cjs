@@ -1,10 +1,27 @@
-// 纯 Node MS-SHLLINK (.lnk) 二进制编解码与 Windows 快捷方式无损读写器（零子进程、零 PowerShell、零 COM）
+// 纯 Node MS-SHLLINK (.lnk) 二进制编解码与 Windows 快捷方式无损读写器（仅缓存只读 reg.exe 解析重定向桌面）
 'use strict';
 
+const { execFile, execFileSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { assertSafeRegularFileSync, writeFileAtomicNoSymlinkSync } = require('../utils/fs-safe.cjs');
+const { IS_WIN, assertSafeRegularFileSync, writeFileAtomicNoSymlinkSync } = require('../utils/fs-safe.cjs');
+
+const WIN_SHELL_DESKTOP_CACHE_SYM = Symbol.for('obsidianPrism.winShellDesktopCache');
+const WIN_SHELL_DESKTOP_INFLIGHT_SYM = Symbol.for('obsidianPrism.winShellDesktopInflight');
+const WIN_SHELL_DESKTOP_REG_TIMEOUT_MS = 1500;
+const WIN_SHELL_DESKTOP_REG_MAX_BUFFER = 64 * 1024;
+const WIN_DESKTOP_REG_QUERIES = Object.freeze([
+  Object.freeze({
+    key: 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders',
+    value: 'Desktop',
+  }),
+  Object.freeze({
+    key: 'HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders',
+    value: 'Common Desktop',
+  }),
+]);
+let _regExecOverride = null;
 
 const LNK_HEADER_SIZE = 0x4c;
 const LNK_MAX_FILE_BYTES = 1024 * 1024;
@@ -408,13 +425,194 @@ function writeWindowsLnkArgumentsSync(lnkPath, nextArguments) {
   return { lnkPath: resolved, bytes: nextBuf.length, arguments: verify.arguments };
 }
 
-function getDefaultWindowsShortcutDirs(env = process.env) {
-  const e = env || process.env;
+function _resetWindowsShellDesktopCacheForTest() {
+  delete globalThis[WIN_SHELL_DESKTOP_CACHE_SYM];
+  delete globalThis[WIN_SHELL_DESKTOP_INFLIGHT_SYM];
+}
+
+function _setWindowsRegExecForTest(override) {
+  _regExecOverride = override && typeof override === 'object' ? override : null;
+  _resetWindowsShellDesktopCacheForTest();
+}
+
+function parseRegQueryValue(output, valueName) {
+  const expectedName = String(valueName || '').trim().toLowerCase();
+  for (const line of String(output || '').split(/\r?\n/)) {
+    const m = /^\s*(.+?)\s+REG_(?:EXPAND_)?SZ\s+(.+?)\s*$/i.exec(line);
+    if (!m) continue;
+    if (expectedName && m[1].trim().toLowerCase() !== expectedName) continue;
+    return m[2].trim();
+  }
+  return '';
+}
+
+function finalizeExpandedRegPath(rawVal, expandEnv) {
+  const expanded = expandWindowsEnvVars(String(rawVal || '').trim(), expandEnv).trim();
+  return expanded && !/%[A-Za-z0-9_()-]+%/.test(expanded) ? expanded : '';
+}
+
+function decodeRegQueryPath(rawStdout, valueName, expandEnv, existsSyncFn = fs.existsSync) {
+  if (rawStdout == null) return '';
+  if (typeof rawStdout === 'string') {
+    return finalizeExpandedRegPath(parseRegQueryValue(rawStdout, valueName), expandEnv);
+  }
+  const buf = Buffer.isBuffer(rawStdout) ? rawStdout : Buffer.from(rawStdout);
+  if (buf.length === 0) return '';
+
+  let hasHighByte = false;
+  for (let i = 0; i < buf.length; i++) {
+    if (buf[i] >= 0x80) { hasHighByte = true; break; }
+  }
+  if (!hasHighByte) {
+    return finalizeExpandedRegPath(parseRegQueryValue(buf.toString('utf8'), valueName), expandEnv);
+  }
+
+  let utf8Valid = false;
+  let utf8Path = '';
+  try {
+    const utf8Text = new TextDecoder('utf-8', { fatal: true }).decode(buf);
+    utf8Valid = true;
+    utf8Path = finalizeExpandedRegPath(parseRegQueryValue(utf8Text, valueName), expandEnv);
+  } catch {}
+
+  let gbPath = '';
+  try {
+    gbPath = finalizeExpandedRegPath(parseRegQueryValue(new TextDecoder('gb18030').decode(buf), valueName), expandEnv);
+  } catch {}
+
+  if (!utf8Path) return gbPath;
+  if (!gbPath || utf8Path === gbPath) return utf8Path;
+
+  const checkExists = (p) => {
+    try { return Boolean(p && typeof existsSyncFn === 'function' && existsSyncFn(p)); } catch { return false; }
+  };
+  const utf8Exists = checkExists(utf8Path);
+  const gbExists = checkExists(gbPath);
+  if (gbExists && !utf8Exists) return gbPath;
+  if (utf8Exists && !gbExists) return utf8Path;
+  return utf8Valid && !utf8Path.includes('\uFFFD') ? utf8Path : gbPath;
+}
+
+function normalizeShortcutDirPath(dirPath) {
+  const raw = String(dirPath || '').trim();
+  if (!raw) return '';
+  if (IS_WIN) return path.resolve(raw);
+  return /^[A-Za-z]:[\\/]|^\\\\/.test(raw) ? path.win32.resolve(raw) : path.resolve(raw);
+}
+
+function resolveEffectiveEnv(env) {
+  if (env === process.env && _regExecOverride && _regExecOverride.defaultEnv && typeof _regExecOverride.defaultEnv === 'object') {
+    return _regExecOverride.defaultEnv;
+  }
+  return env || process.env;
+}
+
+function resolveRegQueryContext(rawEnv, opts) {
+  if (opts && opts.skipRegistry === true) return null;
+  const platform =
+    (opts && typeof opts.platform === 'string' && opts.platform) ||
+    (_regExecOverride && typeof _regExecOverride.platform === 'string' && _regExecOverride.platform) ||
+    (IS_WIN ? 'win32' : process.platform);
+  if (platform !== 'win32') return null;
+  const hasExplicitOptsExec = Boolean(
+    opts && (typeof opts.execFile === 'function' || typeof opts.execFileSync === 'function')
+  );
+  if (rawEnv !== process.env && !hasExplicitOptsExec) return null;
+  const effEnv = resolveEffectiveEnv(rawEnv);
+  const expandEnv = {
+    ...effEnv,
+    USERPROFILE: effEnv.USERPROFILE || os.homedir(),
+    PUBLIC: effEnv.PUBLIC || 'C:\\Users\\Public',
+  };
+  return {
+    useCache: opts && typeof opts.useCache === 'boolean' ? opts.useCache : rawEnv === process.env,
+    expandEnv,
+    execSyncFn:
+      (opts && typeof opts.execFileSync === 'function' && opts.execFileSync) ||
+      (_regExecOverride && typeof _regExecOverride.execFileSync === 'function' && _regExecOverride.execFileSync) ||
+      execFileSync,
+    execAsyncFn:
+      (opts && typeof opts.execFile === 'function' && opts.execFile) ||
+      (_regExecOverride && typeof _regExecOverride.execFile === 'function' && _regExecOverride.execFile) ||
+      execFile,
+    existsSyncFn:
+      (opts && typeof opts.existsSync === 'function' && opts.existsSync) ||
+      (_regExecOverride && typeof _regExecOverride.existsSync === 'function' && _regExecOverride.existsSync) ||
+      fs.existsSync,
+  };
+}
+
+function queryWindowsShellDesktopDirsSync(rawEnv, opts = null) {
+  const ctx = resolveRegQueryContext(rawEnv, opts);
+  if (!ctx) return [];
+  if (ctx.useCache && Array.isArray(globalThis[WIN_SHELL_DESKTOP_CACHE_SYM])) {
+    return globalThis[WIN_SHELL_DESKTOP_CACHE_SYM];
+  }
+  const dirs = [];
+  for (const q of WIN_DESKTOP_REG_QUERIES) {
+    try {
+      const out = ctx.execSyncFn('reg.exe', ['query', q.key, '/v', q.value], {
+        encoding: 'buffer',
+        windowsHide: true,
+        timeout: WIN_SHELL_DESKTOP_REG_TIMEOUT_MS,
+        maxBuffer: WIN_SHELL_DESKTOP_REG_MAX_BUFFER,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      const decoded = decodeRegQueryPath(out, q.value, ctx.expandEnv, ctx.existsSyncFn);
+      if (decoded) dirs.push(decoded);
+    } catch {}
+  }
+  const frozen = Object.freeze(dirs);
+  if (ctx.useCache) globalThis[WIN_SHELL_DESKTOP_CACHE_SYM] = frozen;
+  return frozen;
+}
+
+async function queryWindowsShellDesktopDirsAsync(rawEnv, opts = null) {
+  const ctx = resolveRegQueryContext(rawEnv, opts);
+  if (!ctx) return [];
+  if (ctx.useCache) {
+    if (Array.isArray(globalThis[WIN_SHELL_DESKTOP_CACHE_SYM])) return globalThis[WIN_SHELL_DESKTOP_CACHE_SYM];
+    if (globalThis[WIN_SHELL_DESKTOP_INFLIGHT_SYM]) return globalThis[WIN_SHELL_DESKTOP_INFLIGHT_SYM];
+  }
+  const regOpts = {
+    encoding: 'buffer',
+    windowsHide: true,
+    timeout: WIN_SHELL_DESKTOP_REG_TIMEOUT_MS,
+    maxBuffer: WIN_SHELL_DESKTOP_REG_MAX_BUFFER,
+  };
+  const task = Promise.all(
+    WIN_DESKTOP_REG_QUERIES.map(
+      (q) =>
+        new Promise((resolve) => {
+          try {
+            ctx.execAsyncFn('reg.exe', ['query', q.key, '/v', q.value], regOpts, (err, stdout) => {
+              resolve(err || !stdout ? '' : decodeRegQueryPath(stdout, q.value, ctx.expandEnv, ctx.existsSyncFn));
+            });
+          } catch {
+            resolve('');
+          }
+        })
+    )
+  ).then((results) => {
+    const frozen = Object.freeze(results.filter(Boolean));
+    if (ctx.useCache && globalThis[WIN_SHELL_DESKTOP_INFLIGHT_SYM] === task) {
+      globalThis[WIN_SHELL_DESKTOP_CACHE_SYM] = frozen;
+      delete globalThis[WIN_SHELL_DESKTOP_INFLIGHT_SYM];
+    }
+    return frozen;
+  });
+  if (ctx.useCache) globalThis[WIN_SHELL_DESKTOP_INFLIGHT_SYM] = task;
+  return task;
+}
+
+function composeDefaultWindowsShortcutDirs(env, regDesktopDirs = []) {
+  const e = resolveEffectiveEnv(env);
   const userProfile = e.USERPROFILE || os.homedir();
   const appData = e.APPDATA || path.join(userProfile, 'AppData', 'Roaming');
   const publicDir = e.PUBLIC || 'C:\\Users\\Public';
   const programData = e.ProgramData || 'C:\\ProgramData';
   const rawDirs = [
+    ...(Array.isArray(regDesktopDirs) ? regDesktopDirs : []),
     path.join(userProfile, 'Desktop'),
     e.OneDrive ? path.join(e.OneDrive, 'Desktop') : '',
     e.OneDriveConsumer ? path.join(e.OneDriveConsumer, 'Desktop') : '',
@@ -426,13 +624,22 @@ function getDefaultWindowsShortcutDirs(env = process.env) {
   const seen = new Set();
   const uniq = [];
   for (const d of rawDirs) {
-    const resolved = path.resolve(d);
+    const resolved = normalizeShortcutDirPath(d);
+    if (!resolved) continue;
     const key = resolved.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
     uniq.push(resolved);
   }
   return uniq;
+}
+
+function getDefaultWindowsShortcutDirs(env = process.env, opts = null) {
+  return composeDefaultWindowsShortcutDirs(env, queryWindowsShellDesktopDirsSync(env, opts));
+}
+
+async function getDefaultWindowsShortcutDirsAsync(env = process.env, opts = null) {
+  return composeDefaultWindowsShortcutDirs(env, await queryWindowsShellDesktopDirsAsync(env, opts));
 }
 
 function collectWindowsLnkFilesSync(searchDirs, extraFiles) {
@@ -533,7 +740,8 @@ function runWindowsShortcutAdapter(searchDirs, extraFiles) {
 }
 
 async function runWindowsShortcutAdapterAsync(searchDirs, extraFiles) {
-  const syncAdapter = runWindowsShortcutAdapter(searchDirs, extraFiles);
+  const dirs = Array.isArray(searchDirs) ? searchDirs : await getDefaultWindowsShortcutDirsAsync();
+  const syncAdapter = runWindowsShortcutAdapter(dirs, extraFiles);
   return {
     entries: syncAdapter.entries,
     async applyUpdates(updates) {
@@ -548,8 +756,13 @@ module.exports = {
   updateWindowsLnkArguments,
   readWindowsLnkFileSync,
   writeWindowsLnkArgumentsSync,
+  parseRegQueryValue,
+  decodeRegQueryPath,
   getDefaultWindowsShortcutDirs,
+  getDefaultWindowsShortcutDirsAsync,
   collectWindowsLnkFilesSync,
   runWindowsShortcutAdapter,
   runWindowsShortcutAdapterAsync,
+  _resetWindowsShellDesktopCacheForTest,
+  _setWindowsRegExecForTest,
 };
