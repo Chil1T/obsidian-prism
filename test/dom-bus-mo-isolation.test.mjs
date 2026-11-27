@@ -13,6 +13,15 @@ const hostI18nMod = require(path.join(ROOT, 'vendor', 'host-i18n', 'host-i18n-ru
 const swarmI18nMod = require(path.join(ROOT, 'vendor', 'host-i18n', 'swarm-i18n-runtime.js'));
 const omniMod = require(path.join(ROOT, 'vendor', 'omni-viewer', 'omni-client.js'));
 
+async function waitFor(predicate, timeoutMs = 2000, stepMs = 15) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return true;
+    await new Promise((r) => setTimeout(r, stepMs));
+  }
+  return Boolean(predicate());
+}
+
 function makeMockEl(tag = 'div', attrs = {}) {
   const attrMap = new Map(Object.entries(attrs));
   const listeners = new Map();
@@ -386,7 +395,7 @@ test('dom-bus: silent discardMutations() drops records with 0 broadcast, rootAtt
   assert.equal(bus.isBusy(), true);
   assert.equal(bus.isPerfBusy(), true);
   assert.equal(html.hasAttribute('data-ag-perf-busy'), false);
-  await new Promise((r) => setTimeout(r, 85));
+  await waitFor(() => !bus.isPerfBusy(), 1000, 15);
   assert.equal(bus.isPerfBusy(), false);
   assert.equal(html.hasAttribute('data-ag-perf-busy'), false);
 
@@ -608,6 +617,7 @@ test('thought-client: scroll with dom-bus/IntersectionObserver performs 0 getBou
   const origQsa = conv.querySelectorAll.bind(conv);
   conv.querySelectorAll = (sel) => { qsaCalls++; return origQsa(sel); };
 
+  let cacheWarmCalled = false;
   const sb = {
     window: null,
     globalThis: null,
@@ -621,7 +631,10 @@ test('thought-client: scroll with dom-bus/IntersectionObserver performs 0 getBou
     clearTimeout,
     localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
     __agPrismThoughtBridge: {
-      call: async () => ({ ok: true }),
+      call: async (payload) => {
+        if (payload?.action === 'get-cache') cacheWarmCalled = true;
+        return { ok: true };
+      },
       translateStream: async (payload) => {
         if (String(payload.mode || '').startsWith('tool-batch')) return { ok: true, items: ['已分析 4 个文件'] };
         return { ok: true, text: '远端历史思考块增量译文' };
@@ -637,7 +650,20 @@ test('thought-client: scroll with dom-bus/IntersectionObserver performs 0 getBou
   try {
     api.sync({ thoughtTranslate: 'machine', thoughtTrigger: 'expand', language: 'zh-CN', translateToolSummaries: true, translateTitles: false });
     api.scanImmediate();
-    await new Promise((r) => setTimeout(r, 30));
+    // Flush microtasks so ensureInitialized()'s get-cache .then() queues its deferred scheduleScan(20)
+    // onto dom-bus before we wait for all boot/warmup tasks to drain (on Windows 15.625ms timer ticks,
+    // dom-bus two-hop fallback timers for delay=20ms can fire at ~31-47ms rather than ~21ms).
+    await Promise.resolve();
+    await Promise.resolve();
+    const settled = await waitFor(
+      () =>
+        cacheWarmCalled &&
+        bus.getDebugState().pendingTasks === 0 &&
+        latest.panel.getAttribute('data-op-zh-ready') === '1',
+      2000,
+      15
+    );
+    assert.equal(settled, true, 'Initial sync + get-cache warmup scan must settle before scroll baseline');
 
     // Offscreen thought panel & offscreen tool trigger must be registered on shared IO (rootMargin 800px 0px)
     const io800 = ios.find((x) => x.connected && x.opts?.rootMargin === '800px 0px');
@@ -659,7 +685,11 @@ test('thought-client: scroll with dom-bus/IntersectionObserver performs 0 getBou
       { target: far1.panel, isIntersecting: true },
       { target: toolTrig, isIntersecting: true },
     ]);
-    await new Promise((r) => setTimeout(r, 60));
+    await waitFor(
+      () => far1.panel.getAttribute('data-op-zh-ready') === '1' && toolTrig.textContent === '已分析 4 个文件',
+      2000,
+      15
+    );
     assert.equal(rectReads, rectsBeforeScroll, 'IO-driven incremental hydration must incur 0 getBoundingClientRect reflows');
     assert.equal(far1.panel.getAttribute('data-op-zh-ready'), '1', 'IO reveal must incrementally translate revealed thought panel');
     assert.equal(toolTrig.textContent, '已分析 4 个文件', 'IO reveal must incrementally translate revealed tool summary');
