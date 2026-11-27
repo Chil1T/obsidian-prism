@@ -420,19 +420,30 @@ test('5. style.css .agy-overlay button sizing rule uses zero :has(), skips palet
   for (const requiredExcl of [
     ':not([data-testid="agy-context-popup"])',
     ':not([data-testid="agy-subagent-popover"])',
+    ':not([data-testid="agy-stats-popup"])',
     ':not([data-testid^="agy-subagent-ctx-"])',
     ':not([data-testid="agy-subagent-open-btn"])',
+    ':not([data-testid="agy-context-popup"] *)',
+    ':not([data-testid="agy-subagent-popover"] *)',
+    ':not([data-testid="agy-stats-popup"] *)',
   ]) {
-    assert.ok(rawRuleLine.includes(requiredExcl), `style.css .agy-overlay rule missing direct exclusion: ${requiredExcl}`);
+    assert.ok(rawRuleLine.includes(requiredExcl), `style.css .agy-overlay rule missing exclusion: ${requiredExcl}`);
   }
 
-  // Verify flattened output preserves host-palette guard and all direct agy-powertools exclusions while still styling normal menu items
+  // Verify flattened output preserves host-palette guard, all agy-powertools popup/descendant exclusions (with descendant space intact) & normal menu item styling
   const flatMatch = flatStyleCss.match(/[^{}]*agy-context-popup[^{}]*\{[^}]*min-height:30px!important[^}]*\}/);
   assert.ok(flatMatch, 'flattened CSS must retain .agy-overlay sizing rule with agy-context-popup exclusion');
   const flatSel = flatMatch[0].slice(0, flatMatch[0].indexOf('{'));
   assert.ok(flatSel.includes('html[data-ag-cs-style]:not([data-ag-cs-palette="host"])'), 'flattened selector must keep :not([data-ag-cs-palette="host"])');
-  assert.ok(flatSel.includes(':not([data-testid="agy-context-popup"]):not([data-testid="agy-subagent-popover"])'), 'flattened selector must exempt both agy-powertools popup containers');
+  assert.ok(
+    flatSel.includes(':not([data-testid="agy-context-popup"]):not([data-testid="agy-subagent-popover"]):not([data-testid="agy-stats-popup"])'),
+    'flattened selector must exempt all 3 agy-powertools popup containers'
+  );
   assert.ok(flatSel.includes('button:not(.ces-knob):not([data-testid^="permissions-"]):not([data-testid^="agy-subagent-ctx-"]):not([data-testid="agy-subagent-open-btn"])'), 'flattened selector must exempt agy-powertools subagent buttons');
+  assert.ok(
+    flatSel.includes(':not([data-testid="agy-context-popup"] *):not([data-testid="agy-subagent-popover"] *):not([data-testid="agy-stats-popup"] *)'),
+    'flattened selector must preserve all 3 complex :not([data-testid="..."] *) descendant exclusions with whitespace intact'
+  );
   assert.ok(flatSel.includes('.agy-overlay-item') && flatSel.includes('[role="menuitem"]'), 'normal host overlay menu items must stay styled');
 });
 
