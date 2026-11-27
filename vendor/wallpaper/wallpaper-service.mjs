@@ -26,6 +26,7 @@ export const DEFAULT_WALLPAPER_CONFIG = Object.freeze({
   opacity: 0.28,
   blurPx: 4,
   dimOverlay: 0.45,
+  convOverlay: null,
   fit: 'cover',
   pauseOnBlur: true,
 });
@@ -88,7 +89,7 @@ const WIN_RESERVED_DEVICE_RE = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
 const URL_SCHEME_RE = /^[a-zA-Z][a-zA-Z0-9+.-]+:/;
 const CONTROL_CHAR_RE = /[\u0000-\u001f\u007f]/;
 const ALLOWED_ORIGIN_RE =
-  /^(?:https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d{1,5})?|vscode-file:\/\/[a-z0-9._-]+|app:\/\/[a-z0-9._-]+)$/i;
+  /^(?:https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d{1,5})?|(?:vscode-file|app|chrome-extension):\/\/[a-z0-9._-]+)$/i;
 
 const MP4_BRANDS = new Set([
   'isom',
@@ -119,7 +120,6 @@ const AVIF_BRANDS = new Set(['avif', 'avis']);
 
 const WIN_WALLPAPER_FILE_FILTER =
   'Wallpapers (*.jpg;*.jpeg;*.png;*.webp;*.gif;*.avif;*.mp4;*.webm)|*.jpg;*.jpeg;*.png;*.webp;*.gif;*.avif;*.mp4;*.webm|Images (*.jpg;*.jpeg;*.png;*.webp;*.gif;*.avif)|*.jpg;*.jpeg;*.png;*.webp;*.gif;*.avif|Videos (*.mp4;*.webm)|*.mp4;*.webm';
-const ALLOWED_EXT_ORIGIN_RE = /^(?:vscode-file|app|chrome-extension):\/\/[a-z0-9._-]+$/i;
 
 const MAC_PICK_MEDIA_SCRIPT =
   'POSIX path of (choose file with prompt "Select Wallpaper" of type {"public.jpeg", "public.png", "public.webp", "com.compuserve.gif", "public.avif", "public.mpeg-4", "org.webmproject.webm"})';
@@ -131,6 +131,13 @@ function clampNumber(val, min, max, fallback, decimals = 2) {
   if (decimals <= 0) return Math.round(clamped);
   const factor = 10 ** decimals;
   return Math.round(clamped * factor) / factor;
+}
+
+function normalizeConvOverlay(val, fallback = null) {
+  if (val === null || val === '') return null;
+  if (val === undefined) return fallback;
+  const n = Number(val);
+  return Number.isFinite(n) ? clampNumber(n, 0, 1, fallback, 2) : fallback;
 }
 
 function stripTrailingSlashes(str) {
@@ -686,6 +693,7 @@ function sanitizeStoredConfig(raw) {
     opacity: clampNumber(src.opacity, 0.05, 0.85, DEFAULT_WALLPAPER_CONFIG.opacity, 2),
     blurPx: clampNumber(src.blurPx, 0, 24, DEFAULT_WALLPAPER_CONFIG.blurPx, 0),
     dimOverlay: clampNumber(src.dimOverlay, 0, 0.85, DEFAULT_WALLPAPER_CONFIG.dimOverlay, 2),
+    convOverlay: normalizeConvOverlay(src.convOverlay, null),
     fit,
     pauseOnBlur: src.pauseOnBlur === undefined ? true : Boolean(src.pauseOnBlur),
   };
@@ -936,6 +944,7 @@ export function createWallpaperService(opts = {}) {
       opacity: config.opacity,
       blurPx: config.blurPx,
       dimOverlay: config.dimOverlay,
+      convOverlay: config.convOverlay ?? null,
       fit: config.fit,
       pauseOnBlur: config.pauseOnBlur,
       rev,
@@ -990,7 +999,7 @@ export function createWallpaperService(opts = {}) {
     const expectedHost = serverPort > 0 ? `127.0.0.1:${serverPort}` : '';
     if (!rawHost || !expectedHost || rawHost !== expectedHost) return deny(403, 'Forbidden host');
 
-    // 严格来源与 Sec-Fetch-Site 检查：绝不输出 Access-Control-Allow-Origin: *，拒绝 cross-site
+    // 严格来源与 Sec-Fetch-Site 检查：绝不输出 ACAO:*，放行已校验来源及无 Origin 的 video/image 媒体加载（仍受 Host + 256-bit token 保护）
     const reqOrigin = typeof req.headers?.origin === 'string' ? req.headers.origin.trim() : '';
     if (reqOrigin) {
       if (!ALLOWED_ORIGIN_RE.test(reqOrigin)) return deny(403, 'Forbidden origin');
@@ -999,7 +1008,8 @@ export function createWallpaperService(opts = {}) {
     }
     const fetchSite = typeof req.headers?.['sec-fetch-site'] === 'string' ? req.headers['sec-fetch-site'].trim().toLowerCase() : '';
     if (fetchSite) {
-      const allowedSite = fetchSite === 'none' || fetchSite === 'same-origin' || fetchSite === 'same-site' || (fetchSite === 'cross-site' && Boolean(reqOrigin && ALLOWED_EXT_ORIGIN_RE.test(reqOrigin)));
+      const fetchDest = typeof req.headers?.['sec-fetch-dest'] === 'string' ? req.headers['sec-fetch-dest'].trim().toLowerCase() : '';
+      const allowedSite = fetchSite === 'none' || fetchSite === 'same-origin' || fetchSite === 'same-site' || (fetchSite === 'cross-site' && (Boolean(reqOrigin) || fetchDest === 'video' || fetchDest === 'image'));
       if (!allowedSite) return deny(403, 'Forbidden fetch site');
     }
     if (method !== 'GET' && method !== 'HEAD') return deny(405, 'Method Not Allowed', { Allow: 'GET, HEAD' });
@@ -1009,17 +1019,8 @@ export function createWallpaperService(opts = {}) {
     if (!routeMatch) return deny(404, 'Not Found');
 
     const [, reqToken, reqRev] = routeMatch;
-    if (!token || !timingSafeStrEqual(reqToken, token) || reqRev !== String(rev)) {
-      res.writeHead(403, { ...baseHeaders, 'Content-Type': 'text/plain; charset=utf-8' });
-      res.end('Forbidden');
-      return;
-    }
-
-    if (!config.enabled || !activeMedia || !activeMedia.realPath) {
-      res.writeHead(404, { ...baseHeaders, 'Content-Type': 'text/plain; charset=utf-8' });
-      res.end('No active wallpaper');
-      return;
-    }
+    if (!token || !timingSafeStrEqual(reqToken, token) || reqRev !== String(rev)) return deny(403, 'Forbidden');
+    if (!config.enabled || !activeMedia || !activeMedia.realPath) return deny(404, 'No active wallpaper');
 
     // 读时 TOCTOU 防护：按 fd 打开并复核 native realpath、非敏感路径、fstat 大小与文件头魔数，再复用该 fd 流式输出
     const targetRealPath = activeMedia.realPath;
@@ -1033,80 +1034,23 @@ export function createWallpaperService(opts = {}) {
     let fd = null;
     let streamOwnsFd = false;
     const closeFdQuietly = () => {
-      if (fd !== null && !streamOwnsFd) {
-        const toClose = fd;
-        fd = null;
-        try {
-          fs.closeSync(toClose);
-        } catch {}
-      }
+      if (fd !== null && !streamOwnsFd) { const toClose = fd; fd = null; try { fs.closeSync(toClose); } catch {} }
     };
 
     try {
       const lst = fs.lstatSync(targetRealPath);
-      if (lst.isSymbolicLink() || !lst.isFile()) {
-        res.writeHead(403, { ...baseHeaders, 'Content-Type': 'text/plain; charset=utf-8' });
-        res.end('Invalid target');
-        return;
-      }
-
-      const preOpenRealPath = realpathNativeCleanSync(targetRealPath);
-      if (
-        preOpenRealPath !== targetRealPath ||
-        isUncOrDevicePath(preOpenRealPath) ||
-        hasWindowsShortNameSegment(preOpenRealPath) ||
-        isSensitiveSystemOrCredentialPath(preOpenRealPath, validateOpts)
-      ) {
-        res.writeHead(403, { ...baseHeaders, 'Content-Type': 'text/plain; charset=utf-8' });
-        res.end('Invalid target');
-        return;
-      }
-
+      if (lst.isSymbolicLink() || !lst.isFile()) return deny(403, 'Invalid target');
+      const isBadReal = (p) => p !== targetRealPath || isUncOrDevicePath(p) || hasWindowsShortNameSegment(p) || isSensitiveSystemOrCredentialPath(p, validateOpts);
+      if (isBadReal(realpathNativeCleanSync(targetRealPath))) return deny(403, 'Invalid target');
       fd = fs.openSync(targetRealPath, 'r');
-
-      const postOpenRealPath = realpathNativeCleanSync(targetRealPath);
-      if (
-        postOpenRealPath !== targetRealPath ||
-        isUncOrDevicePath(postOpenRealPath) ||
-        hasWindowsShortNameSegment(postOpenRealPath) ||
-        isSensitiveSystemOrCredentialPath(postOpenRealPath, validateOpts)
-      ) {
-        res.writeHead(403, { ...baseHeaders, 'Content-Type': 'text/plain; charset=utf-8' });
-        res.end('Invalid target');
-        return;
-      }
-
+      if (isBadReal(realpathNativeCleanSync(targetRealPath))) return deny(403, 'Invalid target');
       const stat = fs.fstatSync(fd);
-      if (!stat.isFile()) {
-        res.writeHead(403, { ...baseHeaders, 'Content-Type': 'text/plain; charset=utf-8' });
-        res.end('Invalid target');
-        return;
-      }
-      if (lst.ino && stat.ino && (lst.ino !== stat.ino || lst.dev !== stat.dev)) {
-        res.writeHead(403, { ...baseHeaders, 'Content-Type': 'text/plain; charset=utf-8' });
-        res.end('Invalid target');
-        return;
-      }
-
+      if (!stat.isFile() || (lst.ino && stat.ino && (lst.ino !== stat.ino || lst.dev !== stat.dev))) return deny(403, 'Invalid target');
       const fileSize = stat.size;
-      if (fileSize <= 0) {
-        res.writeHead(404, { ...baseHeaders, 'Content-Type': 'text/plain; charset=utf-8' });
-        res.end('Empty file');
-        return;
-      }
-      if (fileSize > maxBytes) {
-        res.writeHead(413, { ...baseHeaders, 'Content-Type': 'text/plain; charset=utf-8' });
-        res.end('Payload Too Large');
-        return;
-      }
-
+      if (fileSize <= 0) return deny(404, 'Empty file');
+      if (fileSize > maxBytes) return deny(413, 'Payload Too Large');
       const hdr = Buffer.alloc(64);
-      const bytesRead = fs.readSync(fd, hdr, 0, hdr.length, 0);
-      if (!verifyMediaMagicBytes(targetExt, hdr, bytesRead)) {
-        res.writeHead(403, { ...baseHeaders, 'Content-Type': 'text/plain; charset=utf-8' });
-        res.end('Invalid media signature');
-        return;
-      }
+      if (!verifyMediaMagicBytes(targetExt, hdr, fs.readSync(fd, hdr, 0, hdr.length, 0))) return deny(403, 'Invalid media signature');
 
       const rangeHeader = req.headers?.range;
       if (typeof rangeHeader === 'string' && rangeHeader.trim()) {
@@ -1255,6 +1199,9 @@ export function createWallpaperService(opts = {}) {
     }
     if (Object.prototype.hasOwnProperty.call(src, 'dimOverlay')) {
       nextCfg.dimOverlay = clampNumber(src.dimOverlay, 0, 0.85, nextCfg.dimOverlay, 2);
+    }
+    if (Object.prototype.hasOwnProperty.call(src, 'convOverlay')) {
+      nextCfg.convOverlay = normalizeConvOverlay(src.convOverlay, nextCfg.convOverlay);
     }
     if (Object.prototype.hasOwnProperty.call(src, 'fit')) {
       nextCfg.fit = src.fit === 'contain' ? 'contain' : 'cover';

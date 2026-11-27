@@ -29,13 +29,13 @@
     'html[data-ag-prism-wallpaper="on"]:not([data-ag-prism-wallpaper-hole="1"]) :is(.agy-shell,.agy-inset-shell,.agy-sheet,[data-ag-cs-home-sheet="1"],[data-main-content-body]):not([data-has-browser-hole="true"]):not([data-has-drawer-browser-hole="true"]){background:transparent !important;background-color:transparent !important;}',
     'html[data-ag-prism-wallpaper="on"]:not([data-ag-prism-wallpaper-hole="1"]) .agy-sheet:not([data-has-browser-hole="true"]):not([data-has-drawer-browser-hole="true"])>div.flex-1.min-h-0.flex.flex-col,html[data-ag-prism-wallpaper="on"]:not([data-ag-prism-wallpaper-hole="1"]) .agy-sheet:not([data-has-browser-hole="true"]):not([data-has-drawer-browser-hole="true"])>div.flex-1.min-h-0.flex.flex-col>div.flex-1.min-w-0.h-full{background:transparent !important;background-color:transparent !important;}',
     'html[data-ag-prism-wallpaper="on"]:not([data-ag-prism-wallpaper-hole="1"]) :is(aside,[data-testid="sidebar-split"]>div:first-child,.agy-shell .bg-sidebar):not([data-has-browser-hole="true"]):not([data-has-drawer-browser-hole="true"]){background:color-mix(in srgb,var(--sidebar,var(--ag-cs-sidebar,var(--background,#0B0B0E))) 68%,transparent) !important;background-color:color-mix(in srgb,var(--sidebar,var(--ag-cs-sidebar,var(--background,#0B0B0E))) 68%,transparent) !important;}',
-    'html[data-ag-prism-wallpaper="on"]:not([data-ag-prism-wallpaper-hole="1"]) [data-ag-cs-conv-seat="1"]:not([data-has-browser-hole="true"]):not([data-has-drawer-browser-hole="true"]){background-color:color-mix(in srgb,var(--background,#0B0B0E) 52%,transparent) !important;}',
+    'html[data-ag-prism-wallpaper="on"]:not([data-ag-prism-wallpaper-hole="1"]) [data-ag-cs-conv-seat="1"]:not([data-has-browser-hole="true"]):not([data-has-drawer-browser-hole="true"]){background-color:color-mix(in srgb,var(--background,#0B0B0E) var(--ag-prism-wp-conv-scrim,52%),transparent) !important;}',
     'html[data-ag-prism-wallpaper="on"]:not([data-ag-prism-wallpaper-hole="1"]) [data-testid="conversation-view"]::before{display:none !important;background:none !important;}',
     'html[data-ag-prism-wallpaper="on"]:not([data-ag-prism-wallpaper-hole="1"]) [data-testid="plugin-theme-home-wallpaper"]{display:none !important;visibility:hidden !important;opacity:0 !important;pointer-events:none !important;}',
     'html[data-ag-prism-wallpaper="on"][data-ag-cs-theme="light"]:not([data-ag-prism-wallpaper-hole="1"]) :is(.agy-shell,.agy-inset-shell,.agy-sheet,[data-ag-cs-home-sheet="1"],[data-main-content-body]):not([data-has-browser-hole="true"]):not([data-has-drawer-browser-hole="true"]),html[data-ag-prism-wallpaper="on"]:not([data-ag-prism-wallpaper-hole="1"])>body:is(.theme-light,.light-theme,.light) :is(.agy-shell,.agy-inset-shell,.agy-sheet,[data-ag-cs-home-sheet="1"],[data-main-content-body]):not([data-has-browser-hole="true"]):not([data-has-drawer-browser-hole="true"]){background:transparent !important;background-color:transparent !important;}',
     'html[data-ag-prism-wallpaper="on"][data-ag-cs-theme="light"]:not([data-ag-prism-wallpaper-hole="1"]) .agy-sheet:not([data-has-browser-hole="true"]):not([data-has-drawer-browser-hole="true"])>div.flex-1.min-h-0.flex.flex-col,html[data-ag-prism-wallpaper="on"][data-ag-cs-theme="light"]:not([data-ag-prism-wallpaper-hole="1"]) .agy-sheet:not([data-has-browser-hole="true"]):not([data-has-drawer-browser-hole="true"])>div.flex-1.min-h-0.flex.flex-col>div.flex-1.min-w-0.h-full,html[data-ag-prism-wallpaper="on"]:not([data-ag-prism-wallpaper-hole="1"])>body:is(.theme-light,.light-theme,.light) .agy-sheet:not([data-has-browser-hole="true"]):not([data-has-drawer-browser-hole="true"])>div.flex-1.min-h-0.flex.flex-col,html[data-ag-prism-wallpaper="on"]:not([data-ag-prism-wallpaper-hole="1"])>body:is(.theme-light,.light-theme,.light) .agy-sheet:not([data-has-browser-hole="true"]):not([data-has-drawer-browser-hole="true"])>div.flex-1.min-h-0.flex.flex-col>div.flex-1.min-w-0.h-full{background:transparent !important;background-color:transparent !important;}',
     'html[data-ag-prism-wallpaper="on"][data-ag-cs-theme="light"]:not([data-ag-prism-wallpaper-hole="1"]) :is(aside,[data-testid="sidebar-split"]>div:first-child,.agy-shell .bg-sidebar):not([data-has-browser-hole="true"]):not([data-has-drawer-browser-hole="true"]),html[data-ag-prism-wallpaper="on"]:not([data-ag-prism-wallpaper-hole="1"])>body:is(.theme-light,.light-theme,.light) :is(aside,[data-testid="sidebar-split"]>div:first-child,.agy-shell .bg-sidebar):not([data-has-browser-hole="true"]):not([data-has-drawer-browser-hole="true"]){background:color-mix(in srgb,var(--sidebar,var(--ag-cs-sidebar,var(--background,#F4F7FB))) 74%,transparent) !important;background-color:color-mix(in srgb,var(--sidebar,var(--ag-cs-sidebar,var(--background,#F4F7FB))) 74%,transparent) !important;}',
-    'html[data-ag-prism-wallpaper="on"][data-ag-cs-theme="light"]:not([data-ag-prism-wallpaper-hole="1"]) [data-ag-cs-conv-seat="1"]:not([data-has-browser-hole="true"]):not([data-has-drawer-browser-hole="true"]),html[data-ag-prism-wallpaper="on"]:not([data-ag-prism-wallpaper-hole="1"])>body:is(.theme-light,.light-theme,.light) [data-ag-cs-conv-seat="1"]:not([data-has-browser-hole="true"]):not([data-has-drawer-browser-hole="true"]){background-color:color-mix(in srgb,var(--background,#F4F7FB) 66%,transparent) !important;}',
+    'html[data-ag-prism-wallpaper="on"][data-ag-cs-theme="light"]:not([data-ag-prism-wallpaper-hole="1"]) [data-ag-cs-conv-seat="1"]:not([data-has-browser-hole="true"]):not([data-has-drawer-browser-hole="true"]),html[data-ag-prism-wallpaper="on"]:not([data-ag-prism-wallpaper-hole="1"])>body:is(.theme-light,.light-theme,.light) [data-ag-cs-conv-seat="1"]:not([data-has-browser-hole="true"]):not([data-has-drawer-browser-hole="true"]){background-color:color-mix(in srgb,var(--background,#F4F7FB) var(--ag-prism-wp-conv-scrim,66%),transparent) !important;}',
     'body[data-has-browser-hole="true"] #ag-prism-wallpaper-root,body[data-has-drawer-browser-hole="true"] #ag-prism-wallpaper-root,html[data-ag-prism-wallpaper-hole="1"] #ag-prism-wallpaper-root{display:none !important;visibility:hidden !important;opacity:0 !important;}',
     '[data-testid="prism-wallpaper-slot"]{margin-top:10px;}',
     '.ag-prism-wp-card{display:flex;flex-direction:column;gap:10px;padding:12px 14px;border-radius:var(--ag-cs-r-md,10px);border:1px solid var(--ag-cs-border-1,rgba(128,128,128,0.22));background:var(--ag-cs-tonal-2,rgba(20,22,28,0.72));}',
@@ -68,11 +68,12 @@
     '--ag-prism-wp-fit',
   ];
 
+  const CONV_SCRIM_VAR = '--ag-prism-wp-conv-scrim';
+  const normConvOverlay = (v, fb) => (v === null || v === '' ? null : v === undefined ? fb : clampNum(v, 0, 1, fb));
+
   function markNoTrOwned(el) {
     if (el && typeof el.setAttribute === 'function') {
-      for (let i = 0; i < NO_TR_ATTRS.length; i++) {
-        el.setAttribute(NO_TR_ATTRS[i][0], NO_TR_ATTRS[i][1]);
-      }
+      for (let i = 0; i < NO_TR_ATTRS.length; i++) el.setAttribute(NO_TR_ATTRS[i][0], NO_TR_ATTRS[i][1]);
       el.setAttribute('data-ag-owned', '1');
     }
     return el;
@@ -80,8 +81,7 @@
 
   function clampNum(val, min, max, fallback) {
     const n = Number(val);
-    if (!Number.isFinite(n)) return fallback;
-    return Math.min(max, Math.max(min, n));
+    return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
   }
 
   function decodeBase64ToBytes(b64, win) {
@@ -161,21 +161,7 @@
     const bridge = opts.bridge || createWallpaperBridge(win);
     const subscribers = new Set();
 
-    let state = {
-      version: 1,
-      enabled: false,
-      mediaPath: '',
-      mediaType: '',
-      mediaUrl: '',
-      opacity: 0.28,
-      blurPx: 4,
-      dimOverlay: 0.45,
-      fit: 'cover',
-      pauseOnBlur: true,
-      rev: 0,
-      serverRunning: false,
-      mediaError: '',
-    };
+    let state = { version: 1, enabled: false, mediaPath: '', mediaType: '', mediaUrl: '', opacity: 0.28, blurPx: 4, dimOverlay: 0.45, convOverlay: null, fit: 'cover', pauseOnBlur: true, rev: 0, serverRunning: false, mediaError: '' };
 
     let destroyed = false;
     let winBlurred = false;
@@ -313,6 +299,11 @@
         if (i === 4) dimEl?.style?.setProperty?.(CSS_VARS[i], vals[i]);
         else mediaEl?.style?.setProperty?.(CSS_VARS[i], vals[i]);
       }
+      if (state.convOverlay !== null && Number.isFinite(Number(state.convOverlay))) {
+        doc.body?.style?.setProperty?.(CONV_SCRIM_VAR, `${Math.round(clampNum(state.convOverlay, 0, 1, 0.52) * 100)}%`);
+      } else {
+        doc.body?.style?.removeProperty?.(CONV_SCRIM_VAR);
+      }
     }
 
     function clearCssVars() {
@@ -320,271 +311,129 @@
         if (!t?.style?.removeProperty) continue;
         for (let i = 0; i < CSS_VARS.length; i++) t.style.removeProperty(CSS_VARS[i]);
       }
+      doc.body?.style?.removeProperty?.(CONV_SCRIM_VAR);
+      doc.documentElement?.style?.removeProperty?.(CONV_SCRIM_VAR);
     }
 
     function unmountMediaNode() {
       if (mediaEl) {
-        if (mediaTag === 'VIDEO') {
-          releaseVideoElement(mediaEl);
-        }
-        try {
-          mediaEl.remove?.();
-        } catch {}
+        if (mediaTag === 'VIDEO') releaseVideoElement(mediaEl);
+        try { mediaEl.remove?.(); } catch {}
       }
-      mediaEl = null;
-      mediaTag = '';
-      activeSrc = '';
-      revokeActiveObjectUrl();
+      mediaEl = null; mediaTag = ''; activeSrc = ''; revokeActiveObjectUrl();
     }
 
     function unmountRootLayer() {
       unmountMediaNode();
-      if (rootEl) {
-        try {
-          rootEl.remove?.();
-        } catch {}
-      }
-      rootEl = null;
-      dimEl = null;
+      try { rootEl?.remove?.(); } catch {}
+      rootEl = null; dimEl = null;
       const html = doc.documentElement;
-      if (html) {
-        html.removeAttribute(WALLPAPER_HTML_ATTR);
-        html.removeAttribute(WALLPAPER_HOLE_ATTR);
-      }
+      if (html) { html.removeAttribute(WALLPAPER_HTML_ATTR); html.removeAttribute(WALLPAPER_HOLE_ATTR); }
       clearCssVars();
     }
 
     function ensureRootLayer() {
       if (destroyed || !doc.body) return null;
       if (rootEl && rootEl.parentElement === doc.body) return rootEl;
-      const existing = doc.getElementById ? doc.getElementById(WALLPAPER_ROOT_ID) : null;
-      if (existing) {
-        existing.remove?.();
-      }
+      doc.getElementById?.(WALLPAPER_ROOT_ID)?.remove?.();
       const el = doc.createElement('div');
-      el.id = WALLPAPER_ROOT_ID;
-      markNoTrOwned(el);
-      el.setAttribute('aria-hidden', 'true');
-      el.setAttribute('data-ag-prism-layer', 'wallpaper');
+      el.id = WALLPAPER_ROOT_ID; markNoTrOwned(el);
+      el.setAttribute('aria-hidden', 'true'); el.setAttribute('data-ag-prism-layer', 'wallpaper');
       const dim = doc.createElement('div');
-      dim.className = 'ag-prism-wp-dim';
-      markNoTrOwned(dim);
-      el.appendChild(dim);
-      if (doc.body.firstChild && typeof doc.body.insertBefore === 'function') {
-        doc.body.insertBefore(el, doc.body.firstChild);
-      } else {
-        doc.body.appendChild(el);
-      }
-      rootEl = el;
-      dimEl = dim;
+      dim.className = 'ag-prism-wp-dim'; markNoTrOwned(dim); el.appendChild(dim);
+      if (doc.body.firstChild && typeof doc.body.insertBefore === 'function') doc.body.insertBefore(el, doc.body.firstChild);
+      else doc.body.appendChild(el);
+      rootEl = el; dimEl = dim;
       return rootEl;
     }
 
     async function tryImageBlobFallback(targetImg, targetRev) {
-      if (destroyed || blobFallbackInFlight || blobFallbackTriedRev === targetRev) return;
-      if (!state.enabled || state.mediaType !== 'image') return;
-      blobFallbackTriedRev = targetRev;
-      blobFallbackInFlight = true;
+      if (destroyed || blobFallbackInFlight || blobFallbackTriedRev === targetRev || !state.enabled || state.mediaType !== 'image') return;
+      blobFallbackTriedRev = targetRev; blobFallbackInFlight = true;
       try {
         const res = await bridge.getMediaBlob({ rev: targetRev });
-        if (destroyed || !state.enabled || state.rev !== targetRev || targetImg !== mediaEl) {
-          return;
-        }
-        if (!res || !res.ok || !res.base64 || !res.mimeType) {
-          renderMode = 'error';
-          lastError = (res && (res.code || res.error)) || 'csp-blocked';
-          notifySubscribers();
-          return;
-        }
+        if (destroyed || !state.enabled || state.rev !== targetRev || targetImg !== mediaEl) return;
+        if (!res || !res.ok || !res.base64 || !res.mimeType) { renderMode = 'error'; lastError = (res && (res.code || res.error)) || 'csp-blocked'; notifySubscribers(); return; }
         const bytes = decodeBase64ToBytes(res.base64, win);
         const BlobCtor = win.Blob || (typeof Blob !== 'undefined' ? Blob : null);
         const urlApi = win.URL || (typeof URL !== 'undefined' ? URL : null);
-        if (!BlobCtor || !urlApi || typeof urlApi.createObjectURL !== 'function' || bytes.length === 0) {
-          renderMode = 'error';
-          lastError = 'blob-api-unavailable';
-          notifySubscribers();
-          return;
-        }
-        const blob = new BlobCtor([bytes], { type: res.mimeType });
-        const nextUrl = urlApi.createObjectURL(blob);
-        // 撤销旧 ObjectURL 防内存泄漏
+        if (!BlobCtor || !urlApi || typeof urlApi.createObjectURL !== 'function' || bytes.length === 0) { renderMode = 'error'; lastError = 'blob-api-unavailable'; notifySubscribers(); return; }
+        const nextUrl = urlApi.createObjectURL(new BlobCtor([bytes], { type: res.mimeType }));
         revokeActiveObjectUrl();
-        activeObjectUrl = nextUrl;
-        activeSrc = nextUrl;
-        renderMode = 'blob-fallback';
-        lastError = '';
-        targetImg.setAttribute('data-render-mode', 'blob-fallback');
-        targetImg.src = nextUrl;
+        activeObjectUrl = activeSrc = nextUrl; renderMode = 'blob-fallback'; lastError = '';
+        targetImg.setAttribute('data-render-mode', 'blob-fallback'); targetImg.src = nextUrl;
         notifySubscribers();
       } catch {
-        if (!destroyed) {
-          renderMode = 'error';
-          lastError = 'csp-fallback-failed';
-          notifySubscribers();
-        }
-      } finally {
-        blobFallbackInFlight = false;
-      }
+        if (!destroyed) { renderMode = 'error'; lastError = 'csp-fallback-failed'; notifySubscribers(); }
+      } finally { blobFallbackInFlight = false; }
     }
 
     function renderMedia() {
       if (destroyed) return;
       ensureStyleTag();
-
       const hasActiveMedia = Boolean(state.enabled && (state.mediaUrl || activeObjectUrl) && (state.mediaType === 'image' || state.mediaType === 'video'));
       if (!hasActiveMedia) {
-        unmountRootLayer();
-        renderMode = 'idle';
-        if (!state.enabled) lastError = '';
-        else if (state.mediaError) lastError = state.mediaError;
-        notifySubscribers();
-        return;
+        unmountRootLayer(); renderMode = 'idle';
+        if (!state.enabled) lastError = ''; else if (state.mediaError) lastError = state.mediaError;
+        notifySubscribers(); return;
       }
-
       const layer = ensureRootLayer();
       if (!layer) return;
-
-      const html = doc.documentElement;
-      if (html) html.setAttribute(WALLPAPER_HTML_ATTR, 'on');
-
-      const wantTag = state.mediaType === 'video' ? 'VIDEO' : 'IMG';
-      const targetUrl = state.mediaUrl || '';
-      const needRebuild =
-        !mediaEl ||
-        mediaTag !== wantTag ||
-        (renderMode !== 'blob-fallback' && activeSrc !== targetUrl) ||
-        (renderMode === 'blob-fallback' && state.rev !== blobFallbackTriedRev && targetUrl && targetUrl !== activeSrc);
-
+      doc.documentElement?.setAttribute?.(WALLPAPER_HTML_ATTR, 'on');
+      const wantTag = state.mediaType === 'video' ? 'VIDEO' : 'IMG', targetUrl = state.mediaUrl || '';
+      const needRebuild = !mediaEl || mediaTag !== wantTag || (renderMode !== 'blob-fallback' && activeSrc !== targetUrl) || (renderMode === 'blob-fallback' && state.rev !== blobFallbackTriedRev && targetUrl && targetUrl !== activeSrc);
       if (needRebuild) {
-        unmountMediaNode();
-        blobFallbackInFlight = false;
-        if (state.rev !== blobFallbackTriedRev) {
-          blobFallbackTriedRev = -1;
-        }
+        unmountMediaNode(); blobFallbackInFlight = false;
+        if (state.rev !== blobFallbackTriedRev) blobFallbackTriedRev = -1;
         const el = doc.createElement(wantTag.toLowerCase());
-        el.className = 'ag-prism-wp-media';
-        markNoTrOwned(el);
-        el.setAttribute('aria-hidden', 'true');
-        el.setAttribute('draggable', 'false');
-
+        el.className = 'ag-prism-wp-media'; markNoTrOwned(el);
+        el.setAttribute('aria-hidden', 'true'); el.setAttribute('draggable', 'false');
         if (wantTag === 'VIDEO') {
-          el.muted = true;
-          el.loop = true;
-          el.playsInline = true;
-          el.setAttribute('muted', '');
-          el.setAttribute('loop', '');
-          el.setAttribute('playsinline', '');
-          el.setAttribute('preload', 'metadata');
-          el.setAttribute('tabindex', '-1');
-          el.addEventListener('error', () => {
-            if (destroyed || el !== mediaEl) return;
-            renderMode = 'error';
-            lastError = 'video-stream-blocked';
-            notifySubscribers();
-          });
+          el.muted = el.loop = el.playsInline = true;
+          for (const [k, v] of [['muted', ''], ['loop', ''], ['playsinline', ''], ['preload', 'metadata'], ['tabindex', '-1']]) el.setAttribute(k, v);
+          el.addEventListener('error', () => { if (!destroyed && el === mediaEl) { renderMode = 'error'; lastError = 'video-stream-blocked'; notifySubscribers(); } });
           el.src = targetUrl;
         } else {
-          el.setAttribute('alt', '');
-          el.setAttribute('decoding', 'async');
+          el.setAttribute('alt', ''); el.setAttribute('decoding', 'async');
           const curRev = state.rev;
           el.addEventListener('error', () => {
             if (destroyed || el !== mediaEl) return;
-            if (activeObjectUrl && el.src === activeObjectUrl) {
-              renderMode = 'error';
-              lastError = 'image-decode-failed';
-              notifySubscribers();
-              return;
-            }
+            if (activeObjectUrl && el.src === activeObjectUrl) { renderMode = 'error'; lastError = 'image-decode-failed'; notifySubscribers(); return; }
             void tryImageBlobFallback(el, curRev);
           });
           el.src = targetUrl;
         }
-
-        if (dimEl && typeof layer.insertBefore === 'function') {
-          layer.insertBefore(el, dimEl);
-        } else {
-          layer.appendChild(el);
-        }
-        mediaEl = el;
-        mediaTag = wantTag;
-        activeSrc = targetUrl;
-        renderMode = 'http';
-        lastError = '';
+        if (dimEl && typeof layer.insertBefore === 'function') layer.insertBefore(el, dimEl); else layer.appendChild(el);
+        mediaEl = el; mediaTag = wantTag; activeSrc = targetUrl; renderMode = 'http'; lastError = '';
       }
-
-      applyCssVars();
-      syncHoleAvoidance();
-      syncVideoPlayback();
-      notifySubscribers();
+      applyCssVars(); syncHoleAvoidance(); syncVideoPlayback(); notifySubscribers();
     }
 
-    const onVisibilityChange = () => {
-      if (destroyed) return;
-      syncVideoPlayback();
-    };
-    const onWindowBlur = () => {
-      if (destroyed) return;
-      winBlurred = true;
-      syncVideoPlayback();
-    };
-    const onWindowFocus = () => {
-      if (destroyed) return;
-      winBlurred = false;
-      syncVideoPlayback();
-    };
-    const onDocPointerDown = () => {
-      if (destroyed) return;
-      if (winBlurred) {
-        winBlurred = false;
-        syncVideoPlayback();
-      }
-    };
+    const onVisibilityChange = () => { if (!destroyed) syncVideoPlayback(); };
+    const onWindowBlur = () => { if (!destroyed) { winBlurred = true; syncVideoPlayback(); } };
+    const onWindowFocus = () => { if (!destroyed) { winBlurred = false; syncVideoPlayback(); } };
+    const onDocPointerDown = () => { if (!destroyed && winBlurred) { winBlurred = false; syncVideoPlayback(); } };
 
     function bindObserversAndListeners() {
       if (destroyed || listenersBound) return;
       listenersBound = true;
-      try {
-        doc.addEventListener?.('visibilitychange', onVisibilityChange);
-        doc.addEventListener?.('pointerdown', onDocPointerDown, { passive: true });
-      } catch {}
-      try {
-        win.addEventListener?.('blur', onWindowBlur);
-        win.addEventListener?.('focus', onWindowFocus);
-      } catch {}
-
+      try { doc.addEventListener?.('visibilitychange', onVisibilityChange); doc.addEventListener?.('pointerdown', onDocPointerDown, { passive: true }); } catch {}
+      try { win.addEventListener?.('blur', onWindowBlur); win.addEventListener?.('focus', onWindowFocus); } catch {}
       const MO = win.MutationObserver || (typeof MutationObserver === 'function' ? MutationObserver : null);
       if (typeof MO === 'function') {
         if (doc.documentElement) {
           htmlObserver = new MO((records) => {
             if (destroyed) return;
             for (let i = 0; i < records.length; i++) {
-              const attr = records[i] && records[i].attributeName;
-              if (attr === 'data-ag-cs-win-blur') {
-                const v = doc.documentElement.getAttribute('data-ag-cs-win-blur');
-                winBlurred = v === '1';
-              }
+              if (records[i]?.attributeName === 'data-ag-cs-win-blur') winBlurred = doc.documentElement.getAttribute('data-ag-cs-win-blur') === '1';
             }
             syncVideoPlayback();
           });
-          try {
-            htmlObserver.observe(doc.documentElement, {
-              attributes: true,
-              attributeFilter: ['data-ag-cs-win-blur', 'data-ag-prism-mode', 'data-ag-cs-motion', 'data-ag-cs-theme', 'data-ag-pp-open', 'data-ag-cs-perf-mode'],
-            });
-          } catch {}
+          try { htmlObserver.observe(doc.documentElement, { attributes: true, attributeFilter: ['data-ag-cs-win-blur', 'data-ag-prism-mode', 'data-ag-cs-motion', 'data-ag-cs-theme', 'data-ag-pp-open', 'data-ag-cs-perf-mode'] }); } catch {}
         }
         if (doc.body) {
-          bodyObserver = new MO(() => {
-            if (destroyed) return;
-            syncHoleAvoidance();
-            syncVideoPlayback();
-          });
-          try {
-            bodyObserver.observe(doc.body, {
-              attributes: true,
-              attributeFilter: ['data-has-browser-hole', 'data-has-drawer-browser-hole'],
-            });
-          } catch {}
+          bodyObserver = new MO(() => { if (!destroyed) { syncHoleAvoidance(); syncVideoPlayback(); } });
+          try { bodyObserver.observe(doc.body, { attributes: true, attributeFilter: ['data-has-browser-hole', 'data-has-drawer-browser-hole'] }); } catch {}
         }
       }
     }
@@ -610,6 +459,7 @@
         opacity: clampNum(nextCfg.opacity, 0.05, 0.85, state.opacity),
         blurPx: clampNum(nextCfg.blurPx, 0, 24, state.blurPx),
         dimOverlay: clampNum(nextCfg.dimOverlay, 0, 0.85, state.dimOverlay),
+        convOverlay: normConvOverlay(nextCfg.convOverlay, state.convOverlay),
         fit: nextCfg.fit === 'contain' ? 'contain' : 'cover',
         pauseOnBlur: nextCfg.pauseOnBlur === undefined ? state.pauseOnBlur : Boolean(nextCfg.pauseOnBlur),
         rev: Number.isFinite(Number(nextCfg.rev)) ? Number(nextCfg.rev) : state.rev,
@@ -632,6 +482,7 @@
       if (patch.opacity !== undefined) state.opacity = clampNum(patch.opacity, 0.05, 0.85, state.opacity);
       if (patch.blurPx !== undefined) state.blurPx = clampNum(patch.blurPx, 0, 24, state.blurPx);
       if (patch.dimOverlay !== undefined) state.dimOverlay = clampNum(patch.dimOverlay, 0, 0.85, state.dimOverlay);
+      if ('convOverlay' in patch) state.convOverlay = normConvOverlay(patch.convOverlay, state.convOverlay);
       if (patch.fit === 'cover' || patch.fit === 'contain') state.fit = patch.fit;
       if (state.enabled) applyCssVars();
     }
@@ -705,36 +556,22 @@
 
     function destroy() {
       if (destroyed) return;
-      destroyed = true;
-      subscribers.clear();
-      try {
-        htmlObserver?.disconnect?.();
-      } catch {}
+      destroyed = true; subscribers.clear();
+      try { htmlObserver?.disconnect?.(); } catch {}
       htmlObserver = null;
-      try {
-        bodyObserver?.disconnect?.();
-      } catch {}
+      try { bodyObserver?.disconnect?.(); } catch {}
       bodyObserver = null;
       if (listenersBound) {
         listenersBound = false;
-        try {
-          doc.removeEventListener?.('visibilitychange', onVisibilityChange);
-          doc.removeEventListener?.('pointerdown', onDocPointerDown);
-        } catch {}
-        try {
-          win.removeEventListener?.('blur', onWindowBlur);
-          win.removeEventListener?.('focus', onWindowFocus);
-        } catch {}
+        try { doc.removeEventListener?.('visibilitychange', onVisibilityChange); doc.removeEventListener?.('pointerdown', onDocPointerDown); } catch {}
+        try { win.removeEventListener?.('blur', onWindowBlur); win.removeEventListener?.('focus', onWindowFocus); } catch {}
       }
       unmountRootLayer();
-      // 兜底再次查询 DOM 中的视频节点并释放硬件解码管线
       try {
         const orphanRoot = doc.getElementById ? doc.getElementById(WALLPAPER_ROOT_ID) : null;
         if (orphanRoot) {
           const orphanVids = orphanRoot.querySelectorAll ? orphanRoot.querySelectorAll('video') : [];
-          for (let i = 0; i < orphanVids.length; i++) {
-            releaseVideoElement(orphanVids[i]);
-          }
+          for (let i = 0; i < orphanVids.length; i++) releaseVideoElement(orphanVids[i]);
           orphanRoot.remove?.();
         }
       } catch {}

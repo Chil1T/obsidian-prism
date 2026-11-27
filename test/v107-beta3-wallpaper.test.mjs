@@ -1978,14 +1978,14 @@ test('Issue #59 regression: WALLPAPER_CSS penetrates v2.34+ inset-shell, sheet, 
   const sidebarMatches = css.match(/:is\(aside,\[data-testid="sidebar-split"\]>div:first-child,\.agy-shell \.bg-sidebar\)/g) || [];
   assert.equal(sidebarMatches.length, 3, 'Dark + 2 light sidebar selectors must all include .agy-shell .bg-sidebar after existing order');
 
-  // Tuned conversation seat scrims (dark ~52%, light ~66%)
+  // Tuned conversation seat scrims (dark default ~52%, light default ~66%, customizable via --ag-prism-wp-conv-scrim)
   assert.ok(
-    css.includes('[data-ag-cs-conv-seat="1"]:not([data-has-browser-hole="true"]):not([data-has-drawer-browser-hole="true"]){background-color:color-mix(in srgb,var(--background,#0B0B0E) 52%,transparent) !important;}'),
-    'Dark conv-seat scrim should use 52% color-mix for balanced wallpaper visibility and readability'
+    css.includes('[data-ag-cs-conv-seat="1"]:not([data-has-browser-hole="true"]):not([data-has-drawer-browser-hole="true"]){background-color:color-mix(in srgb,var(--background,#0B0B0E) var(--ag-prism-wp-conv-scrim,52%),transparent) !important;}'),
+    'Dark conv-seat scrim should default to 52% color-mix and honor --ag-prism-wp-conv-scrim'
   );
   assert.ok(
-    css.includes('[data-ag-cs-conv-seat="1"]:not([data-has-browser-hole="true"]):not([data-has-drawer-browser-hole="true"]){background-color:color-mix(in srgb,var(--background,#F4F7FB) 66%,transparent) !important;}'),
-    'Light conv-seat scrim should use 66% color-mix for balanced wallpaper visibility and readability'
+    css.includes('[data-ag-cs-conv-seat="1"]:not([data-has-browser-hole="true"]):not([data-has-drawer-browser-hole="true"]){background-color:color-mix(in srgb,var(--background,#F4F7FB) var(--ag-prism-wp-conv-scrim,66%),transparent) !important;}'),
+    'Light conv-seat scrim should default to 66% color-mix and honor --ag-prism-wp-conv-scrim'
   );
 });
 
