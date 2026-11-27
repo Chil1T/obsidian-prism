@@ -435,3 +435,114 @@ test('5. style.css .agy-overlay button sizing rule uses zero :has(), skips palet
   assert.ok(flatSel.includes('button:not(.ces-knob):not([data-testid^="permissions-"]):not([data-testid^="agy-subagent-ctx-"]):not([data-testid="agy-subagent-open-btn"])'), 'flattened selector must exempt agy-powertools subagent buttons');
   assert.ok(flatSel.includes('.agy-overlay-item') && flatSel.includes('[role="menuitem"]'), 'normal host overlay menu items must stay styled');
 });
+
+test('6. style.css bottom-0 fade overlay mask rule excludes [data-testid="conversation-navigator"] and full-height side rails with 0 :has()', () => {
+  assert.equal(styleCss.includes(':has('), false, 'style.css must keep strictly 0 :has()');
+  assert.equal(flatStyleCss.includes(':has('), false, 'flattened style.css must keep strictly 0 :has()');
+
+  const rawLine = styleCss
+    .split('\n')
+    .find((l) => l.includes('div.pointer-events-none[class*="bottom-0"]') && l.includes('opacity:0!important'));
+  assert.ok(rawLine, 'style.css must define the bottom-0 fade overlay hide rule');
+
+  const splitTopLevelSelectors = (selText) => {
+    const out = [];
+    let pDepth = 0;
+    let bDepth = 0;
+    let quote = '';
+    let start = 0;
+    for (let i = 0; i < selText.length; i += 1) {
+      const ch = selText[i];
+      if (quote) {
+        if (ch === '\\') { i += 1; continue; }
+        if (ch === quote) quote = '';
+        continue;
+      }
+      if (ch === '"' || ch === "'") quote = ch;
+      else if (ch === '(') pDepth += 1;
+      else if (ch === ')') pDepth = Math.max(0, pDepth - 1);
+      else if (ch === '[') bDepth += 1;
+      else if (ch === ']') bDepth = Math.max(0, bDepth - 1);
+      else if (ch === ',' && pDepth === 0 && bDepth === 0) {
+        out.push(selText.slice(start, i).trim());
+        start = i + 1;
+      }
+    }
+    out.push(selText.slice(start).trim());
+    return out.filter(Boolean);
+  };
+
+  const requiredExcl = ':not([data-testid="conversation-navigator"]):not([class*="inset-y-0"]):not([class*="top-0"])';
+  const rawBodyStart = rawLine.indexOf('{');
+  const rawBranches = splitTopLevelSelectors(rawLine.slice(0, rawBodyStart));
+  assert.equal(rawBranches.length, 2, `expected 2 selector branches on bottom-0 fade rule, got ${rawBranches.length}`);
+  for (const branch of rawBranches) {
+    assert.ok(
+      branch.includes(`div.pointer-events-none[class*="bottom-0"]${requiredExcl}`),
+      `source branch must restrict to bottom-0 and exclude conversation-navigator & full-height rails: ${branch}`
+    );
+  }
+
+  const flatMatches = [...flatStyleCss.matchAll(/([^{}]+)\{([^{}]*opacity:0!important[^{}]*)\}/g)];
+  const fadeRules = flatMatches.filter((m) => m[1].includes('pointer-events-none'));
+  assert.equal(fadeRules.length, 1, `expected exactly 1 flattened pointer-events-none opacity:0 rule, got ${fadeRules.length}`);
+
+  const flatBranches = splitTopLevelSelectors(fadeRules[0][1]);
+  assert.equal(flatBranches.length, 2, 'flattened bottom-0 fade rule must preserve both branches');
+  for (const branch of flatBranches) {
+    assert.ok(
+      branch.includes(`div.pointer-events-none[class*="bottom-0"]${requiredExcl}`),
+      `flattened branch must restrict to bottom-0 and exclude conversation-navigator & full-height rails: ${branch}`
+    );
+  }
+
+  // Evaluate simplified selector semantics against real host DOM shapes for conversation-navigator vs bottom fade overlay
+  const matchesTargetDiv = (branch, divSpec) => {
+    const tail = branch.slice(branch.lastIndexOf('div.pointer-events-none'));
+    const cls = String(divSpec.className || '');
+    const testId = String(divSpec.testId || '');
+    if (!cls.split(/\s+/).includes('pointer-events-none')) return false;
+    if (tail.includes('[class*="bottom-0"]') && !cls.includes('bottom-0')) return false;
+    if (tail.includes(':not([data-testid="conversation-navigator"])') && testId === 'conversation-navigator') return false;
+    if (tail.includes(':not([class*="inset-y-0"])') && cls.includes('inset-y-0')) return false;
+    if (tail.includes(':not([class*="top-0"])') && cls.includes('top-0')) return false;
+    return true;
+  };
+
+  // Host left Q&A dot rail variants must NEVER be hidden by either branch
+  const protectedRails = [
+    { testId: 'conversation-navigator', className: 'pointer-events-none absolute inset-y-0 left-0 flex flex-col' },
+    { testId: 'conversation-navigator', className: 'pointer-events-none absolute left-0 top-0 bottom-0' },
+    { testId: 'conversation-navigator', className: 'pointer-events-none flex' },
+    { testId: '', className: 'pointer-events-none absolute inset-y-0 left-0 z-10' },
+    { testId: '', className: 'pointer-events-none absolute top-0 bottom-0 left-0 z-10' },
+  ];
+  for (const rail of protectedRails) {
+    for (const branch of flatBranches) {
+      assert.equal(
+        matchesTargetDiv(branch, rail),
+        false,
+        `bottom-0 fade branch must NEVER match host nav rail (${JSON.stringify(rail)}): ${branch}`
+      );
+    }
+  }
+
+  // Genuine bottom fade overlay must STILL be matched and hidden by both branches
+  const realBottomMask = { testId: '', className: 'pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t' };
+  for (const branch of flatBranches) {
+    assert.equal(matchesTargetDiv(branch, realBottomMask), true, `genuine bottom fade mask must still match: ${branch}`);
+  }
+
+  // Confirm conversation-navigator pointer-events rule remains intact and no other opacity:0 rule targets it
+  assert.ok(
+    flatStyleCss.includes('html[data-ag-cs-style] [data-testid="conversation-navigator"]{pointer-events:auto!important}'),
+    'flattened CSS must preserve [data-testid="conversation-navigator"]{pointer-events:auto!important}'
+  );
+  for (const [, sel] of flatMatches) {
+    assert.equal(
+      /(?:^|[\s,>~+])\[data-testid="conversation-navigator"\]/.test(sel),
+      false,
+      `no opacity:0!important rule may directly target [data-testid="conversation-navigator"]: ${sel}`
+    );
+  }
+});
