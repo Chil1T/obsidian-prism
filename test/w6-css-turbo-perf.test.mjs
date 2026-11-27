@@ -147,9 +147,9 @@ test('W7-2: default animations restore smooth GPU linear/ease-in-out (0 low-FPS 
   const requiredPausedSelectors = [
     '.shimmer-text-mask',
     '.shimmer-text-content',
-    '[class*="animate-spin"]',
-    '[class*="animate-pulse"]',
-    '[class*="animate-bounce"]',
+    '.animate-spin',
+    '.animate-pulse',
+    '.animate-bounce',
     '[class*="agentStateCaret"]',
     '[data-ag-cs-sonar="1"]',
     '[data-ag-overview-running="1"]::after',

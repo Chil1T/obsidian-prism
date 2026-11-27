@@ -703,7 +703,7 @@ test('w6-5: omni, sidebar-studio, and effort-slider keep smooth default animatio
     'animation:ag-sb-breathe-a 8s ease-in-out infinite',
     'animation:ag-sb-breathe-b 11.5s ease-in-out infinite alternate',
     'animation:ag-sb-halo 7.5s linear infinite',
-    'html[data-ag-cs-style][data-ag-cs-win-blur="1"]:is([data-ag-cs-perf-mode="performance"],[data-ag-cs-perf-mode="eco"]) .ag-prism-vessel::after,html[data-ag-cs-style][data-ag-cs-win-blur="1"]:is([data-ag-cs-perf-mode="performance"],[data-ag-cs-perf-mode="eco"]) :is(.ag-prism-aura-orb,.ag-prism-sb-spin,.ag-prism-sb-dot){animation-play-state:paused!important}',
+    'html[data-ag-cs-style][data-ag-cs-win-blur="1"]:is([data-ag-cs-perf-mode="performance"],[data-ag-cs-perf-mode="eco"]) .ag-prism-vessel-halo::after,html[data-ag-cs-style][data-ag-cs-win-blur="1"]:is([data-ag-cs-perf-mode="performance"],[data-ag-cs-perf-mode="eco"]) :is(.ag-prism-aura-orb,.ag-prism-sb-spin,.ag-prism-sb-dot){animation-play-state:paused!important}',
     'html[data-ag-cs-style]:is([data-ag-cs-perf-mode="performance"],[data-ag-cs-motion="off"]) :is(.ag-prism-sidebar-popover,.ag-prism-chat-policy-chip){backdrop-filter:none!important;-webkit-backdrop-filter:none!important;background:var(--ag-sb-container)!important;opacity:.98}',
   ]) {
     assert.ok(sbCss.includes(needle), `sidebar-client CLIENT_CSS missing: ${needle}`);

@@ -167,7 +167,7 @@ test('Compile-time css-flatten.cjs: semantic equivalence across @media/@supports
   assert.ok(unpackedCss.includes('html[data-ag-cs-style]'), 'Flattened CSS must retain root scope selectors');
   assert.ok(unpackedCss.includes('div[role="dialog"]') && unpackedCss.includes('#ag-cs-settings-sec'), 'Single-block CSS must always ship nested dialog & settings rules unconditionally');
   assert.ok(unpackedCss.includes('@keyframes ag-cs-orbit-spin'), 'Flattened CSS must preserve @keyframes verbatim');
-  assert.ok(unpackedCss.includes('@property --_fa'), 'Flattened CSS must preserve @property verbatim');
+  assert.ok(unpackedCss.includes('@property --ag-origin-x'), 'Flattened CSS must preserve @property verbatim');
   assert.ok(unpackedCss.includes('data-ag-cs-perf-mode="performance"'), 'Flattened CSS must include performance-mode blur degradation rules');
   assert.equal(unpackedCss.includes('data-ag-perf-busy="1"'), false, 'Flattened CSS must not strip overlay blur on transient data-ag-perf-busy');
 });

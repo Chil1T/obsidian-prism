@@ -2341,8 +2341,10 @@ test('侧栏出现时 .agy-scroll-bottom 层级/过渡/分屏宽度防裁切与 
   assert.ok(scrollRule.includes('z-index:24!important;'), '.agy-scroll-bottom 必须位于 z-index:24（高于底部渐隐层 10 与桌宠 22，低于输入层 25 不穿透悬浮详卡）');
   assert.equal(scrollRule.includes('position:relative'), false, '.agy-scroll-bottom 严禁覆盖宿主 position:absolute');
   assert.ok(
-    scrollRule.includes('opacity .3s var(--ease-expo-out),transform .3s var(--ease-expo-out),margin-left .5s var(--ease-expo-out)'),
-    '.agy-scroll-bottom 必须保留宿主 opacity / transform / margin-left 侧栏联动过渡'
+    scrollRule.includes('contain:layout style paint;') &&
+      scrollRule.includes('opacity .3s var(--ease-expo-out),transform .3s var(--ease-expo-out)') &&
+      !scrollRule.includes('margin-left'),
+    '.agy-scroll-bottom 必须具备 contain:layout style paint 与安全合成 opacity / transform 过渡且消除非合成 margin-left 过渡'
   );
   const auxRule = css.split('\n').find((l) => l.includes('[data-testid="aux-pane-split"][data-ag-cs-aux-dual="1"]{')) || '';
   assert.ok(

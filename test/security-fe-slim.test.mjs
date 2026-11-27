@@ -920,19 +920,17 @@ test('Main bundle budget <= 704,000 B (< 690 KiB / 706,560 B CI hard limit), sid
   assert.ok(effortExpr.length > 0, 'Channel 14 effortSlider must compile when enabled');
   vm.runInNewContext(effortExpr, sandbox);
   const injectedCss = styles.join('\n');
+  assert.equal(/:has\(/.test(injectedCss), false, 'Compiled bundle SLIDER_CSS must contain 0 :has() selectors');
   assert.ok(
-    injectedCss.includes("html[data-ces-slider-ready='1'] [role='menu']:has([data-testid='model-selector-effort-option'])"),
-    'Compiled bundle must retain html[data-ces-slider-ready=1]-gated [role=menu]:has(model-selector-effort-option) CSS'
+    injectedCss.includes("html[data-ces-slider-ready='1'] [data-ces-hide-panel='1']"),
+    'Compiled bundle must retain html[data-ces-slider-ready=1]-gated data-ces-hide-panel CSS'
   );
   assert.ok(
-    injectedCss.includes("html[data-ces-slider-ready='1'] [role='menuitem']:has([data-testid='model-selector-effort-group'])>.group-hover"),
-    'Compiled bundle must retain gated menuitem group-hover CSS'
+    injectedCss.includes("html[data-ces-slider-ready='1'] [role='menuitem'][data-ces-effort-group-item='1']>.group-hover"),
+    'Compiled bundle must retain gated menuitem group-hover CSS via data-ces-effort-group-item'
   );
-  const ungatedMenuHas = [...injectedCss.matchAll(/\[role='menu(?:item)?'\]:has\(/g)].filter((m) => {
-    const before = injectedCss.slice(Math.max(0, m.index - 70), m.index);
-    return !before.includes("html[data-ces-slider-ready='1']");
-  });
-  assert.equal(ungatedMenuHas.length, 0, 'Must NEVER emit bare ungated [role=menu*]:has() rules');
+  const ungatedMenuHas = [...injectedCss.matchAll(/\[role='menu(?:item)?'\]:has\(/g)];
+  assert.equal(ungatedMenuHas.length, 0, 'Must NEVER emit any [role=menu*]:has() rules');
   assert.equal(injectedCss.includes('.ces-set-head'), false, 'Dead .ces-set* settings modal CSS must remain stripped');
   assert.ok(injectedCss.includes('data-ces-model-selected'), 'Active model-selected SLIDER_CSS rule must be preserved in bundle');
 

@@ -357,9 +357,10 @@ test('3. window.__agPrismCssMgr: single-block adoptedStyleSheets mount, 0 extra 
 });
 
 test('4. @property (inherits:false) & variable sinking: wallpaper-client, upstream-client, and style.css pseudo-element safety redline', () => {
-  // 4a) style.css registers safe local tokens as inherits:false and NEVER sets inherits:false on pseudo-element vars
+  // 4a) style.css registers safe local tokens as inherits:false and NEVER sets inherits:false on pseudo-element vars (unused --_fa @property purged)
   const styleCss = fs.readFileSync(path.join(ROOT, 'style.css'), 'utf8');
-  for (const safeVar of ['--_fa', '--ag-origin-x', '--ag-origin-y', '--ag-row-i']) {
+  assert.equal(/@property\s+--_fa\b/.test(styleCss), false, 'style.css must remove uninterpolated @property --_fa after GPU transform/opacity migration');
+  for (const safeVar of ['--ag-origin-x', '--ag-origin-y', '--ag-row-i']) {
     assert.ok(
       new RegExp(`@property\\s+${safeVar}\\s*\\{[^}]*inherits\\s*:\\s*false`).test(styleCss),
       `style.css must register @property ${safeVar} with inherits:false`
@@ -373,15 +374,16 @@ test('4. @property (inherits:false) & variable sinking: wallpaper-client, upstre
     );
   }
 
-  // 4b) effort-slider upstream-client registers --ces-energy/--ces-fill/--ces-star-opacity (inherits:false) & keeps --ces-glow-color inherited
+  // 4b) effort-slider upstream-client removes uninterpolated @property declarations (--ces-energy/--ces-fill/--ces-star-opacity) & keeps --ces-glow-color inherited
   const effortSrc = fs.readFileSync(path.join(ROOT, 'vendor', 'effort-slider', 'upstream-client.js'), 'utf8');
   for (const v of ['--ces-energy', '--ces-fill', '--ces-star-opacity']) {
-    assert.ok(
-      new RegExp(`@property\\s+${v}\\{[^}]*inherits:false`).test(effortSrc),
-      `upstream-client must declare @property ${v} { inherits:false }`
+    assert.equal(
+      new RegExp(`@property\\s+${v}\\b`).test(effortSrc),
+      false,
+      `upstream-client must remove redundant uninterpolated @property ${v}`
     );
   }
-  assert.equal(/@property\s+--ces-glow-color\b/.test(effortSrc), false, '--ces-glow-color must keep inheritance for ::after');
+  assert.equal(/@property\s+--ces-glow-color\b/.test(effortSrc), false, '--ces-glow-color must keep inheritance for ::before/::after');
   assert.ok(effortSliderMod && typeof effortSliderMod.mountCodexEffortSlider === 'function');
 
   // 4c) wallpaper-client sinks 6 --ag-prism-wp-* vars onto #ag-prism-wallpaper-root (0 writes to html.style) + adoptedStyleSheets
