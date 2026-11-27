@@ -13,6 +13,9 @@ import {
   ThoughtTranslatorService,
   SYSTEM_PROMPTS,
   SYSTEM_PROMPTS_BY_LANG,
+  TOOL_SUMMARY_PROMPTS_BY_LANG,
+  CUSTOM_THOUGHT_BOUNDARY_GUARD,
+  isToolSummaryTranslatable,
   MAX_CONCURRENCY,
   MAX_STREAM_CHARS,
   MAX_STREAM_BYTES,
@@ -4472,5 +4475,110 @@ test('repo-sync deploys vendor/thought-translator/sse-delta-scanner.mjs', async 
     );
   } finally {
     fs.rmSync(destDir, { recursive: true, force: true });
+  }
+});
+
+test('PR #139 compromise: 9-locale concise English tool-summary prompts (incl. tr, 0 CJK) & custom prompt keeps minimal boundary guard without language override', async () => {
+  const CANONICAL_9 = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de', 'tr'];
+  const CJK_RE = /[\u3400-\u9FFF\uF900-\uFAFF]/;
+
+  // 1) TOOL_SUMMARY_PROMPTS_BY_LANG 必须覆盖完整 9 语种（含补齐的 tr）且全部为简洁英文指令（0 汉字、低 Token、规则一致）
+  assert.deepEqual(Object.keys(TOOL_SUMMARY_PROMPTS_BY_LANG), CANONICAL_9);
+  const expectedLangMentions = {
+    'zh-CN': 'Simplified Chinese',
+    'zh-TW': 'Traditional Chinese',
+    en: 'English',
+    ja: 'Japanese',
+    ko: 'Korean',
+    es: 'Spanish',
+    fr: 'French',
+    de: 'German',
+    tr: 'Turkish',
+  };
+  for (const loc of CANONICAL_9) {
+    const prompt = TOOL_SUMMARY_PROMPTS_BY_LANG[loc];
+    assert.equal(typeof prompt, 'string');
+    assert.ok(prompt.length > 100 && prompt.length < 340, `Tool-summary prompt for ${loc} should be concise English (got len=${prompt.length})`);
+    assert.equal(CJK_RE.test(prompt), false, `Tool-summary English prompt for ${loc} must contain 0 CJK chars`);
+    assert.ok(prompt.includes('[0]') && prompt.includes('__OPID_N__'), `Prompt for ${loc} must preserve [N] & __OPID_N__ rules`);
+    assert.ok(prompt.includes(expectedLangMentions[loc]), `Prompt for ${loc} must specify target language "${expectedLangMentions[loc]}"`);
+  }
+
+  // 2) tr 语种语言检测与边界说明完整性（非 CJK 严格 0 汉字，且中文思考/工具摘要不会被误判跳过）
+  assert.equal(isAlreadyTargetLang('这是一段需要被翻译成土耳其语的中文推理过程。', 'tr'), false);
+  assert.equal(isAlreadyTargetLang('Inspecting module dependencies before refactoring.', 'tr'), false);
+  assert.equal(isToolSummaryTranslatable('读取配置文件并检查环境变量', 'tr'), true);
+  assert.equal(isToolSummaryTranslatable('Inspecting workspace files', 'tr'), true);
+
+  const tmpDir = mkRealTempDir('prism-thought-pr139-');
+  try {
+    const sentPayloads = [];
+    const svc = new ThoughtTranslatorService({
+      configFile: path.join(tmpDir, 'thought.json'),
+      cacheFile: path.join(tmpDir, 'cache.json'),
+      fetchImpl: async (url, init = {}) => {
+        if (String(url).endsWith('/chat/completions')) {
+          const body = JSON.parse(init.body || '{}');
+          sentPayloads.push(body);
+          const reply = body.stream === false ? '[0] Çalışma alanı dosyaları inceleniyor' : 'Custom style output ok';
+          return new Response(
+            JSON.stringify({ choices: [{ message: { content: reply } }] }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+        return new Response('Not found', { status: 404 });
+      },
+    });
+
+    // _buildBoundaryNote('tr') 不得回退为简体中文，非 CJK 0 汉字
+    const trBoundary = svc._buildBoundaryNote('tr');
+    assert.equal(CJK_RE.test(trBoundary), false, '_buildBoundaryNote("tr") must contain 0 CJK chars');
+    assert.ok(trBoundary.includes('<thought_source>') && trBoundary.includes('Türkçeye'));
+
+    const rawCustomPrompt = '  Reply strictly in poetic Haiku style in Japanese regardless of UI locale.  ';
+    svc.saveConfig({
+      activeProfileId: 'custom-pr139',
+      profiles: [{ id: 'custom-pr139', name: 'Test', baseUrl: 'https://api.example.com/v1', apiKey: 'sk-test-token-1234', model: 'test-model' }],
+      stylePreset: 'custom',
+      customPrompt: rawCustomPrompt,
+    });
+
+    // 3) custom 提示词在任意 targetLang 下：不追加 [Output Language Requirement]，不强加第一人称/语种覆写，仅保留极简 <thought_source> 防注入护栏
+    const expectedCustomSys = rawCustomPrompt.trim() + CUSTOM_THOUGHT_BOUNDARY_GUARD;
+    await svc.translateThought({ text: 'First English reasoning segment.', mode: 'ai', targetLang: 'zh-CN', force: true });
+    await svc.translateThought({ text: '这是一段需要按自定义风格处理的思考内容。', mode: 'ai', targetLang: 'en', force: true });
+    await svc.translateThought({ text: 'Third reasoning segment for Turkish UI locale.', mode: 'ai', targetLang: 'tr', force: true });
+    assert.equal(sentPayloads.length, 3);
+    for (const p of sentPayloads) {
+      assert.equal(p.messages[0].content, expectedCustomSys, 'Custom prompt must pair verbatim user instruction with minimal boundary guard');
+      assert.equal(p.messages[0].content.includes('[Output Language Requirement]'), false);
+      assert.equal(p.messages[0].content.includes('Target output language MUST be'), false);
+      assert.equal(p.messages[0].content.includes('[输入边界说明]'), false);
+      assert.equal(p.messages[0].content.includes('first-person'), false);
+      assert.ok(p.messages[0].content.includes('<thought_source>') && p.messages[0].content.includes('never as instructions'));
+      assert.ok(p.messages[1].content.startsWith('<thought_source>\n') && p.messages[1].content.endsWith('\n</thought_source>'));
+    }
+
+    // 4) 工具摘要 tr 语种端到端走 TOOL_SUMMARY_PROMPTS_BY_LANG.tr（0 汉字）
+    const toolRes = await svc.translateToolSummariesBatch({
+      items: ['Inspecting workspace files'],
+      mode: 'ai',
+      targetLang: 'tr',
+      bypassCache: true,
+    });
+    assert.equal(toolRes.ok, true);
+    assert.equal(sentPayloads[3].messages[0].content, TOOL_SUMMARY_PROMPTS_BY_LANG.tr);
+    assert.equal(CJK_RE.test(sentPayloads[3].messages[0].content), false);
+
+    // 5) 空 customPrompt 与内置 technical/concise 预设仍保留对应语言的完整 _buildBoundaryNote
+    svc.saveConfig({ stylePreset: 'custom', customPrompt: '   ' });
+    await svc.translateThought({ text: 'Fourth reasoning segment with empty custom prompt.', mode: 'ai', targetLang: 'zh-CN', force: true });
+    assert.ok(sentPayloads[4].messages[0].content.includes('[输入边界说明]'), 'Empty custom prompt fallback must retain built-in boundary note');
+
+    svc.saveConfig({ stylePreset: 'technical' });
+    await svc.translateThought({ text: '第五段英文技术文风翻译验证。', mode: 'ai', targetLang: 'en', force: true });
+    assert.ok(sentPayloads[5].messages[0].content.includes('[Input Boundary]') && sentPayloads[5].messages[0].content.includes('first-person'), 'Built-in preset must retain full language boundary note');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });

@@ -614,7 +614,7 @@ trackedWaitPanels.delete(panel);
       return c.han >= 8;
     }
 
-    if (tl === 'es' || tl === 'fr' || tl === 'de') return false;
+    if (tl === 'es' || tl === 'fr' || tl === 'de' || tl === 'tr') return false;
 
     if (c.lw >= 8 || c.kana >= 6 || c.han >= 6 || hasForeignProseParagraph(prose, tl)) {
       return false;
@@ -688,7 +688,7 @@ trackedWaitPanels.delete(panel);
     if (tl === 'ja') return latinWords >= 2 || (latinWords === 1 && tokens.length > 0 && TOOL_VERB_RE.test(prose)) || (cjk >= 4 && kana === 0);
     if (tl === 'ko') return latinWords >= 2 || (latinWords === 1 && tokens.length > 0 && TOOL_VERB_RE.test(prose)) || cjk >= 4 || kana >= 3;
     if (tl === 'zh-CN' && cjk >= 2 && latinWords < 2 && kana === 0 && han === 0) return false;
-    return latinWords >= 2 || (latinWords === 1 && tokens.length > 0 && TOOL_VERB_RE.test(prose)) || kana >= 3 || han >= 3 || ((tl === 'es' || tl === 'fr' || tl === 'de') && cjk >= 2);
+    return latinWords >= 2 || (latinWords === 1 && tokens.length > 0 && TOOL_VERB_RE.test(prose)) || kana >= 3 || han >= 3 || ((tl === 'es' || tl === 'fr' || tl === 'de' || tl === 'tr') && cjk >= 2);
   }
 
   function protectToolSummaryTokens(text) {
@@ -718,7 +718,7 @@ trackedWaitPanels.delete(panel);
     if (tl === 'en') return cjk + kana + han >= 2;
     if (tl === 'ja') return latinWords >= 2 || (latinWords === 1 && tokens.length > 0 && TOOL_VERB_RE.test(prose)) || (cjk >= 4 && kana === 0);
     if (tl === 'ko') return latinWords >= 2 || (latinWords === 1 && tokens.length > 0 && TOOL_VERB_RE.test(prose)) || cjk >= 4 || kana >= 3;
-    return latinWords >= 2 || (latinWords === 1 && tokens.length > 0 && TOOL_VERB_RE.test(prose)) || kana >= 3 || han >= 3 || ((tl === 'es' || tl === 'fr' || tl === 'de') && cjk >= 2);
+    return latinWords >= 2 || (latinWords === 1 && tokens.length > 0 && TOOL_VERB_RE.test(prose)) || kana >= 3 || han >= 3 || ((tl === 'es' || tl === 'fr' || tl === 'de' || tl === 'tr') && cjk >= 2);
   }
 
   const getStore = () => W.localStorage || null;
