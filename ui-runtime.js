@@ -74,7 +74,7 @@ const isFn = (v) => typeof v === 'function', de = () => D.documentElement, byId 
 const ga = (e, k) => e?.getAttribute?.(k), sa = (e, k, v = '') => e?.setAttribute?.(k, String(v)), ha = (e, k) => !!(e?.hasAttribute?.(k)), ra = (e, k) => e?.removeAttribute?.(k);
 const qs = (e, s) => e?.querySelector?.(s) || null, qa = (e, s) => e?.querySelectorAll?.(s) || [], cl = (e, s) => e?.closest?.(s) || null, qaE = (r, s, f) => { for (const e of qa(r, s)) f(e); };
 const sp = (e, k, v) => e?.style?.setProperty?.(k, v), rp = (e, k) => e?.style?.removeProperty?.(k), clHas = (e, c) => !!(e?.[K_CL]?.contains?.(c)), clsOf = (e) => (typeof e?.className === 'string' ? e.className : ''), chOf = (e) => e?.children, hasIn = (a, b) => !!a?.contains?.(b), incS = (a, b) => a.includes(b);
-const rmAll = (s) => qaE(D, s, (e) => e.remove()), raAll = (s, a) => qaE(D, s, (e) => ra(e, a));
+const rmAll = (s) => qaE(D, s, (e) => e.remove()), raAll = (a, s = `[${a}]`) => qaE(D, s, (e) => ra(e, a));
 const evOp = (t, add, ls) => { if (!t) return; for (const [e, f, o] of ls) safe(() => (add ? t.addEventListener(e, f, o) : t.removeEventListener(e, f, o))); };
 const rc = (e) => (isFn(e?.getBoundingClientRect) ? e.getBoundingClientRect() : null), tidOf = (e) => String(ga(e, 'data-testid') || ''), tagU = (e) => String(e?.tagName || '').toUpperCase();
 const isElementLike = (n) => !!(n && (n.nodeType === 1 || (n.nodeType === undefined && typeof n.tagName === 'string')));
@@ -342,12 +342,16 @@ const isThoughtMutationRecord = (m) => isMutAll(m, isThoughtIsolatedNode);
 
 const isManagedThoughtPanel = (panel) => !!(isElementLike(panel) && (ha(panel, 'data-op-zh-ready') || ha(panel, 'data-op-zh-pending') || qs(panel, '.ag-prism-thought-overlay')));
 
+const takeMo = (b) => (b?.discardMutations ? b.discardMutations() : mainObserver?.takeRecords && mainObserver.takeRecords());
 const runGuardedMut = (fn) => {
 const prev = internalDomMutating;
+let b, pre;
+if (!prev) pre = safe(() => takeMo(b = getDomBus()));
 internalDomMutating = true;
 try { return fn(); } finally {
-if (!prev) try { const b = getDomBus(); if (isFn(b?.discardMutations)) b.discardMutations(); else if (mainObserver && isFn(mainObserver.takeRecords)) mainObserver.takeRecords(); } catch {}
+if (!prev) safe(() => takeMo(b || (b = getDomBus())));
 internalDomMutating = prev;
+if (pre?.length) Promise.resolve().then(() => !destroyed && (b?.replayRecords ? b.replayRecords(pre) : onRootMutations(pre)));
 }
 };
 
@@ -855,7 +859,7 @@ return q;
 const syncModelMenuRootAttrs = (panel) => {
 const h = de();
 if (panel) { h && setAttrIfChanged(h, 'data-ag-cs-model-menu', '1'); const ov = cl(panel, '.agy-overlay'); ov && setAttrIfChanged(ov, 'data-ag-cs-model-overlay', '1'); }
-else { ra(h, 'data-ag-cs-model-menu'); raAll('[data-ag-cs-model-overlay]', 'data-ag-cs-model-overlay'); }
+else { ra(h, 'data-ag-cs-model-menu'); raAll('data-ag-cs-model-overlay'); }
 };
 const measureCardClr = (card, ib, act, isPri = true, m = null, pTk = null, skipLay = false) => {
 if (!ib) return null;
@@ -1448,7 +1452,7 @@ const pm = s._agM;
 if (pm != null) { s.media = pm; sa(s, 'media', pm); } else { s.media = ''; ra(s, 'media'); }
 delete s._agM; s.disabled = false; safe(() => { if (s.sheet) s.sheet.disabled = false; }); ra(s, TS_A);
 }
-raAll(`img[${TI_A}]`, TI_A);
+raAll(TI_A, `img[${TI_A}]`);
 savedAlertCss = ''; alertCssHasRtl = false;
 };
 
@@ -1708,7 +1712,7 @@ if (hb) dirtyAddedRoots.add(el);
     const frc = !!(flags.f || flags.r || flags.c);
     runGuardedMut(() => {
       applyRootAttrs(effectiveFull);
-      if (actualRouteJump) for (const a of ['data-ag-cs-stage-glide', 'data-ag-cs-sonar', 'data-ag-cs-caustic']) raAll(`[${a}]`, a);
+      if (actualRouteJump) for (const a of ['data-ag-cs-stage-glide', 'data-ag-cs-sonar', 'data-ag-cs-caustic']) raAll(a);
       if (effectiveFull || flags.m) stampBgCmdWrap(effectiveFull ? D : bgCmdNodes);
       if (frc || flags.l) syncBleedTables();
       if (effectiveFull || turboRoots) syncHostTurbo(effectiveFull ? D : turboRoots);
@@ -1887,16 +1891,17 @@ if (hb) dirtyAddedRoots.add(el);
   const onWinKeyDown = (ev) => safe(() => {
     if (destroyed || !ev) return;
     wakeWinBlur();
-    if (ev.key === 'Enter' && !ev.shiftKey && !ev.ctrlKey && !ev.altKey && !ev.metaKey && !ev.isComposing && ev.keyCode !== 229 && cl(ev.target, `${S_IB} [contenteditable="true"]`)) {
+    const et = ev.target;
+    if (ev.key === 'Enter' && !ev.shiftKey && !ev.ctrlKey && !ev.altKey && !ev.metaKey && !ev.isComposing && ev.keyCode !== 229 && cl(et, `${S_IB} [contenteditable="true"]`)) {
       const sm = qs(D, '[data-testid="slash-command-menu"]');
       if (sm && (!sm.getClientRects || sm.getClientRects().length > 0)) return;
-      trackActivePaneFromTarget(ev.target, false);
-      if (cl(ev.target, '.agy-home')) trigLift();
-      convAuraCtl.triggerStart(findConvForTarget(ev.target));
-      dispatchComposerSubmit(ev.target);
+      trackActivePaneFromTarget(et, false);
+      if (cl(et, '.agy-home')) trigLift();
+      convAuraCtl.triggerStart(findConvForTarget(et));
+      dispatchComposerSubmit(et);
       return;
     }
-    if (ev.key === '[' && !ev.ctrlKey && !ev.metaKey && !ev.altKey && !isEditableTarget(ev.target) && !cl(ev.target, `${S_DLG},.monaco-editor`)) {
+    if (ev.key === '[' && !ev.ctrlKey && !ev.metaKey && !ev.altKey && !isEditableTarget(et) && !cl(et, `${S_DLG},.monaco-editor`)) {
       const html = de(), k = 'data-ag-cs-sidebar-collapsed';
       if (!html || cfg.sidebarRestyle === false) return;
       bumpResizingPulse();
@@ -1907,16 +1912,11 @@ if (hb) dirtyAddedRoots.add(el);
   const isPulseHostNode = (n) => !!(n && (n.id === 'ag-prism-pulse-bar' || n.id === 'ag-pulse-status-bar' || ha(n, 'data-ag-prism-pulse-bar') || ga(n, 'data-ag-prism-fallback') === '1' || ga(n, 'data-ag-pulse-bar') === 'true'));
 
   const onWinClick = (ev) => safe(() => {
-    if (destroyed || !ev?.target?.closest || isThoughtIsolatedNode(ev.target)) return;
-    const t = ev.target;
+    const t = ev?.target;
+    if (destroyed || !t?.closest || isThoughtIsolatedNode(t)) return;
     const hitPulse = isPulseHostNode(t) ? t : cl(t, PULSE_HOST_SEL) || (isFn(ev.composedPath) ? ev.composedPath().find(isPulseHostNode) : null);
-    if (hitPulse) {
-      safe(() => getTel()?.setActiveBar?.(hitPulse));
-      setPbHost(hitPulse);
-      ST(() => { if (!destroyed) syncContextCardOpenNotify(); }, 28);
-    } else if (wasContextCardOpen) {
-      ST(() => { if (!destroyed) syncContextCardOpenNotify(); }, 28);
-    }
+    if (hitPulse) { safe(() => getTel()?.setActiveBar?.(hitPulse)); setPbHost(hitPulse); }
+    if (hitPulse || wasContextCardOpen) ST(() => !destroyed && syncContextCardOpenNotify(), 28);
     if (cl(t, S_TKT) && getThoughtTranslateMode() !== 'off') ST(() => safe(() => getTh()?.scan?.()), 25);
     const sendBtn = cl(t, '[data-testid="input-send-button"], [data-testid="send-button"]');
     if (sendBtn && !sendBtn.disabled) {
@@ -1941,8 +1941,9 @@ if (hb) dirtyAddedRoots.add(el);
     if (grpBtn && !ha(grpBtn, 'data-ag-cs-key') && !handledGroupClicks.has(ev)) {
       handledGroupClicks.add(ev);
       const grp = cl(grpBtn, '[role="group"]'), gp = streamChoreoCtl.heroState.lastGroupPress;
-      if (gp && gp.group === grp && gp.prevBtn && gp.prevBtn !== grpBtn) runSettingsGroupGlide(grp, gp.prevBtn, grpBtn, gp.prevRect);
+      if (gp?.group === grp && gp.prevBtn && gp.prevBtn !== grpBtn) runSettingsGroupGlide(grp, gp.prevBtn, grpBtn, gp.prevRect);
     }
+    if (!byId(SETTINGS_SEC_ID) && cl(t, `${S_DLG} button,${S_DLG} [role="tab"]`) && !cl(t, '#' + SETTINGS_SEC_ID)) { dirtyFlags.g = true; scheduleSync(); }
     if (cl(t, S_WF) && isCompOn()) streamChoreoCtl.scheduleWorkedForClickSync();
   });
 
@@ -2112,7 +2113,7 @@ const nt = tidOf(node);
 if (inEditor && !nt && !isTkOrQHit(node)) { const t = tagU(node); if (t !== 'BUTTON' && t !== 'STYLE' && t !== 'IMG') continue; }
 if (isAdd && nt === 'conversation-row-sidebar' && ga(node, 'data-selected') === 'true') stSbRun(node);
 if (!inEditor && bS++ >= 40) {
-for (const k of 'rclbos') dirtyFlags[k] = true;
+for (const k of 'rclbosg') dirtyFlags[k] = true;
 dirtyFlags.tk = dirtyFlags.cf = anyRelevant = true;
 if (isAdd && isElementLike(tgt)) dirtyTurboRoots.add(tgt);
 break;
@@ -2174,7 +2175,7 @@ activePaneCard = activeConvView = lastNotifiedPaneCard = lastNotifiedConvView = 
 cancelScheduledSync(); streamChoreoCtl.clearTransientTimers();
 for (const s of [dirtyAddedRoots, dirtyCollapsibleTargets, dirtyBgCmds, dirtyTurboRoots, bleedEls]) s.clear();
 clearWinBlur(); finishResizing(false); unmountCrab(); msLastHostSleep = false;
-safe(() => offIo?.disconnect?.()); offIo = null; offObs.clear(); raAll(`[${OFF_A}]`, OFF_A);
+safe(() => offIo?.disconnect?.()); offIo = null; offObs.clear(); raAll(OFF_A);
 crabRemoveAttrTimer = cT(crabRemoveAttrTimer);
 for (const t of pulseHealTimers) CT(t);
 pulseHealTimers.clear(); syncMotionOffStyle(false); streamChoreoCtl.disconnectStreamObserver();
@@ -2267,18 +2268,17 @@ syncHostEnhancer() { if (destroyed) return; const c = resolveHostEnhancerCtl(); 
 detachHostEnhancer: disposeActiveHostEnhancer,
 syncAbsorbed: () => syncAbsorbedModules(true),
 getState() {
-const convAura = convAuraCtl.getInstance(), auraConnected = !!(convAura && convAura.host && convAura.host.isConnected);
-const convAuraPhase = auraConnected ? convAuraCtl.advancePhase(pNow()) : 'off', rippleMount = rippleCtl.getMount();
+const ca = convAuraCtl.getInstance(), ac = !!(ca?.host?.isConnected), rm = rippleCtl.getMount();
 return {
 brand: 'Obsidian Prism', version: VERSION, cfg: normalizeConfigShape(cfg), motionLevel: getMotionLevel(), lightPreset: getLightPreset(),
 hasThoughtModule: !!getTh(), hasOmniModule: !!W.__agPrismOmni, hasSidebarStudio: !!W.__agPrismSidebar,
 hasContextMenu: !!getCtx(), hasHostEnhancer: isFn(hostEnhancerCtl?.getDebugState),
 usageRecordsCount: homeStudioCtl.getUsageRecordsCount(), hasPanel: homeStudioCtl.hasConnectedPanel(),
-hasRipple: !!rippleMount?.canvas?.isConnected, rippleMode: rippleMount?.canvas?.isConnected ? (rippleMount.mode || 'home') : 'off', rippleSleeping: !rippleMount || !!rippleMount.sleeping,
-rippleAura: rippleMount ? { ...rippleMount.aura } : null, hasConvAura: auraConnected, convAuraPhase,
-convAuraSleeping: !convAura || !!convAura.sleeping, convAuraDrawCount: convAura ? convAura.drawCount : 0,
-convAuraCanvasSize: convAura ? { width: convAura.width, height: convAura.height } : null,
-convAuraOptics: convAura?.lastOptics ? { ...convAura.lastOptics } : null,
+hasRipple: !!rm?.canvas?.isConnected, rippleMode: rm?.canvas?.isConnected ? (rm.mode || 'home') : 'off', rippleSleeping: !rm || !!rm.sleeping,
+rippleAura: rm ? { ...rm.aura } : null, hasConvAura: ac, convAuraPhase: ac ? convAuraCtl.advancePhase(pNow()) : 'off',
+convAuraSleeping: !ca || !!ca.sleeping, convAuraDrawCount: ca ? ca.drawCount : 0,
+convAuraCanvasSize: ca ? { width: ca.width, height: ca.height } : null,
+convAuraOptics: ca?.lastOptics ? { ...ca.lastOptics } : null,
 hasCrab: !!(msRoot && msRoot[K_IC]), hasDualRig: !!msRig, hasSmoothCaret: !!qs(D, '.ag-cs-smooth-caret'),
 hasPulseBridge: !!pulseBridgeInst?.getDebugState?.()?.attached, hasStreamObserver: streamChoreoCtl.hasStreamObserver(),
 modelInfo: latestPrimaryModelInfo ? { ...latestPrimaryModelInfo } : null, perf: { ...perfStats },
@@ -2298,11 +2298,11 @@ qaE(D, '[data-ag-cs-effort]', (e) => { ra(e, 'data-ag-cs-effort'); e[K_CL].remov
 qaE(D, `[${A_Q}],[${A_TK}],[${A_TT}]`, (e) => { ra(e, A_Q); ra(e, A_TK); ra(e, A_TT); rp(e, 'margin-bottom'); });
 qaE(D, '[data-ag-row-stagger]', (e) => { ra(e, 'data-ag-row-stagger'); rp(e, '--ag-row-i'); });
 qaE(D, '.agy-overlay,.agy-fastpick,[data-testid="context-menu-popup"],[data-testid="context-menu-submenu-popup"],[data-ag-cs-overview-shell]', (e) => { rp(e, '--ag-origin-x'); rp(e, '--ag-origin-y'); });
-for (const s of 'placeholder|orch-active|model-overlay|aux-dual|overview-shell|prism-mirror|prism-reflect|settings-dlg|settings-nav|nav-active|conv-seat|conv-ripple-host|vp-wrap|swapping|vp-live|home-sheet|row-running|menu-open|auto-unfolded|outer-open|caustic|fiber-camp|pane-camp|sonar|stage-glide|liftoff-bubble|thought-streaming|spark-streaming|prism-cv|code-folded|bg-cmd-wrap|input-layer|hdr-open|rich-pre|glide-item|crab-anchor|bleed'.split('|')) raAll(`[data-ag-cs-${s}]`, 'data-ag-cs-' + s);
-for (const a of 'data-has-sep,data-pv-warn,data-ag-sp-running'.split(',')) raAll(`[${a}]`, a);
+for (const s of 'placeholder|orch-active|model-overlay|aux-dual|overview-shell|prism-mirror|prism-reflect|settings-dlg|settings-nav|nav-active|conv-seat|conv-ripple-host|vp-wrap|swapping|vp-live|home-sheet|row-running|menu-open|auto-unfolded|outer-open|caustic|fiber-camp|pane-camp|sonar|stage-glide|liftoff-bubble|thought-streaming|spark-streaming|prism-cv|code-folded|bg-cmd-wrap|input-layer|hdr-open|rich-pre|glide-item|crab-anchor|bleed'.split('|')) raAll('data-ag-cs-' + s);
+for (const a of 'data-has-sep,data-pv-warn,data-ag-sp-running'.split(',')) raAll(a);
 safe(() => { getDomBus()?.dispose?.(D, W); getMascotHop()?.dispose?.(D); for (const k of ['__agPrismFontCustomizer', '__agPrismReducedMotionGuard']) wMod(k)?.dispose?.(D); });
 const pfx = (p, s) => s.split(',').map((x) => p + x).join(',');
-rmAll('#ag-prism-overlay-portal,#ag-prism-mascot-hop-style,#ag-prism-periodic-picker-css,#ag-prism-periodic-picker-root,' + pfx('#ag-prism-', 'custom-fonts-style,settings-ext-beta4-css,settings-v101-css,studio-v101-css,omni-css,motion-off-css,periodic-stub-css,project-partitions-css,part-hide-css,wallpaper-root,wallpaper-css,suggester-css') + ',[data-ag-prism-partitions="1"],.ag-prism-mascot-hop-layer,.ag-pp-hold-ring,.ag-pp-mini-keycap,.ag-omni-dock,.ag-omni-menu,.ag-prism-omni-menu,.ag-prism-omni-pane,.ag-cs-ctx-menu,.ag-cs-ctx-toast,.ag-cs-sb-more-wrap,[data-ag-prism-omni-owned="1"],.ag-cs-code-fold-btn,.ag-cs-nav-outline-popover,.ag-cs-panel-row-glyph,.ag-cs-orbital-backdrop,' + pfx('.ag-cs-', 'home-panel,home-panel-seat,liftoff-veil,sidebar-glide-pill,pill-glide,conv-aura-host,conv-glow,prism-rim-cv,model-glyph,thinking-spark,perf-backdrop') + ',[data-testid="orchestrator-effort-bar"],.ag-v2-habitat-prop,#' + SETTINGS_SEC_ID);
+rmAll(pfx('#ag-prism-', 'overlay-portal,mascot-hop-style,periodic-picker-css,periodic-picker-root,custom-fonts-style,settings-ext-beta4-css,settings-v101-css,studio-v101-css,omni-css,motion-off-css,periodic-stub-css,project-partitions-css,part-hide-css,wallpaper-root,wallpaper-css,suggester-css') + ',[data-ag-prism-partitions="1"],.ag-prism-mascot-hop-layer,.ag-pp-hold-ring,.ag-pp-mini-keycap,.ag-omni-dock,.ag-omni-menu,.ag-prism-omni-menu,.ag-prism-omni-pane,[data-ag-prism-omni-owned="1"],' + pfx('.ag-cs-', 'ctx-menu,ctx-toast,sb-more-wrap,code-fold-btn,nav-outline-popover,panel-row-glyph,orbital-backdrop,home-panel,home-panel-seat,liftoff-veil,sidebar-glide-pill,pill-glide,conv-aura-host,conv-glow,prism-rim-cv,model-glyph,thinking-spark,perf-backdrop') + ',[data-testid="orchestrator-effort-bar"],.ag-v2-habitat-prop,#' + SETTINGS_SEC_ID);
 const html = de();
 if (html) {
 ra(html, 'data-ag-perf-busy');

@@ -180,8 +180,8 @@
       }
       return out;
     };
-    // 仅丢弃全子树 rootMo (slots[0])，保留 <html>/<body> 根属性通知通道
-    const drainM = () => takeAll(1), discardM = () => takeAll(0, 1);
+    // 仅丢弃 rootMo (slots[0])，保留根属性通道
+    const drainM = () => takeAll(1), discardM = () => takeAll(0, 1), replayM = (r) => isA(r) && dispatchMo(r, false);
     const dropSl = (sl) => { if (sl.m) { T(() => sl.m.disconnect()); sl.m = null; } sl.t = null; sl.k = ''; };
     function syncSl(sl, tg, opts, MO) {
       if (!opts || !tg) return dropSl(sl);
@@ -526,7 +526,7 @@
 
     return {
       BUSY_ATTR, PERF_MODE_ATTR, STREAM_ATTR, MOTION_OFF_SCOPED_CSS, PERF_CAPS_TABLE,
-      attach: att, subscribe: sub, drainMutations: drainM, discardMutations: discardM, measure: meas, mutate: mut, flushNow: flushN,
+      attach: att, subscribe: sub, drainMutations: drainM, discardMutations: discardM, replayRecords: replayM, measure: meas, mutate: mut, flushNow: flushN,
       scheduleTask: schTask, cancelTask: cTask, cancelGroup: cGrp, reprioritizeTask: repriTask, yieldSlice: ySlice, runChunked: runChk,
       observeSize: obsSz, getSize: getSz, readBoxSize: rdBox, observeVisibility: obsVis, observeViewportVisibility: obsVpVis, isSkipped: isSk,
       setStreaming: setStr, bumpBusy: bumpB, bumpScrollBusy: bumpSc, isBusy: isBsy, isPerfBusy: isBsy, isStreaming: isStr,

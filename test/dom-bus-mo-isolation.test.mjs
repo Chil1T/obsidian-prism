@@ -139,23 +139,36 @@ function makeMockEl(tag = 'div', attrs = {}) {
       return false;
     },
     matches(sel) {
-      const matchOne = (s) => {
+      const matchSimple = (node, s) => {
+        if (!node || node.nodeType !== 1) return false;
         let rest = s.trim();
         if (!rest) return false;
         const attrsRe = /\[([^\]=]+)(?:="([^"]*)")?\]/g;
         let m;
         while ((m = attrsRe.exec(rest))) {
           const [, k, v] = m;
-          if (!this.hasAttribute(k)) return false;
-          if (v !== undefined && this.getAttribute(k) !== v) return false;
+          if (!node.hasAttribute(k)) return false;
+          if (v !== undefined && node.getAttribute(k) !== v) return false;
         }
         rest = rest.replace(attrsRe, '');
         if (!rest) return true;
-        const cls = String(this.className || '').split(/\s+/).filter(Boolean);
+        const cls = String(node.className || '').split(/\s+/).filter(Boolean);
         for (const part of rest.match(/#[a-z0-9_-]+|\.[a-z0-9_-]+|^[a-z0-9_-]+/gi) || []) {
-          if (part.startsWith('#')) { if (this.id !== part.slice(1)) return false; }
+          if (part.startsWith('#')) { if (node.id !== part.slice(1)) return false; }
           else if (part.startsWith('.')) { if (!cls.includes(part.slice(1))) return false; }
-          else if (this.tagName !== part.toUpperCase()) return false;
+          else if (node.tagName !== part.toUpperCase()) return false;
+        }
+        return true;
+      };
+      const matchOne = (s) => {
+        const parts = s.trim().split(/\s+/).filter(Boolean);
+        if (!parts.length) return false;
+        if (!matchSimple(this, parts[parts.length - 1])) return false;
+        let cur = this.parentElement;
+        for (let i = parts.length - 2; i >= 0; i--) {
+          while (cur && !matchSimple(cur, parts[i])) cur = cur.parentElement;
+          if (!cur) return false;
+          cur = cur.parentElement;
         }
         return true;
       };
@@ -698,4 +711,208 @@ test('thought-client: scroll with dom-bus/IntersectionObserver performs 0 getBou
     bus.dispose(doc, win);
   }
   assert.equal(ios.filter((x) => x.connected).length, 0, 'destroy() must disconnect all IntersectionObservers');
+});
+
+test('dom-bus & ui-runtime: runGuardedMut replays pre-existing host [role="dialog"] mutations to ui-runtime & host-i18n while dropping fn() mutations with 0 drainMutations, and dialog click heals settings mount', async () => {
+  const cdp = require(path.join(ROOT, 'cdp.js'));
+  const uiSrc = fs.readFileSync(path.join(ROOT, 'ui-runtime.js'), 'utf8');
+  const { html, body, doc, win, mos } = createEnv();
+
+  // Part A: dom-bus.replayRecords routes records to subtree subscribers without waking root-attr channel
+  const unitBus = domBusMod.createInstance(doc, win);
+  const uiSeen = [];
+  const i18nSeen = [];
+  const rootAttrSeen = [];
+  const u1 = unitBus.subscribe('ui-runtime-root', (rs) => uiSeen.push(...rs), {
+    priority: 'high',
+    observeOptions: { childList: true, subtree: true, attributes: true },
+  });
+  const u2 = unitBus.subscribe('host-i18n', (rs) => i18nSeen.push(...rs), {
+    priority: 'high',
+    observeOptions: { childList: true, subtree: true },
+  });
+  const u3 = unitBus.subscribe('root-attr-only', (rs) => rootAttrSeen.push(...rs), {
+    priority: 'high',
+    observeOptions: { childList: false, subtree: false, attributes: true, attributeFilter: ['data-ag-cs-win-blur'] },
+  });
+  const unitRootMo = mos.find((m) => m.connected && m.opts.subtree === true);
+  assert.ok(unitRootMo);
+  const sampleDlg = doc.createElement('div', { role: 'dialog' });
+  const sampleRec = { type: 'childList', target: body, addedNodes: [sampleDlg], removedNodes: [] };
+  unitRootMo.pending.push(sampleRec);
+  const taken = unitBus.discardMutations();
+  assert.equal(taken.length, 1);
+  assert.equal(uiSeen.length, 0, 'discardMutations() remains silent before replayRecords()');
+  assert.equal(i18nSeen.length, 0);
+  unitBus.replayRecords(taken);
+  assert.deepEqual(uiSeen, [sampleRec], 'replayRecords() must deliver pre-existing host records to ui-runtime subscriber');
+  assert.deepEqual(i18nSeen, [sampleRec], 'replayRecords() must deliver pre-existing host records to host-i18n subscriber');
+  assert.equal(rootAttrSeen.length, 0, 'replayRecords() must NOT broadcast subtree records to root-attr channel');
+  unitBus.replayRecords([]);
+  unitBus.replayRecords(null);
+  assert.equal(uiSeen.length, 1);
+  u1(); u2(); u3();
+  unitBus.dispose(doc, win);
+
+  // Part B: Full ui-runtime integration verifying pre-existing [role="dialog"] insert + fn() self-mutation isolation
+  const env2 = createEnv();
+  const rafQueue = [];
+  let rafSeq = 0;
+  const flushRafs = () => {
+    const batch = rafQueue.splice(0, rafQueue.length);
+    for (const item of batch) if (!item.cancelled) item.fn(Date.now());
+  };
+  const bus = domBusMod.createInstance(env2.doc, env2.win);
+  let drainCalls = 0;
+  let replayCalls = 0;
+  const origDrain = bus.drainMutations;
+  const origReplay = bus.replayRecords;
+  bus.drainMutations = (...args) => { drainCalls += 1; return origDrain(...args); };
+  bus.replayRecords = (...args) => { replayCalls += 1; return origReplay(...args); };
+
+  const hostI18nHits = [];
+  const unsubHostI18n = bus.subscribe('host-i18n', (rs) => hostI18nHits.push(...rs), {
+    priority: 'high',
+    observeOptions: { childList: true, subtree: true },
+  });
+
+  let settingsMountCalls = 0;
+  let capturedRunGuardedMut = null;
+  const storageMap = new Map();
+  const sb = env2.win;
+  sb.window = sb;
+  sb.globalThis = sb;
+  sb.document = env2.doc;
+  sb.performance = { now: () => Date.now() };
+  sb.setTimeout = setTimeout;
+  sb.clearTimeout = clearTimeout;
+  sb.setInterval = () => 1;
+  sb.clearInterval = () => {};
+  sb.requestAnimationFrame = (fn) => { const item = { id: ++rafSeq, fn, cancelled: false }; rafQueue.push(item); return item.id; };
+  sb.cancelAnimationFrame = (id) => { const item = rafQueue.find((x) => x.id === id); if (item) item.cancelled = true; };
+  sb.localStorage = {
+    getItem: (k) => (storageMap.has(k) ? storageMap.get(k) : null),
+    setItem: (k, v) => { storageMap.set(k, String(v)); },
+    removeItem: (k) => { storageMap.delete(k); },
+  };
+  sb.navigator = { language: 'zh-CN', languages: ['zh-CN'] };
+  sb.getComputedStyle = () => ({ getPropertyValue: () => '' });
+  sb.CSS = { supports: () => false };
+  sb.Event = class MockEvent { constructor(type) { this.type = type; } };
+  sb.CustomEvent = class MockCustomEvent { constructor(type, init) { this.type = type; this.detail = init?.detail; } };
+  sb.__agDomBus = bus;
+  sb.__agPrismDomBus = bus;
+  sb.__agCsLocales = { __isFullLocales: true, getUiStrings: () => ({}) };
+  sb.__agPrismSettingsPanel = {
+    mountOrSyncSettingsSection: () => { settingsMountCalls += 1; },
+  };
+  sb.__agPrismSmoothCaret = {
+    createSmoothCaretController(deps) {
+      capturedRunGuardedMut = deps.runGuardedMut;
+      return {
+        queue() {},
+        sync() {},
+        applyMutations() {},
+        measureSnapshot() { return null; },
+        bumpMetricsEpoch() {},
+        invalidateSelection() {},
+        teardown() {},
+      };
+    },
+  };
+  Object.assign(sb, {
+    Object, Array, Set, Map, WeakSet, WeakMap, Promise, Math, Date, Number, String, Boolean, RegExp, JSON, Error,
+  });
+
+  vm.runInNewContext(uiSrc, sb);
+  sb.__agCsUiMain({ ...cdp.DEFAULT_CONFIG, mascot: 'off', smoothCaret: true });
+  flushRafs();
+
+  try {
+    assert.equal(typeof capturedRunGuardedMut, 'function', 'ui-runtime must pass runGuardedMut to smoothCaret controller');
+    const rootMo = env2.mos.find((m) => m.connected && m.opts.subtree === true);
+    assert.ok(rootMo, 'dom-bus shared rootMo must be connected');
+
+    // Reset counters after boot sync
+    settingsMountCalls = 0;
+    hostI18nHits.length = 0;
+    drainCalls = 0;
+    replayCalls = 0;
+
+    // 1) Normal typing path (no pre-existing host records): 0 replayRecords, 0 drainMutations, self mutation discarded
+    const composerCard = env2.doc.createElement('div', { class: 'surface-composer-card' });
+    env2.body.appendChild(composerCard);
+    const typingOwnMut = { type: 'attributes', target: composerCard, attributeName: 'data-ag-cs-caret-visible' };
+    capturedRunGuardedMut(() => {
+      composerCard.setAttribute('data-ag-cs-caret-visible', '1');
+      rootMo.pending.push(typingOwnMut);
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    flushRafs();
+    assert.equal(replayCalls, 0, 'Empty pre-queue must schedule 0 replayRecords calls (zero microtask overhead)');
+    assert.equal(drainCalls, 0, 'drainMutations must NEVER be called');
+    assert.equal(hostI18nHits.length, 0, 'Own caret attribute mutation must be silently discarded');
+    assert.equal(settingsMountCalls, 0);
+
+    // 2) Live P0 regression scenario: host inserts [role="dialog"] BEFORE focusin -> smoothCaret -> runGuardedMut(fn)
+    const dlg = env2.doc.createElement('div', { role: 'dialog' });
+    const h2 = env2.doc.createElement('h2');
+    h2.textContent = 'Appearance';
+    dlg.appendChild(h2);
+    env2.body.appendChild(dlg);
+
+    const hostDlgMut = { type: 'childList', target: env2.body, addedNodes: [dlg], removedNodes: [] };
+    const ownCaretHideMut = { type: 'attributes', target: composerCard, attributeName: 'data-ag-cs-caret-visible' };
+    rootMo.pending.push(hostDlgMut);
+
+    capturedRunGuardedMut(() => {
+      composerCard.setAttribute('data-ag-cs-caret-visible', '0');
+      rootMo.pending.push(ownCaretHideMut);
+    });
+
+    // Wait for async microtask replay, then flush rAF scheduled by onRootMutations -> scheduleSync()
+    await Promise.resolve();
+    await Promise.resolve();
+    flushRafs();
+
+    assert.equal(drainCalls, 0, 'drainMutations call count must stay strictly 0');
+    assert.equal(replayCalls, 1, 'Pre-existing host mutation queue must be replayed once via domBus.replayRecords');
+    assert.equal(hostI18nHits.length, 1, 'host-i18n must receive ONLY the preserved host [role="dialog"] insert');
+    assert.equal(hostI18nHits[0], hostDlgMut, 'Replayed record for host-i18n must be the host dialog insertion');
+    assert.ok(!hostI18nHits.includes(ownCaretHideMut), 'fn() own mutation must stay discarded and never leak to subscribers');
+    assert.ok(settingsMountCalls >= 1, 'ui-runtime must automatically mount settings section via replayed [role="dialog"] mutation without manual sync()');
+
+    // 3) Secondary healing: clicking a settings dialog button or [role="tab"] when #ag-cs-settings-sec is absent heals dirtyFlags.g
+    settingsMountCalls = 0;
+    const navBtn = env2.doc.createElement('button', { 'data-testid': 'settings-nav-item-Appearance' });
+    const navTab = env2.doc.createElement('div', { role: 'tab' });
+    dlg.appendChild(navBtn);
+    dlg.appendChild(navTab);
+
+    sb.dispatchEvent({ type: 'click', target: navBtn });
+    flushRafs();
+    assert.equal(settingsMountCalls, 1, 'Clicking [role="dialog"] button while #ag-cs-settings-sec is missing must trigger settings sync');
+
+    settingsMountCalls = 0;
+    sb.dispatchEvent({ type: 'click', target: navTab });
+    flushRafs();
+    assert.equal(settingsMountCalls, 1, 'Clicking [role="dialog"] [role="tab"] while #ag-cs-settings-sec is missing must trigger settings sync');
+
+    // Once #ag-cs-settings-sec is mounted, clicks inside dialog do NOT trigger redundant settings sync
+    const mountedSec = env2.doc.createElement('section', { id: 'ag-cs-settings-sec' });
+    const innerBtn = env2.doc.createElement('button');
+    mountedSec.appendChild(innerBtn);
+    dlg.appendChild(mountedSec);
+    settingsMountCalls = 0;
+    sb.dispatchEvent({ type: 'click', target: navBtn });
+    sb.dispatchEvent({ type: 'click', target: innerBtn });
+    flushRafs();
+    assert.equal(settingsMountCalls, 0, 'Once #ag-cs-settings-sec exists, dialog clicks must incur 0 redundant settings syncs');
+    assert.equal(drainCalls, 0, 'drainMutations must remain 0 throughout');
+  } finally {
+    unsubHostI18n();
+    sb.__agPrism?.destroy?.();
+    bus.dispose(env2.doc, env2.win);
+  }
 });
