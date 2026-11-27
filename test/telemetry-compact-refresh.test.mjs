@@ -11,6 +11,7 @@ import { MetricsStore } from '../vendor/pulse-dashboard/sidecars/panel/store.mjs
 import { TrajectoryReader } from '../vendor/pulse-dashboard/sidecars/panel/trajectory-reader.mjs';
 import { trajectoryMetrics } from '../vendor/pulse-dashboard/sidecars/panel/metrics.mjs';
 import { ensureMetricsCollector } from '../src/daemon/telemetry-cache.mjs';
+import { createScopedRendererClient } from '../src/daemon/telemetry-scope.mjs';
 
 const require = createRequire(import.meta.url);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -778,4 +779,64 @@ test('U9 Frontend: burstGen prevents same-session re-arm race (no early-clear or
   } finally {
     ctl.destroy();
   }
+});
+
+test('Scoped renderer trajectory cache keeps the newer refresh after an older response arrives', async () => {
+  const pending = [];
+  const client = createScopedRendererClient({
+    invokeRendererLsRpc: () => new Promise((resolve) => pending.push(resolve)),
+  }, { pageId: 'page-1' }, 'local');
+  const older = client.trajectory(CID_1);
+  const refresh = client.trajectory(CID_1, { force: true });
+  assert.equal(pending.length, 2);
+
+  const newerData = { version: 2, status: 'CASCADE_RUN_STATUS_IDLE' };
+  pending[1](newerData);
+  assert.equal(await refresh, newerData);
+
+  const olderData = { version: 1, status: 'CASCADE_RUN_STATUS_IDLE' };
+  pending[0](olderData);
+  assert.equal(await older, olderData);
+
+  const cached = client.trajectory(CID_1);
+  assert.equal(pending.length, 2);
+  assert.equal(await cached, newerData);
+});
+
+test('Scoped renderer trajectory cache guards freshContext & older-first completion against stale overwrite', async () => {
+  const pending = [];
+  const client = createScopedRendererClient({
+    invokeRendererLsRpc: () => new Promise((resolve) => pending.push(resolve)),
+  }, { pageId: 'page-2' }, 'local');
+
+  // 1) freshContext refresh completes before older read -> late older response must not clobber cache
+  const older1 = client.trajectory(CID_1);
+  const fresh1 = client.trajectory(CID_1, { freshContext: true });
+  assert.equal(pending.length, 2);
+
+  const v2 = { version: 2, status: 'CASCADE_RUN_STATUS_IDLE' };
+  const v1 = { version: 1, status: 'CASCADE_RUN_STATUS_IDLE' };
+  pending[1](v2);
+  assert.equal(await fresh1, v2);
+  pending[0](v1);
+  assert.equal(await older1, v1);
+  assert.equal(await client.trajectory(CID_1), v2);
+  assert.equal(pending.length, 2);
+
+  // 2) older read completes BEFORE superseded force refresh -> must not pre-populate cache with stale data
+  const older2 = client.trajectory(CID_2);
+  const force2 = client.trajectory(CID_2, { force: true });
+  assert.equal(pending.length, 4);
+
+  const stale2 = { version: 10, status: 'CASCADE_RUN_STATUS_IDLE' };
+  const fresh2 = { version: 11, status: 'CASCADE_RUN_STATUS_IDLE' };
+  pending[2](stale2);
+  assert.equal(await older2, stale2);
+  // Concurrent read while force2 is still in-flight must coalesce onto force2 rather than returning stale2
+  const joined = client.trajectory(CID_2);
+  assert.equal(pending.length, 4);
+  pending[3](fresh2);
+  assert.equal(await force2, fresh2);
+  assert.equal(await joined, fresh2);
+  assert.equal(await client.trajectory(CID_2), fresh2);
 });
