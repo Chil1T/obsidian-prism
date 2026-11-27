@@ -74,7 +74,7 @@ export async function verifyAndHealEntryUnlocked(orch, entry, force = false) {
     const browserLive = Boolean(reg.browserSession && !reg.browserSession.closed);
     const backoffMs = browserLive
       ? Math.min(45000, 3000 * Math.pow(2, Math.min(4, entry.healthyStreak - 1)))
-      : 6000;
+      : Math.min(24000, 6000 * Math.pow(2, Math.min(2, entry.healthyStreak - 1)));
     if (now - entry.lastVerifyAt < backoffMs) {
       return { alive: true, ready: true, isHostDom: true, skipped: true };
     }

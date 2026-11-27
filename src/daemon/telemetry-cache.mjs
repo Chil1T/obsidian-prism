@@ -131,6 +131,7 @@ export async function ensureMetricsCollector(tel) {
         freshContext: Boolean(input?.freshContext),
         quotaRefresh: Boolean(input?.quotaRefresh),
         selectLatest: input?.selectLatest === false ? false : true,
+        includeConversations: input?.includeConversations !== false,
       });
       let usageSnap = null;
       if (input?.includeUsage === true) {
@@ -283,6 +284,56 @@ export function getUsageDiskCacheScope(tel, scopeKey = 'local', create = false) 
   return bucket || new Map();
 }
 
+function computeUsageRecordDigest(rec) {
+  if (!rec || typeof rec !== 'object') return '';
+  let dayCount = 0;
+  let totalTok = 0;
+  let totalCalls = 0;
+  const days = rec.days;
+  if (days && typeof days === 'object' && !Array.isArray(days)) {
+    for (const k in days) {
+      if (!Object.prototype.hasOwnProperty.call(days, k)) continue;
+      const d = days[k];
+      dayCount += 1;
+      if (d && typeof d === 'object') {
+        totalTok += Number(d.total || d.tokens || 0) || 0;
+        totalCalls += Number(d.calls || 0) || 0;
+      }
+    }
+  }
+  return `${rec.cascadeId || ''}|${rec.stepCount || 0}|${rec.lastModifiedSec || 0}|${rec.dbMtimeSec || 0}|${rec.dbSize || 0}|${rec.calls || 0}|${rec.subagent ? 1 : 0}|${rec.parentId || ''}|${rec.title || ''}|${rec.workspace || ''}|${dayCount}:${totalTok}:${totalCalls}`;
+}
+
+function isPlainValueEqual(a, b, depth = 0) {
+  if (a === b) return true;
+  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') {
+    return Number.isNaN(a) && Number.isNaN(b);
+  }
+  if (depth > 12) return false;
+  const isArrA = Array.isArray(a);
+  if (isArrA !== Array.isArray(b)) return false;
+  if (isArrA) {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i += 1) {
+      if (!isPlainValueEqual(a[i], b[i], depth + 1)) return false;
+    }
+    return true;
+  }
+  let countA = 0;
+  for (const k in a) {
+    if (!Object.prototype.hasOwnProperty.call(a, k) || a[k] === undefined) continue;
+    countA += 1;
+    if (!Object.prototype.hasOwnProperty.call(b, k) || b[k] === undefined) return false;
+    if (!isPlainValueEqual(a[k], b[k], depth + 1)) return false;
+  }
+  let countB = 0;
+  for (const k in b) {
+    if (!Object.prototype.hasOwnProperty.call(b, k) || b[k] === undefined) continue;
+    countB += 1;
+  }
+  return countA === countB;
+}
+
 function isUsageCacheEntryEqual(a, b) {
   if (a === b) return true;
   if (!a || !b) return false;
@@ -295,11 +346,9 @@ function isUsageCacheEntryEqual(a, b) {
     return false;
   }
   if (a.record === b.record) return true;
-  try {
-    return JSON.stringify(a.record) === JSON.stringify(b.record);
-  } catch {
-    return false;
-  }
+  if (!a.record || !b.record || typeof a.record !== 'object' || typeof b.record !== 'object') return false;
+  if (computeUsageRecordDigest(a.record) !== computeUsageRecordDigest(b.record)) return false;
+  return isPlainValueEqual(a.record, b.record, 0);
 }
 
 export function putUsageDiskCache(tel, id, stepCount, lastModifiedSec, record, scopeKey = 'local', diskMeta = null) {

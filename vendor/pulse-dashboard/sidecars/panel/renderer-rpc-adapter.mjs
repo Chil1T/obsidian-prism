@@ -174,43 +174,32 @@ export function normalizeRendererUserStatus(raw) {
   };
 }
 
+const isObj = (v) => Boolean(v && typeof v === 'object');
+const strOr = (v, fb = '') => (typeof v === 'string' ? v : fb);
+
 export function normalizeRendererQuotaSummary(raw) {
-  const root = raw?.response && typeof raw.response === 'object' ? raw.response : raw && typeof raw === 'object' ? raw : {};
+  const root = isObj(raw?.response) ? raw.response : isObj(raw) ? raw : {};
   const groups = Array.isArray(root.groups)
-    ? root.groups
-        .filter((g) => g && typeof g === 'object')
-        .map((g) => ({
-          displayName: typeof g.displayName === 'string' ? g.displayName : '',
-          description: typeof g.description === 'string' ? g.description : '',
-          buckets: Array.isArray(g.buckets)
-            ? g.buckets
-                .filter((b) => b && typeof b === 'object')
-                .map((b) => {
-                  const out = {
-                    bucketId: typeof b.bucketId === 'string' ? b.bucketId : '',
-                    displayName: typeof b.displayName === 'string' ? b.displayName : '',
-                    description: typeof b.description === 'string' ? b.description : '',
-                    disabled: b.disabled === true,
-                  };
-                  if (typeof b.window === 'string') out.window = b.window;
-                  if (b.remaining && typeof b.remaining === 'object') {
-                    if (b.remaining.case === 'remainingFraction' && b.remaining.value !== undefined) {
-                      out.remainingFraction = b.remaining.value;
-                    } else if (b.remaining.case === 'remainingAmount' && b.remaining.value !== undefined) {
-                      out.remainingAmount = b.remaining.value;
-                    } else {
-                      if (b.remaining.remainingFraction !== undefined) out.remainingFraction = b.remaining.remainingFraction;
-                      if (b.remaining.remainingAmount !== undefined) out.remainingAmount = b.remaining.remainingAmount;
-                    }
-                  }
-                  if (b.remainingFraction !== undefined) out.remainingFraction = b.remainingFraction;
-                  if (b.remainingAmount !== undefined) out.remainingAmount = b.remainingAmount;
-                  const iso = protoTimestampToIso(b.resetTime);
-                  if (iso) out.resetTime = iso;
-                  return out;
-                })
-            : [],
-        }))
+    ? root.groups.filter(isObj).map((g) => ({
+        displayName: strOr(g.displayName), description: strOr(g.description),
+        buckets: Array.isArray(g.buckets) ? g.buckets.filter(isObj).map((b) => {
+          const out = { bucketId: strOr(b.bucketId), displayName: strOr(b.displayName), description: strOr(b.description), disabled: b.disabled === true };
+          if (typeof b.window === 'string') out.window = b.window;
+          if (isObj(b.remaining)) {
+            if (b.remaining.case === 'remainingFraction' && b.remaining.value !== undefined) out.remainingFraction = b.remaining.value;
+            else if (b.remaining.case === 'remainingAmount' && b.remaining.value !== undefined) out.remainingAmount = b.remaining.value;
+            else {
+              if (b.remaining.remainingFraction !== undefined) out.remainingFraction = b.remaining.remainingFraction;
+              if (b.remaining.remainingAmount !== undefined) out.remainingAmount = b.remaining.remainingAmount;
+            }
+          }
+          if (b.remainingFraction !== undefined) out.remainingFraction = b.remainingFraction;
+          if (b.remainingAmount !== undefined) out.remainingAmount = b.remainingAmount;
+          const iso = protoTimestampToIso(b.resetTime);
+          if (iso) out.resetTime = iso;
+          return out;
+        }) : [],
+      }))
     : [];
   return { response: { groups } };
 }
@@ -224,28 +213,25 @@ export function normalizeRendererSummaries(raw) {
   if (Array.isArray(raw?.discoveredSubagentIds)) {
     const seenSub = new Set();
     for (const item of raw.discoveredSubagentIds) {
-      const rawId = typeof item === 'string' ? item : item?.id || item?.cascadeId || '';
-      const id = String(rawId || '').trim().toLowerCase();
+      const id = String((typeof item === 'string' ? item : item?.id || item?.cascadeId) || '').trim().toLowerCase();
       if (!GUID_RE.test(id) || seenSub.has(id)) continue;
       seenSub.add(id);
-      const rawPid = typeof item === 'object' && item ? item.parentId || item.parentConversationId || '' : '';
-      const pid = String(rawPid || '').trim().toLowerCase();
+      const pid = String((isObj(item) ? item.parentId || item.parentConversationId : '') || '').trim().toLowerCase();
       discoveredSubagentIds.push(GUID_RE.test(pid) && pid !== id ? { id, parentId: pid } : { id });
       if (discoveredSubagentIds.length >= 512) break;
     }
   }
   const extraFields = {
-    ...(visibleMainIds && visibleMainIds.length ? { visibleMainIds } : {}),
+    ...(visibleMainIds?.length ? { visibleMainIds } : {}),
     ...(discoveredSubagentIds.length ? { discoveredSubagentIds } : {}),
   };
-  if (raw && typeof raw.trajectorySummaries === 'object' && !Array.isArray(raw.trajectorySummaries)) {
+  if (raw && isObj(raw.trajectorySummaries) && !Array.isArray(raw.trajectorySummaries)) {
+    const strKeys = ['parentConversationId', 'parentId', 'parentCascadeId', 'rootConversationId', 'swarmId', 'subagentName'];
     for (const [id, sum] of Object.entries(raw.trajectorySummaries)) {
-      if (!GUID_RE.test(id) || !sum || typeof sum !== 'object') continue;
-      const key = id.toLowerCase();
-      const modIso = protoTimestampToIso(sum.lastModifiedTime);
-      const createdIso = protoTimestampToIso(sum.createdTime);
+      if (!GUID_RE.test(id) || !isObj(sum)) continue;
+      const modIso = protoTimestampToIso(sum.lastModifiedTime), createdIso = protoTimestampToIso(sum.createdTime);
       const stepCount = Number(sum.stepCount ?? sum.numTotalSteps ?? 0);
-      out[key] = {
+      const row = {
         summary: typeof sum.summary === 'string' ? sum.summary : typeof sum.title === 'string' ? sum.title : 'Untitled Conversation',
         ...(Number.isSafeInteger(stepCount) && stepCount > 0 ? { stepCount } : {}),
         ...(modIso ? { lastModifiedTime: modIso } : {}),
@@ -254,25 +240,18 @@ export function normalizeRendererSummaries(raw) {
         ...(Array.isArray(sum.workspaces) ? { workspaces: sum.workspaces } : {}),
         ...(sum.subagent === true ? { subagent: true } : {}),
         ...(sum.isSubagent === true ? { isSubagent: true } : {}),
-        ...(typeof sum.parentConversationId === 'string' && sum.parentConversationId ? { parentConversationId: sum.parentConversationId } : {}),
-        ...(typeof sum.parentId === 'string' && sum.parentId ? { parentId: sum.parentId } : {}),
-        ...(typeof sum.parentCascadeId === 'string' && sum.parentCascadeId ? { parentCascadeId: sum.parentCascadeId } : {}),
-        ...(typeof sum.rootConversationId === 'string' && sum.rootConversationId ? { rootConversationId: sum.rootConversationId } : {}),
-        ...(typeof sum.swarmId === 'string' && sum.swarmId ? { swarmId: sum.swarmId } : {}),
-        ...(typeof sum.subagentName === 'string' && sum.subagentName ? { subagentName: sum.subagentName } : {}),
-        ...(sum.trajectoryMetadata && typeof sum.trajectoryMetadata === 'object' ? { trajectoryMetadata: sum.trajectoryMetadata } : {}),
+        ...(isObj(sum.trajectoryMetadata) ? { trajectoryMetadata: sum.trajectoryMetadata } : {}),
       };
+      for (const k of strKeys) if (typeof sum[k] === 'string' && sum[k]) row[k] = sum[k];
+      out[id.toLowerCase()] = row;
     }
     return { trajectorySummaries: out, ...extraFields };
   }
-  const results = Array.isArray(raw?.results) ? raw.results : [];
-  for (const item of results) {
-    const id = typeof item?.cascadeId === 'string' ? item.cascadeId.trim() : '';
+  for (const item of Array.isArray(raw?.results) ? raw.results : []) {
+    const id = strOr(item?.cascadeId).trim();
     if (!GUID_RE.test(id)) continue;
-    const key = id.toLowerCase();
-    const modIso = protoTimestampToIso(item.lastModifiedTime);
-    const ws = typeof item.workspaceName === 'string' ? item.workspaceName.trim() : '';
-    out[key] = {
+    const modIso = protoTimestampToIso(item.lastModifiedTime), ws = strOr(item.workspaceName).trim();
+    out[id.toLowerCase()] = {
       summary: typeof item.title === 'string' && item.title.trim() ? item.title.trim() : 'Untitled Conversation',
       ...(modIso ? { lastModifiedTime: modIso } : {}),
       ...(ws ? { workspaces: [{ workspaceFolderAbsoluteUri: ws }] } : {}),
@@ -282,6 +261,18 @@ export function normalizeRendererSummaries(raw) {
 }
 
 export function normalizeRendererTrajectory(raw, cascadeId, modelLabelMap = null) {
+  if (raw && raw.unchanged === true) {
+    const rs = raw.status, st = typeof rs === 'string' && rs ? rs : rs != null ? `CASCADE_RUN_STATUS_${String(rs)}` : null;
+    const ns = Number(raw.numTotalSteps), ng = Number(raw.numTotalGeneratorMetadata);
+    const cwu = normalizeContextWindowUsage(raw.contextWindowUsage), cmp = normalizeCompactedIndices(raw.compactedAtStepIndices ?? raw.compactionInfo);
+    return {
+      unchanged: true, status: st, cascadeId: String(cascadeId || '').toLowerCase(),
+      ...(Number.isSafeInteger(ns) && ns >= 0 ? { numTotalSteps: ns } : {}),
+      ...(Number.isSafeInteger(ng) && ng >= 0 ? { numTotalGeneratorMetadata: ng } : {}),
+      ...(typeof raw.lastStepSig === 'string' && raw.lastStepSig ? { lastStepSig: raw.lastStepSig } : {}),
+      ...(cwu ? { contextWindowUsage: cwu } : {}), ...(cmp ? { compactedAtStepIndices: cmp } : {}),
+    };
+  }
   const traj = raw?.trajectory && typeof raw.trajectory === 'object' ? raw.trajectory : {};
   const rawSteps = Array.isArray(traj.steps) ? traj.steps : [];
   const rawGms = Array.isArray(traj.generatorMetadata) ? traj.generatorMetadata : [];
@@ -373,83 +364,53 @@ export function normalizeRendererTrajectory(raw, cascadeId, modelLabelMap = null
   });
 
   const generatorMetadata = [];
+  const safeIdx = (v) => (v != null && Number.isSafeInteger(Number(v)) && Number(v) >= 0 ? Number(v) : undefined);
   for (const g of rawGms) {
     if (!g || typeof g !== 'object') continue;
     const cm = g.chatModel || (g.metadata?.case === 'chatModel' ? g.metadata.value : null);
-    if (!cm || typeof cm !== 'object') continue;
-    const u = cm.usage && typeof cm.usage === 'object' ? cm.usage : null;
+    const u = cm && typeof cm === 'object' && cm.usage && typeof cm.usage === 'object' ? cm.usage : null;
     if (!u) continue;
-    const modelKey = cm.model !== undefined && cm.model !== null ? String(cm.model) : u.model !== undefined && u.model !== null ? String(u.model) : '';
-    const displayName =
-      (typeof cm.modelDisplayName === 'string' && cm.modelDisplayName.trim()) ||
-      (modelLabelMap && modelKey && modelLabelMap.get(modelKey)) ||
-      (modelLabelMap && typeof cm.responseModel === 'string' && modelLabelMap.get(cm.responseModel)) ||
-      '';
-    const provider = normalizeApiProvider(u.apiProvider, {
-      modelDisplayName: displayName,
-      responseModel: cm.responseModel,
-      responseModelFull: cm.responseModelFull,
-      customMetadata: cm.customMetadata,
-    });
+    const modelKey = cm.model != null ? String(cm.model) : u.model != null ? String(u.model) : '';
+    const displayName = (typeof cm.modelDisplayName === 'string' && cm.modelDisplayName.trim()) || (modelLabelMap && modelKey && modelLabelMap.get(modelKey)) || (modelLabelMap && typeof cm.responseModel === 'string' && modelLabelMap.get(cm.responseModel)) || '';
+    const provider = normalizeApiProvider(u.apiProvider, { modelDisplayName: displayName, responseModel: cm.responseModel, responseModelFull: cm.responseModelFull, customMetadata: cm.customMetadata });
     const normUsage = {
-      model: u.model,
-      inputTokens: u.inputTokens,
-      outputTokens: u.outputTokens,
+      model: u.model, inputTokens: u.inputTokens, outputTokens: u.outputTokens, apiProvider: provider,
       ...(u.thinkingOutputTokens !== undefined ? { thinkingOutputTokens: u.thinkingOutputTokens } : {}),
       ...(u.responseOutputTokens !== undefined ? { responseOutputTokens: u.responseOutputTokens } : {}),
       ...(u.cacheWriteTokens !== undefined ? { cacheWriteTokens: u.cacheWriteTokens } : {}),
       ...(u.cacheReadTokens !== undefined ? { cacheReadTokens: u.cacheReadTokens } : {}),
-      apiProvider: provider,
       ...(typeof u.messageId === 'string' && u.messageId ? { messageId: u.messageId } : {}),
       ...(typeof u.responseId === 'string' && u.responseId ? { responseId: u.responseId } : {}),
     };
     const retryInfos = Array.isArray(cm.retryInfos)
-      ? cm.retryInfos
-          .filter((ri) => ri && ri.usage && typeof ri.usage === 'object')
-          .map((ri) => ({
-            usage: {
-              outputTokens: ri.usage.outputTokens,
-              ...(ri.usage.responseOutputTokens !== undefined ? { responseOutputTokens: ri.usage.responseOutputTokens } : {}),
-              ...(ri.usage.thinkingOutputTokens !== undefined ? { thinkingOutputTokens: ri.usage.thinkingOutputTokens } : {}),
-            },
-          }))
+      ? cm.retryInfos.filter((ri) => ri && ri.usage && typeof ri.usage === 'object').map((ri) => ({
+          usage: {
+            outputTokens: ri.usage.outputTokens,
+            ...(ri.usage.responseOutputTokens !== undefined ? { responseOutputTokens: ri.usage.responseOutputTokens } : {}),
+            ...(ri.usage.thinkingOutputTokens !== undefined ? { thinkingOutputTokens: ri.usage.thinkingOutputTokens } : {}),
+          },
+        }))
       : [];
     const csm = cm.chatStartMetadata && typeof cm.chatStartMetadata === 'object' ? cm.chatStartMetadata : null;
     const cw = csm?.contextWindowMetadata && typeof csm.contextWindowMetadata === 'object' ? csm.contextWindowMetadata : null;
     const csmCreated = protoTimestampToIso(csm?.createdAt);
-    const csmStartIdx = csm?.startStepIndex !== undefined && csm?.startStepIndex !== null ? Number(csm.startStepIndex) : undefined;
-    const csmCpIdx = csm?.checkpointIndex !== undefined && csm?.checkpointIndex !== null ? Number(csm.checkpointIndex) : undefined;
-    const csmStepsCov =
-      csm?.stepsCoveredByCheckpoint !== undefined && csm?.stepsCoveredByCheckpoint !== null ? Number(csm.stepsCoveredByCheckpoint) : undefined;
-    const chatStartMetadata = csm
-      ? {
-          ...(csmCreated ? { createdAt: csmCreated } : {}),
-          ...(Number.isSafeInteger(csmStartIdx) && csmStartIdx >= 0 ? { startStepIndex: csmStartIdx } : {}),
-          ...(Number.isSafeInteger(csmCpIdx) && csmCpIdx >= 0 ? { checkpointIndex: csmCpIdx } : {}),
-          ...(Number.isSafeInteger(csmStepsCov) && csmStepsCov >= 0 ? { stepsCoveredByCheckpoint: csmStepsCov } : {}),
-          ...(cw
-            ? {
-                contextWindowMetadata: {
-                  estimatedTokensUsed: cw.estimatedTokensUsed ?? cw.tokenBreakdown?.totalTokens,
-                  maxContextTokens: cw.maxContextTokens,
-                },
-              }
-            : {}),
-        }
-      : undefined;
-    const ttft = protoDurationToObject(cm.timeToFirstToken);
-    const streamDur = protoDurationToObject(cm.streamingDuration);
-    const stepIndices = Array.isArray(g.stepIndices)
-      ? g.stepIndices.map((idx) => Number(idx)).filter((idx) => Number.isInteger(idx) && idx >= 0)
-      : [];
+    const csmStartIdx = safeIdx(csm?.startStepIndex), csmCpIdx = safeIdx(csm?.checkpointIndex), csmStepsCov = safeIdx(csm?.stepsCoveredByCheckpoint);
+    const chatStartMetadata = csm ? {
+      ...(csmCreated ? { createdAt: csmCreated } : {}),
+      ...(csmStartIdx !== undefined ? { startStepIndex: csmStartIdx } : {}),
+      ...(csmCpIdx !== undefined ? { checkpointIndex: csmCpIdx } : {}),
+      ...(csmStepsCov !== undefined ? { stepsCoveredByCheckpoint: csmStepsCov } : {}),
+      ...(cw ? { contextWindowMetadata: { estimatedTokensUsed: cw.estimatedTokensUsed ?? cw.tokenBreakdown?.totalTokens, maxContextTokens: cw.maxContextTokens } } : {}),
+    } : undefined;
+    const ttft = protoDurationToObject(cm.timeToFirstToken), streamDur = protoDurationToObject(cm.streamingDuration);
+    const stepIndices = Array.isArray(g.stepIndices) ? g.stepIndices.map(Number).filter((idx) => Number.isInteger(idx) && idx >= 0) : [];
     generatorMetadata.push({
       stepIndices,
       chatModel: {
-        model: cm.model,
+        model: cm.model, usage: normUsage,
         ...(displayName ? { modelDisplayName: displayName } : {}),
         ...(typeof cm.responseModel === 'string' && cm.responseModel ? { responseModel: cm.responseModel } : {}),
         ...(typeof cm.responseModelFull === 'string' && cm.responseModelFull ? { responseModelFull: cm.responseModelFull } : {}),
-        usage: normUsage,
         ...(retryInfos.length ? { retryInfos } : {}),
         ...(chatStartMetadata ? { chatStartMetadata } : {}),
         ...(ttft !== undefined ? { timeToFirstToken: ttft } : {}),
@@ -478,6 +439,7 @@ export function normalizeRendererTrajectory(raw, cascadeId, modelLabelMap = null
     numTotalGeneratorMetadata: Number.isSafeInteger(numGm) && numGm >= 0 ? numGm : generatorMetadata.length,
     ...(contextWindowUsage ? { contextWindowUsage } : {}),
     ...(compactedAtStepIndices ? { compactedAtStepIndices } : {}),
+    ...(typeof raw?.lastStepSig === 'string' && raw.lastStepSig ? { lastStepSig: raw.lastStepSig } : {}),
     trajectory: {
       cascadeId: String(traj.cascadeId || cascadeId || '').toLowerCase(),
       steps,
@@ -495,6 +457,11 @@ function buildRendererRpcParams(method, body = {}) {
     const cid = typeof body?.cascadeId === 'string' ? body.cascadeId.trim() : '';
     if (!GUID_RE.test(cid)) throw new Error('Invalid cascadeId for renderer RPC');
     safeParams.cascadeId = cid;
+    if (method === 'GetCascadeTrajectory') {
+      const lsc = body?.lastStepCount !== undefined && body?.lastStepCount !== null ? Number(body.lastStepCount) : NaN;
+      if (Number.isInteger(lsc) && lsc >= 0 && lsc <= 1000000) safeParams.lastStepCount = lsc;
+      if (typeof body?.lastStepSig === 'string' && body.lastStepSig.length > 0 && body.lastStepSig.length <= 512) safeParams.lastStepSig = body.lastStepSig;
+    }
   } else if (method === 'RetrieveUserQuotaSummary') {
     safeParams.forceRefresh = Boolean(body?.forceRefresh);
   } else if (method === 'GetAllCascadeTrajectories') {
@@ -684,53 +651,49 @@ const findReduxSummaries = () => {
 };
 const findAgentMgr = () => {
   try {
-    const cached = readCachedRef('__agPrismAgentMgrRef');
-    if (isAgentMgr(cached)) return cached;
+    const c = readCachedRef('__agPrismAgentMgrRef');
+    if (isAgentMgr(c)) return c;
     if (g && g.__agPrismAgentMgrRef) clearCachedRef('__agPrismAgentMgrRef');
   } catch {}
+  const doc = typeof document !== 'undefined' ? document : null, root = (doc && (doc.getElementById('root') || doc.body)) || null;
+  const route = typeof location !== 'undefined' && location ? (location.pathname || '') + '|' + (location.hash || '') : '';
+  const conv = doc && typeof doc.querySelector === 'function' ? doc.querySelector('[data-testid="conversation-view"], [data-cascade-id]') : null;
+  const cid = (conv && typeof conv.getAttribute === 'function' && conv.getAttribute('data-cascade-id')) || '';
+  const dr = (r) => (r && typeof r.deref === 'function' ? r.deref() : r), wr = (v) => (v && typeof WeakRef === 'function' ? new WeakRef(v) : v);
   try {
-    if (typeof document !== 'undefined' && document && typeof document.querySelectorAll === 'function') {
-      const anchors = document.querySelectorAll('[data-testid="conversation-view"], [data-testid="agent-input-box"], [data-testid="new-conversation-button"]');
+    const m = g && g.__agPrismAgentMgrMiss;
+    if (m && Date.now() - m.at < 15000 && m.r === route && m.c === cid && dr(m.rt) === root && (!conv ? !m.hc : m.hc && dr(m.cv) === conv)) return null;
+  } catch {}
+  const hit = (v) => { saveCachedAgentMgr(v); clearCachedRef('__agPrismAgentMgrMiss'); return v; };
+  try {
+    if (doc && typeof doc.querySelectorAll === 'function') {
+      const anchors = doc.querySelectorAll('[data-testid="conversation-view"], [data-testid="agent-input-box"], [data-testid="new-conversation-button"]');
       for (let i = 0; i < anchors.length; i += 1) {
-        const el = anchors[i];
-        const fk = el && Object.keys(el).find((k) => k.startsWith('__reactFiber$'));
+        const el = anchors[i], fk = el && Object.keys(el).find((k) => k.startsWith('__reactFiber$'));
         for (let f = fk && el[fk], depth = 0; f && depth < 80; f = f.return, depth += 1) {
           const v = f.memoizedProps && f.memoizedProps.value;
-          if (isAgentMgr(v)) {
-            saveCachedAgentMgr(v);
-            return v;
-          }
-          for (let d = f.dependencies && f.dependencies.firstContext; d; d = d.next) {
-            if (isAgentMgr(d.memoizedValue)) {
-              saveCachedAgentMgr(d.memoizedValue);
-              return d.memoizedValue;
-            }
-          }
+          if (isAgentMgr(v)) return hit(v);
+          for (let d = f.dependencies && f.dependencies.firstContext; d; d = d.next) if (isAgentMgr(d.memoizedValue)) return hit(d.memoizedValue);
         }
       }
     }
-    const root = (typeof document !== 'undefined' && document && (document.getElementById('root') || document.body)) || null;
-    if (!root) return null;
-    const fk = Object.keys(root).find((k) => k.startsWith('__reactContainer$') || k.startsWith('__reactFiber$'));
-    if (!fk || !root[fk]) return null;
-    const q = [root[fk]];
-    let qi = 0;
-    const seen = new Set();
-    let visited = 0;
-    while (qi < q.length && visited < 4000) {
-      const f = q[qi++];
-      if (!f || seen.has(f)) continue;
-      seen.add(f);
-      visited += 1;
-      const v = f.memoizedProps && f.memoizedProps.value;
-      if (isAgentMgr(v)) {
-        saveCachedAgentMgr(v);
-        return v;
+    if (root) {
+      const fk = Object.keys(root).find((k) => k.startsWith('__reactContainer$') || k.startsWith('__reactFiber$'));
+      if (fk && root[fk]) {
+        const q = [root[fk]], seen = new Set();
+        for (let qi = 0, vis = 0; qi < q.length && vis < 4000;) {
+          const f = q[qi++];
+          if (!f || seen.has(f)) continue;
+          seen.add(f); vis += 1;
+          const v = f.memoizedProps && f.memoizedProps.value;
+          if (isAgentMgr(v)) return hit(v);
+          if (f.child) q.push(f.child);
+          if (f.sibling) q.push(f.sibling);
+        }
       }
-      if (f.child) q.push(f.child);
-      if (f.sibling) q.push(f.sibling);
     }
   } catch {}
+  try { if (g) Object.defineProperty(g, '__agPrismAgentMgrMiss', { value: { at: Date.now(), r: route, c: cid, hc: Boolean(conv), rt: wr(root), cv: wr(conv) }, configurable: true, writable: true, enumerable: false }); } catch {}
   return null;
 };
 const projectContextWindowUsage = (cwu) => {
@@ -1290,10 +1253,18 @@ const execWithLs = async (activeLs) => {
   }
   if (params.method === 'GetCascadeTrajectory') {
     const t = await activeLs.getCascadeTrajectory({ cascadeId: params.cascadeId });
-    const traj = (t && t.trajectory) || {};
-    const rawSteps = Array.isArray(traj.steps) ? traj.steps : [];
-    const rawGms = Array.isArray(traj.generatorMetadata) ? traj.generatorMetadata : [];
-    const liveState = readLiveAgentState(params.cascadeId);
+    const traj = (t && t.trajectory) || {}, rawSteps = Array.isArray(traj.steps) ? traj.steps : [], rawGms = Array.isArray(traj.generatorMetadata) ? traj.generatorMetadata : [];
+    const liveState = readLiveAgentState(params.cascadeId), rawStatus = typeof (t && t.status) === 'bigint' ? Number(t.status) : (t && t.status);
+    const totalSteps = numVal(t && t.numTotalSteps) ?? rawSteps.length, totalGms = numVal(t && t.numTotalGeneratorMetadata) ?? rawGms.length;
+    const contextWindowUsage = (liveState && liveState.contextWindowUsage) || projectContextWindowUsage((t && t.contextWindowUsage) || traj.contextWindowUsage);
+    const compactedAtStepIndices = (liveState && liveState.compactedAtStepIndices) || projectCompactedIndices((t && (t.compactedAtStepIndices || t.compactionInfo)) || traj.compactedAtStepIndices || traj.compactionInfo);
+    const lRaw = rawSteps.length > 0 ? rawSteps[rawSteps.length - 1] : null, lM = (lRaw && lRaw.metadata) || {};
+    const lGm = rawGms.length > 0 ? rawGms[rawGms.length - 1] : null, lCm = lGm && ((lGm.metadata && lGm.metadata.case === 'chatModel' && lGm.metadata.value) || lGm.chatModel), lU = lCm && lCm.usage;
+    const lSt = typeof (lRaw && lRaw.status) === 'bigint' ? Number(lRaw.status) : (lRaw && lRaw.status) ?? '';
+    const lastStepSig = [rawStatus ?? '', rawSteps.length, totalGms, ((lRaw && lRaw.step && lRaw.step.case) || '') + ':' + lSt + ':' + tsSec(lM.completedAt) + ':' + tsSec(lM.startedAt) + ':' + tsSec(lM.createdAt), lU ? (numStr(lU.inputTokens) || '') + ':' + (numStr(lU.outputTokens) || '') : '', contextWindowUsage ? contextWindowUsage.estimatedTokensUsed + ':' + (contextWindowUsage.maxContextTokens ?? '') + ':' + (contextWindowUsage.estimatedAfterCompaction ? 1 : 0) + ':' + (contextWindowUsage.lastStepIndex ?? '') : '', compactedAtStepIndices ? compactedAtStepIndices.length + ':' + compactedAtStepIndices[compactedAtStepIndices.length - 1] : ''].join('|');
+    if (typeof params.lastStepCount === 'number' && typeof params.lastStepSig === 'string' && params.lastStepSig && params.lastStepCount === totalSteps && params.lastStepSig === lastStepSig) {
+      return { ok: true, data: { unchanged: true, status: rawStatus, numTotalSteps: totalSteps, numTotalGeneratorMetadata: totalGms, lastStepSig, ...(contextWindowUsage ? { contextWindowUsage } : {}), ...(compactedAtStepIndices ? { compactedAtStepIndices } : {}) } };
+    }
     const steps = rawSteps.map((s) => {
       const sc = (s && s.step && s.step.case) || '';
       const sv = (s && s.step && s.step.value) || null;
@@ -1412,17 +1383,13 @@ const execWithLs = async (activeLs) => {
         },
       });
     }
-    const directCwu = projectContextWindowUsage((t && t.contextWindowUsage) || traj.contextWindowUsage);
-    const contextWindowUsage = (liveState && liveState.contextWindowUsage) || directCwu;
-    const compactedAtStepIndices =
-      (liveState && liveState.compactedAtStepIndices) ||
-      projectCompactedIndices((t && (t.compactedAtStepIndices || t.compactionInfo)) || traj.compactedAtStepIndices || traj.compactionInfo);
     return {
       ok: true,
       data: {
-        status: typeof (t && t.status) === 'bigint' ? Number(t.status) : (t && t.status),
+        status: rawStatus,
         numTotalSteps: numVal(t && t.numTotalSteps),
         numTotalGeneratorMetadata: numVal(t && t.numTotalGeneratorMetadata),
+        lastStepSig,
         ...(contextWindowUsage ? { contextWindowUsage } : {}),
         ...(compactedAtStepIndices ? { compactedAtStepIndices } : {}),
         trajectory: {

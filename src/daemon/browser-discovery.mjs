@@ -1,6 +1,33 @@
 // Obsidian Prism Browser 级 CDP 目标发现与防 25Hz 抖动过滤辅助（Tier 2，无原型 Mixin，由 SessionRegistry 组合调用）
-import { extractScopeKeyFromTitle } from './telemetry-scope.mjs';
+import { extractScopeKeyFromTitle, extractScopeKeyFromUri } from './telemetry-scope.mjs';
 import { evaluateTargetInfoChange, isSameSpaDocumentRoute } from './session-fsm.mjs';
+
+function normalizeDocUrlWithoutHashOrTab(rawUrl) {
+  const s = String(rawUrl || '').trim();
+  if (!s) return '';
+  const hashIdx = s.indexOf('#');
+  const noHash = hashIdx >= 0 ? s.slice(0, hashIdx) : s;
+  try {
+    const u = new URL(noHash);
+    const params = [];
+    for (const [k, v] of u.searchParams.entries()) {
+      if (k.toLowerCase() === 'tab') continue;
+      params.push([k, v]);
+    }
+    params.sort((a, b) => (a[0] === b[0] ? (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0) : a[0] < b[0] ? -1 : 1));
+    const q = params.length ? `?${params.map(([k, v]) => `${k}=${v}`).join('&')}` : '';
+    return `${u.protocol.toLowerCase()}//${u.host.toLowerCase()}${u.pathname}${q}`;
+  } catch {
+    return noHash;
+  }
+}
+
+export function isSameDocumentIgnoringHashAndTab(prevUrl, nextUrl) {
+  if (!prevUrl || !nextUrl || typeof prevUrl !== 'string' || typeof nextUrl !== 'string') return false;
+  if (prevUrl === nextUrl) return true;
+  if (normalizeDocUrlWithoutHashOrTab(prevUrl) !== normalizeDocUrlWithoutHashOrTab(nextUrl)) return false;
+  return extractScopeKeyFromUri(prevUrl) === extractScopeKeyFromUri(nextUrl);
+}
 
 export function closeBrowserDiscovery(reg) {
   reg._browserDiscoverySubscribed = false;
@@ -85,7 +112,7 @@ export function handleBrowserTargetEvent(reg, params) {
           typeof info.url === 'string' &&
           info.url &&
           info.url !== prevUrl &&
-          isSameSpaDocumentRoute(prevUrl, info.url)
+          (isSameSpaDocumentRoute(prevUrl, info.url) || isSameDocumentIgnoringHashAndTab(prevUrl, info.url))
       );
       if (typeof info.url === 'string' && info.url) {
         existing.url = info.url;

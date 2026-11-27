@@ -232,6 +232,10 @@ async function handleMetricsBinding(rpc, entry, payload, executionContextId) {
       }
     }
   }
+  const includeConversations = parsed?.input?.includeConversations !== false;
+  if (!includeConversations && result && typeof result === 'object' && Array.isArray(result.conversations) && result.conversations.length > 0) {
+    result = { ...result, conversations: [] };
+  }
   const safeId = Number(reqId) | 0;
   const expr = `window.__agPrismMetricsResolve && window.__agPrismMetricsResolve(${safeId}, ${formatJsonArgForEval(result)})`;
   await sendFireAndForgetEval(entry.session, expr, executionContextId);
@@ -275,15 +279,41 @@ async function handleThoughtBinding(rpc, entry, payload, executionContextId) {
     } else if (action === 'diagnose') {
       result = typeof svc.diagnose === 'function' ? await svc.diagnose(input) : { ok: false, error: 'diagnose_not_supported' };
     } else if (action === 'translate-stream') {
+      const THOUGHT_STREAM_FRAME_MS = 72;
       let lastSent = '';
       let pendingPartial = null;
       let sendingPartial = false;
+      let lastFrameAt = 0;
+      let frameTimer = null;
+      let streamDone = false;
+      const clearFrameTimer = () => {
+        if (frameTimer !== null) {
+          clearTimeout(frameTimer);
+          frameTimer = null;
+        }
+      };
+      const scheduleFlushPartial = () => {
+        if (streamDone || sendingPartial || pendingPartial === null || !entry || entry.session.closed) return;
+        const elapsed = lastFrameAt > 0 ? Date.now() - lastFrameAt : THOUGHT_STREAM_FRAME_MS;
+        if (elapsed >= THOUGHT_STREAM_FRAME_MS) {
+          clearFrameTimer();
+          void flushPartial();
+          return;
+        }
+        if (frameTimer === null) {
+          frameTimer = setTimeout(() => {
+            frameTimer = null;
+            if (!streamDone && pendingPartial !== null) void flushPartial();
+          }, THOUGHT_STREAM_FRAME_MS - elapsed);
+          frameTimer.unref?.();
+        }
+      };
       const flushPartial = async () => {
         if (sendingPartial) return;
         sendingPartial = true;
         try {
           while (pendingPartial !== null) {
-            if (!entry || entry.session.closed) { pendingPartial = null; break; }
+            if (streamDone || !entry || entry.session.closed) { pendingPartial = null; break; }
             const target = pendingPartial;
             pendingPartial = null;
             if (target === lastSent) continue;
@@ -293,28 +323,39 @@ async function handleThoughtBinding(rpc, entry, payload, executionContextId) {
             try {
               await sendFireAndForgetEval(entry.session, chunkExpr, executionContextId, 0, { rethrow: true });
               lastSent = target;
+              lastFrameAt = Date.now();
             } catch {
               lastSent = '';
+            }
+            if (pendingPartial !== null && !streamDone && Date.now() - lastFrameAt < THOUGHT_STREAM_FRAME_MS) {
+              break;
             }
           }
         } finally {
           sendingPartial = false;
+          if (!streamDone && pendingPartial !== null) scheduleFlushPartial();
         }
       };
-      result = await svc.translateThought({
-        text: input.text || '',
-        mode: input.mode || 'ai',
-        priority: Number(input.priority || 0),
-        requestId: input.requestId ? String(input.requestId) : '',
-        force: Boolean(input.force),
-        bypassCache: Boolean(input.bypassCache),
-        targetLang: input.targetLang || input.lang || '',
-        onPartial: (partialText) => {
-          if (!entry || entry.session.closed) return;
-          pendingPartial = String(partialText || '');
-          void flushPartial();
-        },
-      });
+      try {
+        result = await svc.translateThought({
+          text: input.text || '',
+          mode: input.mode || 'ai',
+          priority: Number(input.priority || 0),
+          requestId: input.requestId ? String(input.requestId) : '',
+          force: Boolean(input.force),
+          bypassCache: Boolean(input.bypassCache),
+          targetLang: input.targetLang || input.lang || '',
+          onPartial: (partialText) => {
+            if (streamDone || !entry || entry.session.closed) return;
+            pendingPartial = String(partialText || '');
+            scheduleFlushPartial();
+          },
+        });
+      } finally {
+        streamDone = true;
+        pendingPartial = null;
+        clearFrameTimer();
+      }
     } else {
       result = { ok: false, error: `Unknown thought action: ${action}` };
     }
