@@ -8,6 +8,9 @@ const {
   STYLE_ID,
   LEGACY_STYLE_ID,
   SETTING_BINDING,
+  DEFAULT_CONFIG,
+  isPerformanceModeExplicit,
+  wasPerformanceModeAuto,
   reconcileConfigAliases,
 } = require('../config/schema.cjs');
 const { minifySingleSource } = require('./js-string-pool.cjs');
@@ -67,8 +70,73 @@ function createCh1Templates({
   detectSystemUiLocale,
 }) {
   let _localesFreshCache = { sig: '', mod: null };
+  let _diskPerfCache = { sig: '', exists: false, explicit: false, isAuto: false };
   let _configRefreshTemplate = '';
   let _injectWrapperTemplate = null;
+  const DEFAULT_KEY_COUNT = Object.keys(DEFAULT_CONFIG).length;
+
+  function readDiskPerfExplicitState() {
+    const cfgPath = path.join(rootDir, 'config.json');
+    try {
+      const st = fs.statSync(cfgPath);
+      if (!st.isFile()) {
+        _diskPerfCache = { sig: '', exists: false, explicit: false, isAuto: false };
+        return _diskPerfCache;
+      }
+      const sig = `${st.mtimeMs}:${st.size}:${st.ctimeMs}`;
+      if (_diskPerfCache.sig === sig) return _diskPerfCache;
+      const raw = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+      const explicit = isPerformanceModeExplicit(raw);
+      const isAuto = Boolean(
+        raw &&
+          typeof raw === 'object' &&
+          !Array.isArray(raw) &&
+          typeof raw.performanceMode === 'string' &&
+          raw.performanceMode.trim().toLowerCase() === 'auto'
+      );
+      _diskPerfCache = { sig, exists: true, explicit, isAuto };
+      return _diskPerfCache;
+    } catch {
+      _diskPerfCache = { sig: '', exists: false, explicit: false, isAuto: false };
+      return _diskPerfCache;
+    }
+  }
+
+  // 返回 0=显式锁定，1=缺省未设置（低配机自动默认 performance，但尊重用户手动偏好），2=显式设为 auto
+  function resolvePerfModeAutoTag(config, rawInput = undefined) {
+    if (rawInput !== undefined) {
+      if (rawInput === null) {
+        const disk = readDiskPerfExplicitState();
+        return disk.explicit ? 0 : disk.isAuto ? 2 : 1;
+      }
+      if (typeof rawInput === 'object' && !Array.isArray(rawInput)) {
+        if (rawInput.perfModeExplicit === true || rawInput.perfModeAuto === false) return 0;
+        if (rawInput.perfModeAuto === true) return 1;
+        if (!Object.prototype.hasOwnProperty.call(rawInput, 'performanceMode')) return 0;
+        if (isPerformanceModeExplicit(rawInput)) return 0;
+        const rv = typeof rawInput.performanceMode === 'string' ? rawInput.performanceMode.trim().toLowerCase() : '';
+        return rv === 'auto' ? 2 : 1;
+      }
+      return 0;
+    }
+    if (!config || typeof config !== 'object') {
+      const disk = readDiskPerfExplicitState();
+      return disk.explicit ? 0 : disk.isAuto ? 2 : 1;
+    }
+    if (config.perfModeExplicit === true || config.perfModeAuto === false) return 0;
+    if (config.perfModeAuto === true) return 1;
+    if (wasPerformanceModeAuto(config)) return 2;
+    if (!Object.prototype.hasOwnProperty.call(config, 'performanceMode')) return 1;
+    const raw = typeof config.performanceMode === 'string' ? config.performanceMode.trim().toLowerCase() : '';
+    if (!raw) return 1;
+    if (raw === 'auto') return 2;
+    if (raw !== 'balanced') return 0;
+    // performanceMode === 'balanced'：区分「磁盘无显式配置由 readConfig() 补全的全量默认对象」与「调用方显式指定 balanced」
+    const keyCount = Object.keys(config).length;
+    if (keyCount < DEFAULT_KEY_COUNT) return 0;
+    const disk = readDiskPerfExplicitState();
+    return disk.explicit ? 0 : disk.isAuto ? 2 : 1;
+  }
 
   function loadLocalesModuleFresh() {
     const locPath = path.join(rootDir, 'i18n-locales.js');
@@ -105,7 +173,8 @@ function createCh1Templates({
     const keys = CH1_RUNTIME_UI_KEYS.filter((k) => typeof pObj[k] === 'string' || typeof enObj?.[k] === 'string');
     const vals = { [primary]: keys.map((k) => pObj[k] ?? '') };
     if (enObj) vals.en = keys.map((k) => enObj[k] ?? '');
-    return { active: primary, keys, vals };
+    const pmAuto = resolvePerfModeAutoTag(config);
+    return pmAuto ? { active: primary, keys, vals, pmAuto } : { active: primary, keys, vals };
   }
 
   function getConfigRefreshTemplate() {
@@ -114,13 +183,14 @@ function createCh1Templates({
       const cfg = __AG_REF_CFG__, W = window, D = document, G = globalThis;
       const api = W.__agPrism || W.__agClaudeStyle;
       if (api && api.version === __AG_REF_VER__ && api.codeHash === __AG_REF_HASH__ && typeof api.refreshConfig === 'function') {
+        const T = (f) => { try { f(); } catch {} };
+        if (cfg.__pmAuto) T(() => W.__agDomBus?.resolveAutoBootPerfMode?.(cfg, W));
         if (api.refreshConfig(cfg) === false) return { refreshed: true, skippedStale: true, version: api.version };
         const e = api.getState?.()?.cfg || cfg, de = D.documentElement;
-        const T = (f) => { try { f(); } catch {} };
         const qa = (s) => D.querySelectorAll?.(s) || [];
         const rm = (s) => qa(s).forEach((n) => n.remove?.());
         const ra = (s) => de && s.split(',').forEach((a) => de.removeAttribute?.(a));
-        const dw = (s) => s.split(',').forEach((k) => { T(() => delete W[k]); T(() => delete G[k]); });
+        const dw = (s, p = '') => s.split(',').forEach((k) => { T(() => delete W[p + k]); T(() => delete G[p + k]); });
         T(() => (e?.telemetryModule === 'off' || e?.telemetryModule === false ? (api.detachTelemetry?.(), W.__agPrismTelemetry?.destroy?.()) : (W.__agPrismTelemetry?.sync?.(e), api.syncTelemetry?.())));
         T(() => (e?.effortSliderModule === 'off' || e?.effortSliderModule === false ? W.__agPrismEffortSlider?.destroy?.() : W.__agPrismEffortSlider?.sync?.(e)));
         if (e?.contextMenu === false || e?.contextMenu === 'off') T(() => W.__agPrismContextMenu?.destroy?.());
@@ -160,7 +230,8 @@ function createCh1Templates({
             W.__agPrismPeriodicPicker?.destroy?.();
             ra('data-ag-prism-periodic-picker,data-ag-pp-open,data-ag-pp-holding');
             rm('#ag-prism-periodic-stub-css,#ag-prism-periodic-picker-css,#ag-prism-periodic-picker-root,.ag-pp-hold-ring,.ag-pp-mini-keycap');
-            dw('__agPrismPeriodicStub,__agPrismPeriodicStubFactory,__agPeriodicPendingOpen,__agPeriodicFullLoaded,__agPeriodicStubHash,__agPrismPeriodicPicker,__agPrismPeriodicPickerFactory,__agPrismKeyboard3D,__agPrismPeriodicKeyboard3D,__agPrismOledScreen,__agPrismGrainAssets,__agPeriodicAudioFx,__agPeriodicModelCatalog,__agPeriodicHostBridge,__agPeriodicBentoUi,__agPeriodicPbrGrainAssets,__agPeriodicOledScreen,__agPeriodicKeyboard3D');
+            dw('PeriodicStub,PeriodicStubFactory,PeriodicPicker,PeriodicPickerFactory,Keyboard3D,PeriodicKeyboard3D,OledScreen,GrainAssets', '__agPrism');
+            dw('PendingOpen,FullLoaded,StubHash,AudioFx,ModelCatalog,HostBridge,BentoUi,PbrGrainAssets,OledScreen,Keyboard3D', '__agPeriodic');
           });
         }
         if (de) {
@@ -188,9 +259,11 @@ function createCh1Templates({
     const codeHash = resolveCurrentBundleCodeHash();
     const hasExplicitLang = !customConfig || Object.prototype.hasOwnProperty.call(config, 'language') || Object.prototype.hasOwnProperty.call(config, 'lang');
     const uiSlice = hasExplicitLang ? buildRuntimeUiSlicePayload(config) : null;
+    const pmAuto = resolvePerfModeAutoTag(config, customConfig ? customConfig : null);
     const bootCfg = {
       ...config,
       ...(uiSlice ? { __uiSlice: uiSlice } : {}),
+      ...(pmAuto ? { __pmAuto: pmAuto } : {}),
       ...(extraMeta && typeof extraMeta === 'object' ? extraMeta : {}),
       binding: SETTING_BINDING,
       codeHash,
@@ -407,11 +480,13 @@ function createCh1Templates({
           if (D.head) applyStyle();
           else D.addEventListener('DOMContentLoaded', applyStyle, { once: true });
           const cur = W.__agPrism || W.__agClaudeStyle;
-          if (cur && cur.version === VER && cur.codeHash === __AG_INJ_CODEHASH__) cur.refreshConfig(bootCfg);
+          const autoPm = () => T(() => (W.__agDomBus || G.__agDomBus)?.resolveAutoBootPerfMode?.(bootCfg, W));
+          if (cur && cur.version === VER && cur.codeHash === __AG_INJ_CODEHASH__) { autoPm(); cur.refreshConfig(bootCfg); }
           else {
             destroyMods();
             T(() => qa('[data-ag-prism-fallback="1"]').forEach((n) => n.remove()));
             __AG_INJ_BUNDLE__();
+            autoPm();
             if (isF(G.__agCsUiMain)) G.__agCsUiMain(bootCfg);
           }
           if (W.__agClaudeStyle && !W.__agPrism) W.__agPrism = W.__agClaudeStyle;
@@ -450,6 +525,7 @@ function createCh1Templates({
     normalizeLangIdNode,
     resolveSystemLangNode,
     loadLocalesModuleFresh,
+    resolvePerfModeAutoTag,
     buildRuntimeUiSlicePayload,
     getConfigRefreshTemplate,
     buildConfigRefreshExpression,

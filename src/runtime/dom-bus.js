@@ -20,11 +20,30 @@
     balanced: Object.freeze({ mode: 'balanced', maxFps: 180, minFrameGapMs: 0, maxDpr: 1.5, disableHeavyBlur: false, lowPriorityThrottleMs: 180, chunkBudgetMs: 3.5 }),
     quality: Object.freeze({ mode: 'quality', maxFps: 0, minFrameGapMs: 0, maxDpr: 2, disableHeavyBlur: false, lowPriorityThrottleMs: 160, chunkBudgetMs: 4.5 }),
   });
+  const SW_RE = /swiftshader|llvmpipe|softpipe|microsoft basic render|software rasterizer|mesa offscreen/i;
+  const PM_RE = /^(?:performance|eco|balanced|quality)$/;
   const normalizePerformanceMode = (raw) => {
     if (typeof raw !== 'string') return 'balanced';
     const l = raw.trim().toLowerCase();
     return l === 'performance' || l === 'eco' ? 'performance' : l === 'quality' ? 'quality' : 'balanced';
   };
+  const readHw = (env) => {
+    const s = isO(env) ? env : null, nav = s?.navigator || (s ? null : (typeof navigator !== 'undefined' ? navigator : G?.navigator || null));
+    const r = typeof s?.renderer === 'string' ? s.renderer : typeof s?.glRenderer === 'string' ? s.glRenderer : '';
+    const rm = s && 'deviceMemory' in s ? s.deviceMemory : nav?.deviceMemory;
+    const rc = s && 'hardwareConcurrency' in s ? s.hardwareConcurrency : nav?.hardwareConcurrency;
+    return { sw: Boolean(r && SW_RE.test(r)), mem: rm == null || rm === '' ? NaN : +rm, cores: rc == null || rc === '' ? NaN : +rc };
+  };
+  const isLowHw = (h) => h.sw || (isFin(h.mem) && h.mem > 0 && h.mem <= 4) || (isFin(h.cores) && h.cores > 0 && h.cores <= 4 && !(isFin(h.mem) && h.mem >= 8));
+  const detectLowEndHardware = (env) => isLowHw(readHw(env));
+  function resolveEffectivePerformanceMode(rawMode, opts) {
+    const o = isO(opts) ? opts : {};
+    if (o.explicit === true) return normalizePerformanceMode(rawMode);
+    if (typeof o.savedMode === 'string' && o.savedMode.trim() && o.forceAuto !== true) return normalizePerformanceMode(o.savedMode);
+    const l = typeof rawMode === 'string' ? rawMode.trim().toLowerCase() : '';
+    if ((!l || l === 'auto' || l === 'balanced') && detectLowEndHardware(o.env !== undefined ? o.env : o.win?.navigator ? { navigator: o.win.navigator } : undefined)) return 'performance';
+    return normalizePerformanceMode(rawMode);
+  }
   const normPri = (p) => (p === 'user-blocking' || p === 'background' ? p : 'user-visible');
   const nowMs = () => (typeof performance !== 'undefined' && performance?.now ? performance.now() : Date.now());
   const isF = (v) => typeof v === 'function', isO = (v) => Boolean(v && typeof v === 'object'), isA = Array.isArray, isFin = Number.isFinite;
@@ -414,6 +433,12 @@
         }
       };
     }
+    function observeViewportVisibility(el, cb, o) {
+      if (!el || !isF(cb)) return noop;
+      const c = isO(o) ? o : {};
+      let pv = null;
+      return observeVisibility(el, (i) => { const v = Boolean(i?.visible); if (v !== pv) { pv = v; cb(v, i); } }, { doc: c.doc, io: true, rootMargin: typeof c.rootMargin === 'string' && c.rootMargin ? c.rootMargin : '0px' });
+    }
     function isSkipped(el) {
       if (!el) return false;
       if (ioSkEls.has(el) || skEls.has(el)) return true;
@@ -436,6 +461,27 @@
       if (typeof mO === 'string' && mO) return PERF_CAPS_TABLE[normalizePerformanceMode(mO)];
       const h = getHtml(dO), raw = (h && T(() => h.dataset?.agCsPerfMode || h.getAttribute?.(PERF_MODE_ATTR))) || '';
       return PERF_CAPS_TABLE[normalizePerformanceMode(raw || curPerf || 'balanced')];
+    }
+    function getAdaptiveDprCap(baseCap, envOrDoc) {
+      const isD = isO(envOrDoc) && Boolean(envOrDoc.documentElement), env = isD ? undefined : envOrDoc;
+      const caps = getPerfCaps(null, isD ? envOrDoc : null), b = isFin(+baseCap) && +baseCap > 0 ? +baseCap : caps.maxDpr || 1.5;
+      if (caps.mode === 'performance') return Math.min(b, 1);
+      const hw = readHw(env);
+      if (!isLowHw(hw)) return b;
+      return Math.min(b, hw.sw || (isFin(hw.mem) && hw.mem > 0 && hw.mem <= 2) ? 1 : 1.25);
+    }
+    function resolveAutoBootPerfMode(cfg, wO) {
+      if (!isO(cfg)) return null;
+      const tag = cfg.__pmAuto ?? (cfg.perfModeAuto === true ? 1 : cfg.perfModeExplicit === true ? 0 : cfg.__uiSlice?.pmAuto);
+      delete cfg.__pmAuto; delete cfg.perfModeAuto; delete cfg.perfModeExplicit;
+      if (!tag) return cfg.performanceMode;
+      const w = getWin(wO), forceAuto = tag === 2;
+      const savedMode = forceAuto ? '' : (T(() => {
+        const s = (w?.localStorage || (typeof localStorage !== 'undefined' ? localStorage : null))?.getItem?.('ag-prism:config');
+        const v = s ? String(JSON.parse(s)?.performanceMode || '').trim().toLowerCase() : '';
+        return PM_RE.test(v) ? v : '';
+      }) || '');
+      return (cfg.performanceMode = resolveEffectivePerformanceMode(cfg.performanceMode, { explicit: false, forceAuto, savedMode, env: w?.navigator ? { navigator: w.navigator } : undefined }));
     }
 
     function dispose(dO, wO) {
@@ -470,8 +516,9 @@
       BUSY_ATTR, PERF_MODE_ATTR, STREAM_ATTR, MOTION_OFF_SCOPED_CSS, PERF_CAPS_TABLE,
       attach, subscribe, drainMutations, measure, mutate, flushNow,
       scheduleTask, cancelTask, cancelGroup, reprioritizeTask, yieldSlice, runChunked,
-      observeSize, getSize, readBoxSize, observeVisibility, isSkipped,
+      observeSize, getSize, readBoxSize, observeVisibility, observeViewportVisibility, isSkipped,
       setStreaming, bumpBusy, bumpScrollBusy, isBusy, isStreaming,
+      detectLowEndHardware, resolveEffectivePerformanceMode, resolveAutoBootPerfMode, getAdaptiveDprCap,
       normalizePerformanceMode, applyPerformanceMode, getPerfCaps,
       getDebugState: () => ({
         subscriberCount: subs.size, observing: Boolean(rootMo), listenersAttached: lsOn,

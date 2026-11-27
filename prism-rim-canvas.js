@@ -96,7 +96,16 @@
     const wake = () => { if (canDraw()) { drawAt = 0; schedRaf(); } };
     const clrIdle = () => { if (idleT) { isFn(G.clearTimeout) && clearTimeout(idleT); idleT = 0; } };
     const zCv = (c) => { if (c && (c.width || c.height)) c.width = c.height = 0; };
-    const zEnt = (e, all) => { if (e && (all || e.cl)) { e._s = ''; e._g = null; e._gk = ''; e.cl = true; zCv(e.cv); } };
+    const zEnt = (e, all) => { if (e && (all || e.cl)) { e._s = ''; e._gc = null; e.cl = true; zCv(e.cv); } };
+    const cGrad = (e, slot, key, build) => {
+      let c = e._gc;
+      if (!c) c = e._gc = Object.create(null);
+      const h = c[slot];
+      if (h && h.k === key) return h.g;
+      const g = build();
+      c[slot] = { k: key, g };
+      return g;
+    };
 
     const shrinkRims = (all) => {
       clrIdle();
@@ -247,7 +256,8 @@
       if (!e || !e.ctx || !e.cv || !e.rect) return false;
       if (!active || amb <= 0.001) { clrEnt(e); return true; }
       const isM = !!e.mm, isRB = !isM && !!e.rb, ip = e.ip || 0;
-      const dpr = Math.min((typeof window !== 'undefined' && window.devicePixelRatio) || G.devicePixelRatio || 1, 1.5);
+      const dprCap = busOf()?.getAdaptiveDprCap?.(1.5) || 1.5;
+      const dpr = Math.min((typeof window !== 'undefined' && window.devicePixelRatio) || G.devicePixelRatio || 1, dprCap);
       const w = Math.max(4, Math.round((e.rect.width + ip) * dpr));
       const h = Math.max(4, Math.round((e.rect.height + ip) * dpr));
       const cssR = e.br > 0 ? e.br : 10;
@@ -261,6 +271,18 @@
       const padOff = ip * 0.5, gx = (lx + padOff) * dpr, gy = (ly + padOff) * dpr, gr = radius * dpr;
       const inset = (ip ? 1 : 0.75) * dpr, rw = Math.max(2, w - inset * 2), rh = Math.max(2, h - inset * 2), rr = Math.min(rw * 0.5, rh * 0.5, cssR * dpr);
       const prevA = ctx.globalAlpha;
+      const canTr = isFn(ctx.save) && isFn(ctx.translate) && isFn(ctx.restore);
+      const strokeRad = (slot, key, tx, ty, rad, lw, al, mk) => {
+        if (canTr) {
+          const g = cGrad(e, slot, key, () => mk(0, 0, rad));
+          ctx.save(); ctx.globalAlpha = al; ctx.translate(tx, ty);
+          strokeRR(ctx, inset - tx, inset - ty, rw, rh, rr);
+          ctx.lineWidth = lw; ctx.strokeStyle = g; ctx.stroke(); ctx.restore();
+        } else {
+          ctx.globalAlpha = al; strokeRR(ctx, inset, inset, rw, rh, rr);
+          ctx.lineWidth = lw; ctx.strokeStyle = mk(tx, ty, rad); ctx.stroke();
+        }
+      };
 
       if (isM) {
         if (isFn(ctx.save) && isFn(ctx.clip) && isFn(ctx.fillRect)) {
@@ -271,14 +293,8 @@
           if (isFn(ctx.translate) && isFn(ctx.createLinearGradient)) drawRefl(ctx, gx, gy, w, h, dpr, dark, effA, e.rect.width, e.rect.height, lx, ly);
           ctx.restore();
         }
-        ctx.globalAlpha = effA;
-        strokeRR(ctx, inset, inset, rw, rh, rr);
-        ctx.lineWidth = 1.35 * dpr;
-        ctx.strokeStyle = addS(
-          ctx.createRadialGradient(gx, gy, 0, gx, gy, gr),
-          dark ? [0, 'rgba(255,255,255,.95)', .24, 'rgba(232,240,252,0.56)', .54, 'rgba(186,202,228,.18)', .85, 'rgba(148,168,198,.03)', 1, 'rgba(148,168,198,0)'] : [0, 'rgba(30,64,175,.52)', .42, 'rgba(59,130,246,.2)', 1, 'rgba(59,130,246,0)']
-        );
-        ctx.stroke();
+        const mSt = dark ? [0, 'rgba(255,255,255,.95)', .24, 'rgba(232,240,252,0.56)', .54, 'rgba(186,202,228,.18)', .85, 'rgba(148,168,198,.03)', 1, 'rgba(148,168,198,0)'] : [0, 'rgba(30,64,175,.52)', .42, 'rgba(59,130,246,.2)', 1, 'rgba(59,130,246,0)'];
+        strokeRad('ms', `${gr}|${dark ? 1 : 0}`, gx, gy, gr, 1.35 * dpr, effA, (x, y, rad) => addS(ctx.createRadialGradient(x, y, 0, x, y, rad), mSt));
         ctx.globalAlpha = prevA !== undefined ? prevA : 1;
         return true;
       }
@@ -287,41 +303,31 @@
         const gyR = h + 16 * dpr, grR = Math.max(radius * 1.15, 220) * dpr, ob = ly - e.rect.height;
         const aR = effA * 0.46 * (ob > 150 ? Math.max(0, 1 - (ob - 150) / 190) : ly < 0 ? Math.max(0, 1 + ly / 80) : 1);
         if (aR > 0.004) {
-          ctx.globalAlpha = aR;
-          strokeRR(ctx, inset, inset, rw, rh, rr);
-          ctx.lineWidth = 1.15 * dpr;
-          ctx.strokeStyle = palS(ctx.createRadialGradient(gx, gyR, 0, gx, gyR, grR), toneKey, dark);
-          ctx.stroke();
+          strokeRad('rb', `${grR}|${dark ? 1 : 0}|${toneKey}`, gx, gyR, grR, 1.15 * dpr, aR, (x, y, rad) => palS(ctx.createRadialGradient(x, y, 0, x, y, rad), toneKey, dark));
           if (isFn(ctx.save) && isFn(ctx.clip)) {
             ctx.save(); strokeRR(ctx, inset, inset, rw, rh, rr); ctx.clip();
-            const wh = Math.min(rh, 14 * dpr), wc = dark ? '255,255,255' : '59,130,246';
-            ctx.globalAlpha = 1;
-            ctx.fillStyle = addS(ctx.createRadialGradient(gx, h + 2 * dpr, 0, gx, h + 2 * dpr, Math.max(grR * 0.72, 160 * dpr)), [0, rg(wc, 0.032 * aR), 1, `rgba(${wc},0)`]);
-            ctx.fillRect(0, Math.max(0, h - wh), w, wh);
+            const wh = Math.min(rh, 14 * dpr), wc = dark ? '255,255,255' : '59,130,246', wr = Math.max(grR * 0.72, 160 * dpr), yTop = Math.max(0, h - wh);
+            if (canTr) {
+              ctx.globalAlpha = 0.032 * aR; ctx.translate(gx, h + 2 * dpr);
+              ctx.fillStyle = cGrad(e, 'rw', `${wr}|${dark ? 1 : 0}`, () => addS(ctx.createRadialGradient(0, 0, 0, 0, 0, wr), [0, `rgba(${wc},1)`, 1, `rgba(${wc},0)`]));
+              ctx.fillRect(-gx, yTop - (h + 2 * dpr), w, wh);
+            } else {
+              ctx.globalAlpha = 1;
+              ctx.fillStyle = addS(ctx.createRadialGradient(gx, h + 2 * dpr, 0, gx, h + 2 * dpr, wr), [0, rg(wc, 0.032 * aR), 1, `rgba(${wc},0)`]);
+              ctx.fillRect(0, yTop, w, wh);
+            }
             ctx.restore();
           }
           if (isFn(ctx.createLinearGradient) && isFn(ctx.save)) {
-            ctx.save(); ctx.globalCompositeOperation = 'destination-in'; ctx.globalAlpha = 1;
-            ctx.fillStyle = addS(ctx.createLinearGradient(0, h, 0, 0), [0, 'rgba(0,0,0,1)', .22, 'rgba(0,0,0,.68)', .48, 'rgba(0,0,0,0)', 1, 'rgba(0,0,0,0)']);
-            ctx.fillRect(0, 0, w, h); ctx.restore();
+            const mkG = cGrad(e, 'mk', `${h}`, () => addS(ctx.createLinearGradient(0, h, 0, 0), [0, 'rgba(0,0,0,1)', .22, 'rgba(0,0,0,.68)', .48, 'rgba(0,0,0,0)', 1, 'rgba(0,0,0,0)']));
+            ctx.save(); ctx.globalCompositeOperation = 'destination-in'; ctx.globalAlpha = 1; ctx.fillStyle = mkG; ctx.fillRect(0, 0, w, h); ctx.restore();
           }
         }
         ctx.globalAlpha = prevA !== undefined ? prevA : 1;
         return true;
       }
 
-      if (isFn(ctx.save) && isFn(ctx.translate) && isFn(ctx.restore)) {
-        const gKey = `${gr}|${dark ? 1 : 0}|${toneKey}`;
-        let grad = e._gk === gKey ? e._g : null;
-        if (!grad) { grad = palS(ctx.createRadialGradient(0, 0, 0, 0, 0, gr), toneKey, dark); e._g = grad; e._gk = gKey; }
-        ctx.save(); ctx.globalAlpha = effA; ctx.translate(gx, gy);
-        strokeRR(ctx, inset - gx, inset - gy, rw, rh, rr);
-        ctx.lineWidth = 1.45 * dpr; ctx.strokeStyle = grad; ctx.stroke(); ctx.restore();
-      } else {
-        ctx.globalAlpha = effA;
-        strokeRR(ctx, inset, inset, rw, rh, rr);
-        ctx.lineWidth = 1.45 * dpr; ctx.strokeStyle = palS(ctx.createRadialGradient(gx, gy, 0, gx, gy, gr), toneKey, dark); ctx.stroke();
-      }
+      strokeRad('nm', `${gr}|${dark ? 1 : 0}|${toneKey}`, gx, gy, gr, 1.45 * dpr, effA, (x, y, rad) => palS(ctx.createRadialGradient(x, y, 0, x, y, rad), toneKey, dark));
       ctx.globalAlpha = prevA !== undefined ? prevA : 1;
       return true;
     };
@@ -441,7 +447,7 @@
         return {
           box, rect, cv: rim ? rim.cv : null, ctx: rim ? rim.ctx : null, ip, mm, rb, br,
           cl: prev ? prev.cl : false, _s: prev?._s || '', _x: prev?._x ?? -9999, _y: prev?._y ?? -9999,
-          _g: reuse ? (prev._g || null) : null, _gk: reuse ? (prev._gk || '') : '', px: prev ? prev.px : '', py: prev ? prev.py : '',
+          _gc: reuse ? (prev._gc || null) : null, px: prev ? prev.px : '', py: prev ? prev.py : '',
         };
       };
       runGuardedMut(() => {
