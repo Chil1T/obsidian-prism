@@ -11,6 +11,7 @@ const fsSafe = require('./src/utils/fs-safe.cjs');
 const schema = require('./src/config/schema.cjs');
 const { createConfigStore } = require('./src/config/store.cjs');
 const transport = require('./src/cdp/transport.cjs');
+const partitionsBinding = require('./src/cdp/partitions-binding.cjs');
 const shortcutFlags = require('./src/platform/shortcut-flags.cjs');
 const { createProcessProbe } = require('./src/platform/process-probe.cjs');
 const winLnk = require('./src/platform/win-lnk.cjs');
@@ -92,7 +93,12 @@ const studioBuilders = createStudioChannelBuilders({
   readConfig: configStore.readConfig,
   bundleCache,
 });
-const addonBuilders = createAddonChannelBuilders({ rootDir: ROOT_DIR, readConfig: configStore.readConfig, bundleCache });
+const addonBuilders = createAddonChannelBuilders({
+  rootDir: ROOT_DIR,
+  readConfig: configStore.readConfig,
+  readProjectPartitionsData: configStore.readProjectPartitionsData,
+  bundleCache,
+});
 const runtimeBuilders = createRuntimeChannelBuilders({ rootDir: ROOT_DIR, readConfig: configStore.readConfig, bundleCache });
 const channelRegistry = createChannelRegistry({
   builders: { ...coreBuilders, ...i18nBuilders, ...studioBuilders, ...addonBuilders, ...runtimeBuilders },
@@ -125,10 +131,12 @@ module.exports = {
   INLINE_DIFF_BINDING: schema.INLINE_DIFF_BINDING,
   WALLPAPER_BINDING: schema.WALLPAPER_BINDING,
   SUGGESTER_BINDING: schema.SUGGESTER_BINDING,
+  PARTITIONS_BINDING: schema.PARTITIONS_BINDING,
   PORT_FILE: fsSafe.PORT_FILE,
   PID_FILE,
   CONFIG_FILE: configStore.CONFIG_FILE,
   CONFIG_PATH: configStore.CONFIG_PATH,
+  PARTITIONS_FILE: configStore.PARTITIONS_FILE,
   CONFIG_SCHEMA: schema.CONFIG_SCHEMA,
   DEFAULT_CONFIG: schema.DEFAULT_CONFIG,
   VALIDATORS: schema.VALIDATORS,
@@ -210,6 +218,12 @@ module.exports = {
   readConfig: configStore.readConfig,
   writeConfig: configStore.writeConfig,
   invalidateConfigCache: configStore.invalidateConfigCache,
+  normalizeProjectPartitionsData: configStore.normalizeProjectPartitionsData,
+  readProjectPartitionsData: configStore.readProjectPartitionsData,
+  writeProjectPartitionsData: configStore.writeProjectPartitionsData,
+  ensurePartitionsBinding: partitionsBinding.ensurePartitionsBinding,
+  removePartitionsBinding: partitionsBinding.removePartitionsBinding,
+  handlePartitionsBindingCall: partitionsBinding.handlePartitionsBindingCall,
   readCss: ch1Compiler.readCss,
   readPort: processProbe.readPort,
   listPages: transport.listPages,

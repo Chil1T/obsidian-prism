@@ -11,6 +11,7 @@ const SIDEBAR_BINDING = '__agPrismSidebarCall';
 const INLINE_DIFF_BINDING = '__agPrismInlineDiffCall';
 const WALLPAPER_BINDING = '__agPrismWallpaperCall';
 const SUGGESTER_BINDING = '__agPrismSuggestCall';
+const PARTITIONS_BINDING = '__agPrismPartitionsCall';
 
 const CANONICAL_LANG_VALUES = Object.freeze(['auto', 'zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de', 'tr']);
 const ON_OFF_VALUES = Object.freeze(['on', 'off']);
@@ -85,6 +86,7 @@ const CONFIG_SCHEMA = Object.freeze({
   sidebar: Object.freeze({ type: 'enum', values: ON_OFF_VALUES, default: 'on', aliasOf: 'sidebarRestyle' }),
   sidebarCompact: Object.freeze({ type: 'boolean', default: false, stringBoolMode: 'strictOn' }),
   sidebarNavFold: Object.freeze({ type: 'enum', values: Object.freeze(['off', 'on']), default: 'off', coerceBoolToOnOff: true }),
+  projectPartitions: Object.freeze({ type: 'enum', values: ON_OFF_VALUES, default: 'off', coerceBoolToOnOff: true }),
   smoothCaret: Object.freeze({ type: 'boolean', default: true, stringBoolMode: 'notOff' }),
   scrollBottomMotion: Object.freeze({ type: 'enum', values: Object.freeze(['smooth', 'instant']), default: 'smooth' }),
   contextMenu: Object.freeze({ type: 'boolean', default: true, stringBoolMode: 'notOff' }),
@@ -283,6 +285,7 @@ module.exports = {
   INLINE_DIFF_BINDING,
   WALLPAPER_BINDING,
   SUGGESTER_BINDING,
+  PARTITIONS_BINDING,
   CONFIG_SCHEMA,
   DEFAULT_CONFIG,
   VALIDATORS,

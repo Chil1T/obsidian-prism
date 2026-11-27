@@ -190,23 +190,24 @@ function createCh1Templates({
         const qa = (s) => D.querySelectorAll?.(s) || [];
         const rm = (s) => qa(s).forEach((n) => n.remove?.());
         const ra = (s) => de && s.split(',').forEach((a) => de.removeAttribute?.(a));
+        const P = (k) => W['__agPrism' + k];
         const dw = (s, p = '') => s.split(',').forEach((k) => { T(() => delete W[p + k]); T(() => delete G[p + k]); });
-        T(() => (off(e?.telemetryModule) ? (api.detachTelemetry?.(), W.__agPrismTelemetry?.destroy?.()) : (W.__agPrismTelemetry?.sync?.(e), api.syncTelemetry?.())));
-        T(() => (off(e?.effortSliderModule) ? W.__agPrismEffortSlider?.destroy?.() : W.__agPrismEffortSlider?.sync?.(e)));
-        if (off(e?.contextMenu)) T(() => W.__agPrismContextMenu?.destroy?.());
-        T(() => W.__agPrismThought?.sync?.(e));
-        T(() => W.__agPrismInlineDiff?.sync?.(e));
-        T(() => (e?.omniModule === 'off' ? W.__agPrismOmni?.destroy?.() : W.__agPrismOmni?.sync?.(e, W.__agPrismOmniServerMeta || null)));
+        T(() => (off(e?.telemetryModule) ? (api.detachTelemetry?.(), P('Telemetry')?.destroy?.()) : (P('Telemetry')?.sync?.(e), api.syncTelemetry?.())));
+        T(() => (off(e?.effortSliderModule) ? P('EffortSlider')?.destroy?.() : P('EffortSlider')?.sync?.(e)));
+        if (off(e?.contextMenu)) T(() => P('ContextMenu')?.destroy?.());
+        T(() => P('Thought')?.sync?.(e));
+        T(() => P('InlineDiff')?.sync?.(e));
+        T(() => (e?.omniModule === 'off' ? P('Omni')?.destroy?.() : P('Omni')?.sync?.(e, P('OmniServerMeta') || null)));
         if (e?.sidebarStudio !== 'on') {
-          T(() => { W.__agPrismSidebar?.sync?.(e, W.__agPrismSidebarMeta || null); W.__agPrismSidebar?.destroy?.(); delete W.__agPrismSidebar; });
+          T(() => { P('Sidebar')?.sync?.(e, P('SidebarMeta') || null); P('Sidebar')?.destroy?.(); delete W.__agPrismSidebar; });
           T(() => ra('data-ag-prism-mode,data-ag-prism-chat-kind,data-ag-prism-chat-telemetry,data-ag-cs-space,data-ag-cs-space-palette,data-ag-cs-space-accent'));
-        } else T(() => W.__agPrismSidebar?.sync?.(e, W.__agPrismSidebarMeta || null));
+        } else T(() => P('Sidebar')?.sync?.(e, P('SidebarMeta') || null));
         T(() => {
-          const m = e?.hostLocalization, l = e?.language;
+          const m = e?.hostLocalization, l = e?.language, hi = W.__agPrismHostI18n;
           const navL = String((typeof navigator !== 'undefined' && (navigator.languages?.[0] || navigator.language)) || '').trim();
-          if (m === 'off' || m === 'on') W.__agPrismHostI18n?.setMode?.(m);
-          else if ((l && l !== 'zh-CN' && l !== 'tr' && l !== 'auto') || ((!l || l === 'auto') && navL && !/^(?:zh(?:$|-(?:cn|hans|sg)(?:-|$))|tr(?:$|-))/i.test(navL))) W.__agPrismHostI18n?.destroy?.();
-          else W.__agPrismHostI18n?.setMode?.('auto');
+          if (m === 'off' || m === 'on') hi?.setMode?.(m);
+          else if ((l && l !== 'zh-CN' && l !== 'tr' && l !== 'auto') || ((!l || l === 'auto') && navL && !/^(?:zh(?:$|-(?:cn|hans|sg)(?:-|$))|tr(?:$|-))/i.test(navL))) hi?.destroy?.();
+          else hi?.setMode?.('auto');
         });
         if (off(e?.mascot)) {
           T(() => W.__agDualMascotRig?.dispose?.()); T(() => api.sync?.());
@@ -224,14 +225,15 @@ function createCh1Templates({
         }
         if (off(e?.periodicModelPicker)) {
           T(() => {
-            W.__agPrismPeriodicStub?.destroy?.();
-            W.__agPrismPeriodicPicker?.destroy?.();
+            P('PeriodicStub')?.destroy?.();
+            P('PeriodicPicker')?.destroy?.();
             ra('data-ag-prism-periodic-picker,data-ag-pp-open,data-ag-pp-holding');
             rm('#ag-prism-periodic-stub-css,#ag-prism-periodic-picker-css,#ag-prism-periodic-picker-root,.ag-pp-hold-ring,.ag-pp-mini-keycap');
             dw('PeriodicStub,PeriodicStubFactory,PeriodicPicker,PeriodicPickerFactory,Keyboard3D,PeriodicKeyboard3D,OledScreen,GrainAssets', '__agPrism');
             dw('PendingOpen,FullLoaded,StubHash,AudioFx,ModelCatalog,HostBridge,BentoUi,PbrGrainAssets,OledScreen,Keyboard3D', '__agPeriodic');
           });
         }
+        T(() => P('ProjectPartitions')?.[e?.projectPartitions === 'on' || e?.projectPartitions === true ? 'sync' : 'destroy']?.(e));
         if (de) {
           if (e?.thoughtTranslate && e.thoughtTranslate !== 'off') de.setAttribute('data-ag-prism-thought-view', e.thoughtView === 'bilingual' ? 'bilingual' : 'immersive');
           else de.removeAttribute('data-ag-prism-thought-view');
@@ -239,10 +241,10 @@ function createCh1Templates({
         }
         T(() => {
           const pm = e?.performanceMode;
-          if (W.__agPrismDomBus?.applyPerformanceMode) W.__agPrismDomBus.applyPerformanceMode(pm, D, W);
+          if (P('DomBus')?.applyPerformanceMode) P('DomBus').applyPerformanceMode(pm, D, W);
           else if (de && pm) de.setAttribute('data-ag-cs-perf-mode', pm === 'eco' ? 'performance' : pm === 'auto' ? 'balanced' : pm);
-          W.__agPrismApplyIgnoreReducedMotion?.(!!e?.ignoreReducedMotion);
-          W.__agPrismFontCustomizer?.applyCustomFonts?.(e, D);
+          P('ApplyIgnoreReducedMotion')?.(!!e?.ignoreReducedMotion);
+          P('FontCustomizer')?.applyCustomFonts?.(e, D);
         });
         return { refreshed: true, version: api.version };
       }
@@ -452,7 +454,7 @@ function createCh1Templates({
         j('__agPrismTelemetry,__agPrismEffortSlider,__agPrismThought,__agPrismOmni,__agPrismContextMenu' + (e ? ',' + e : ''), (k) => T(() => W[k]?.destroy?.()));
       };
       const s = () => {
-        m('__agPrism,__agPrismInlineDiff,__agPrismHostI18n,__agPrismPeriodicStub,__agPrismPeriodicPicker,__agPrismCssMgr');
+        m('__agPrism,__agPrismInlineDiff,__agPrismHostI18n,__agPrismPeriodicStub,__agPrismPeriodicPicker,__agPrismProjectPartitions,__agPrismCssMgr');
         T(() => {
           const e = D.documentElement;
           j('data-ag-prism-host-i18n,data-ag-prism-periodic-picker,data-ag-pp-open,data-ag-cs-model-menu', (a) => e?.removeAttribute?.(a));
@@ -462,6 +464,7 @@ function createCh1Templates({
         j('__agPrismRepoBridge,__agPrismThoughtBridge,__agPrismUsageBridge,__agPrismOmniBridge', (k) => T(() => W[k]?.dispose?.()));
         [I, L, ...p('ag-prism-settings-v101-css,ag-prism-studio-v101-css,ag-prism-omni-css,ag-prism-inline-diff-css,ag-prism-periodic-stub-css,ag-prism-periodic-picker-css')].map((i) => T(() => g(i)?.remove()));
         j('__agPrismCssMgr,__agPrismPeriodicStub,__agPrismPeriodicStubFactory,__agPeriodicPendingOpen,__agPeriodicFullLoaded,__agPeriodicStubHash,__agPrismThought,__agPrismThoughtSettingsUi,__agPrismInlineDiff,__agPrismInlineDiffFactory,__agPrismInlineDiffResolve,__agPrismOmni,__agPrismContextMenu,__agPrism,__agClaudeStyle', (k) => { delete W[k]; delete G[k]; });
+        j(',Factory,Ui,Host', (x) => { const k = '__agPrismProjectPartitions' + x; delete W[k]; delete G[k]; });
       };
       const r = () => String(D.readyState || '');
       const h = () => T(() => {

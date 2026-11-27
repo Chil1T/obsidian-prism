@@ -1,6 +1,9 @@
 // Inject Obsidian Prism into Antigravity windows over CDP (--watch for daemon hot-reload).
 const fs = require('fs'), path = require('path');
 const cdpMod = require('./cdp');
+const ensurePartBind = (...a) => (typeof cdpMod.ensurePartitionsBinding === 'function' ? cdpMod.ensurePartitionsBinding(...a) : Promise.resolve(false));
+const rmPartBind = (...a) => (typeof cdpMod.removePartitionsBinding === 'function' ? cdpMod.removePartitionsBinding(...a) : Promise.resolve());
+const handlePartitionsBindingCall = (...a) => (typeof cdpMod.handlePartitionsBindingCall === 'function' ? cdpMod.handlePartitionsBindingCall(...a) : Promise.resolve(false));
 const {
   PORT_FILE,
   PID_FILE,
@@ -10,11 +13,14 @@ const {
   OMNI_BINDING,
   SIDEBAR_BINDING,
   INLINE_DIFF_BINDING,
+  PARTITIONS_BINDING,
   validateConfigEntry,
   reconcileConfigAliases,
   isEligibleTarget,
   readConfig,
   writeConfig,
+  readProjectPartitionsData,
+  writeProjectPartitionsData,
   readPidFromLockFile,
   isExpectedDaemonProcess,
   readPort,
@@ -52,7 +58,9 @@ const INLINE_DIFF_MAX_URI_LENGTH = 2048;
 
 // 全部运行期下沉通道（Ch13~Ch16）与清理句柄均直接从 cdp.CHANNEL_REGISTRY 唯一真相源派生
 function getRuntimeRegistryChannels(mod) {
-  return Array.isArray(mod?.CHANNEL_REGISTRY) ? mod.CHANNEL_REGISTRY.filter((ch) => ch && ch.tier === 'runtime') : [];
+  return Array.isArray(mod?.CHANNEL_REGISTRY)
+    ? mod.CHANNEL_REGISTRY.filter((ch) => ch && (ch.tier === 'runtime' || ch.id === 'projectPartitions'))
+    : [];
 }
 function buildRuntimeChannelBundleMap(mod, cfg, cacheOpts = null) {
   return getRuntimeRegistryChannels(mod).map((ch) => {
@@ -220,6 +228,8 @@ function createFastConfigRefreshBroadcaster({
   getSidebarServiceReady = () => false,
   sidebarBinding = SIDEBAR_BINDING,
   ensureSidebarBinding = async () => false,
+  partitionsBinding = PARTITIONS_BINDING,
+  ensurePartitionsBinding = async () => false,
   getRuntimeChannelCdp = undefined,
   onExpressionsUpdated = null,
 } = {}) {
@@ -298,6 +308,7 @@ function createFastConfigRefreshBroadcaster({
       if (!entry || entry.session.closed) continue;
       try {
         await ensureSidebarBinding(entry.session, entry, cfgNow);
+        await ensurePartitionsBinding(entry.session, entry, cfgNow);
         const hostI18nOffNow = cfgNow?.hostLocalization === 'off';
         const isoPauseRes = hostI18nOffNow ? await syncIsolatedHostI18nOnEntry(entry, true) : null;
         const entryAck = perEntryAck.get(entry) || 0;
@@ -378,10 +389,12 @@ function createFastConfigRefreshBroadcaster({
                 await entry.session.send('Runtime.removeBinding', { name: INLINE_DIFF_BINDING }).catch(() => {});
                 entry.inlineDiffBindingAdded = false;
               }
+              await rmPartBind(entry.session, entry, partitionsBinding);
               entry.inlineDiffMounted = false;
               entry.inlineDiffSkipped = true;
               continue;
             }
+            await ensurePartitionsBinding(entry.session, entry, cfgNow);
             if (omniEnabled && omniExpr) await entry.session.evaluate(omniExpr).catch(() => {});
             if (sidebarEnabled && sidebarExpr) await entry.session.evaluate(sidebarExpr).catch(() => {});
             if (hostI18nExpr && hostI18nEnabled) await entry.session.evaluate(hostI18nExpr).catch(() => {});
@@ -720,6 +733,8 @@ async function watch() {
     return pending;
   }
 
+  const ensurePartitionsBinding = (session, entry, cfg = readConfig()) => ensurePartBind(session, entry, cfg, PARTITIONS_BINDING);
+
   const broadcastFastConfigRefresh = createFastConfigRefreshBroadcaster({
     attached,
     readConfig,
@@ -749,6 +764,8 @@ async function watch() {
     getSidebarServiceReady: () => Boolean(sidebarService),
     sidebarBinding: SIDEBAR_BINDING,
     ensureSidebarBinding,
+    partitionsBinding: PARTITIONS_BINDING,
+    ensurePartitionsBinding,
     getRuntimeChannelCdp: () => activeRuntimeCdp,
     onExpressionsUpdated: (next) => {
       expr = next.expr;
@@ -784,6 +801,7 @@ async function watch() {
         await entry.session.send('Runtime.removeBinding', { name: INLINE_DIFF_BINDING }).catch(() => {});
         entry.inlineDiffBindingAdded = false;
       }
+      await rmPartBind(entry.session, entry, PARTITIONS_BINDING);
       entry.thoughtMounted = false;
       entry.inlineDiffMounted = false;
       entry.inlineDiffSkipped = true;
@@ -882,6 +900,7 @@ async function watch() {
       await entry.session.evaluate(MASCOT_REMOVE_EXPRESSION).catch(() => {});
       entry.mascotMounted = false;
     }
+    await ensurePartitionsBinding(entry.session, entry, cfgNow);
     const rtItems = buildRuntimeChannelBundleMap(activeRuntimeCdp, cfgNow, PERIODIC_PICKER_CACHE_OPTS);
     await syncRuntimeChannelScriptsOnEntry(entry, rtItems);
     await evalRuntimeChannelsOnEntry(entry, rtItems);
@@ -912,6 +931,10 @@ async function watch() {
         periodicPickerMounted: false,
         mascotScriptId: null,
         mascotMounted: false,
+        projectPartitionsScriptId: null,
+        projectPartitionsMounted: false,
+        projectPartitionsBindingAdded: false,
+        projectPartitionsBindingPending: null,
         docGen: 0,
         mainFrameId: null,
         hasFrameTree: false,
@@ -1097,6 +1120,10 @@ async function watch() {
               })
               .catch(() => {});
           }
+          return;
+        }
+        if (PARTITIONS_BINDING && name === PARTITIONS_BINDING) {
+          await handlePartitionsBindingCall({ session, entry, payload, executionContextId, attached, isTrustedMainFrameContext, readConfig, readProjectPartitionsData, writeProjectPartitionsData });
           return;
         }
         if (name !== SETTING_BINDING && name !== LEGACY_SETTING_BINDING) return;

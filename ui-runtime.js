@@ -81,7 +81,7 @@ const isElementLike = (n) => !!(n && (n.nodeType === 1 || (n.nodeType === undefi
 const safeParseJsonObj = (raw) => { if (!raw || typeof raw !== 'string') return null; try { const p = JSON.parse(raw); return p && typeof p === 'object' && !isA(p) ? p : null; } catch { return null; } };
 
 const BOOL_ALIAS_PAIRS = [['homeRipple', 'ripple'], ['composerRestyle', 'composer'], ['sidebarRestyle', 'sidebar']];
-const ONOFF_STR_KEYS = 'telemetryModule|effortSliderModule|effortMemory|periodicModelPicker|omniModule|sidebarStudio|autoUpdate|sidebarNavFold'.split('|');
+const ONOFF_STR_KEYS = 'telemetryModule|effortSliderModule|effortMemory|periodicModelPicker|omniModule|sidebarStudio|autoUpdate|sidebarNavFold|projectPartitions'.split('|');
 const BF_KEYS = 'sidebarCompact|codeLigatures|autoArchiveOnExit|ignoreReducedMotion'.split('|'), BT_KEYS = ['homeGlow', 'smoothCaret', 'contextMenu'];
 const PICK_SETS = new Map();
 const pickOf = (v, s, d) => { let set = PICK_SETS.get(s); if (!set) PICK_SETS.set(s, set = new Set(s.split('|'))); return set.has(v) ? v : d; };
@@ -110,7 +110,7 @@ out.placeholderStyle = out.promptStyle = (out.placeholderStyle ?? out.promptStyl
 out.mascot = out.mascot === 'off' || out.mascot === false ? 'off' : /^(minis|quad(-minis)?|r:[ckdw0-4,+m]+)$/.test(out.mascot) ? out.mascot : 'crab';
 out.convRipple = normConvRipple(out.convRipple);
 for (const k of BF_KEYS) out[k] = out[k] === true || out[k] === 'on';
-for (const k of ['sidebarNavFold', 'sidebarStudio', 'autoUpdate']) out[k] = out[k] === 'on' || out[k] === true ? 'on' : 'off';
+for (const k of ['sidebarNavFold', 'projectPartitions', 'sidebarStudio', 'autoUpdate']) out[k] = out[k] === 'on' || out[k] === true ? 'on' : 'off';
 for (const k of BT_KEYS) out[k] = out[k] === undefined ? true : out[k] !== false && out[k] !== 'off';
 for (const k of ['chatFontCustom', 'codeFontCustom']) out[k] = typeof out[k] === 'string' ? out[k].replace(/[\0\r\n]/g, '').slice(0, 160) : '';
 for (const k of ['omniModule', 'effortMemory', 'periodicModelPicker']) out[k] = out[k] === 'off' || out[k] === false ? 'off' : 'on';
@@ -1328,9 +1328,9 @@ syncTimer = null; syncQueued = false;
 };
 
 const OWN_PLUGIN_SELECTOR =
-'.ag-cs-home-panel-seat,.ag-cs-ripple-host,.ag-cs-conv-aura-host,.ag-cs-crab,.ag-cs-prism-rim-cv,.ag-cs-model-glyph,[data-testid="orchestrator-effort-bar"],.ag-cs-thinking-spark,.ag-cs-smooth-caret,.ag-cs-liftoff-veil,.ag-cs-sidebar-glide-pill,.ag-cs-pill-glide,.ag-cs-stream-chunk,.ag-cs-thought-chunk,.ag-anim-icon,.ag-prism-omni-menu,.ag-prism-omni-pane,.ag-cs-ctx-menu,.ag-cs-ctx-toast,[data-ag-prism-omni-owned="1"],[data-ag-prism-sidebar-owned="1"],.ces-ag-section, .ces-set, #ag-codex-effort-slider-styles,#ag-pulse-status-bar,[data-ag-prism-pulse-bar],[data-ag-prism-fallback="1"],#context-card,#' +
+'.ag-cs-home-panel-seat,.ag-cs-ripple-host,.ag-cs-conv-aura-host,.ag-cs-crab,.ag-cs-prism-rim-cv,.ag-cs-model-glyph,[data-testid="orchestrator-effort-bar"],.ag-cs-smooth-caret,.ag-cs-pill-glide,.ag-cs-stream-chunk,.ag-cs-thought-chunk,.ag-anim-icon,.ag-prism-omni-menu,.ag-prism-omni-pane,[data-ag-prism-omni-owned="1"],[data-ag-prism-sidebar-owned="1"],.ces-ag-section, .ces-set, #ag-codex-effort-slider-styles,#ag-pulse-status-bar,[data-ag-prism-pulse-bar],[data-ag-prism-fallback="1"],#context-card,#' +
 SETTINGS_SEC_ID +
-',#ag-prism-css,#ag-prism-omni-css,#ag-prism-sidebar-studio-css,#ag-prism-periodic-picker-root,#ag-prism-periodic-picker-css,.ag-pp-hold-ring,.ag-pp-mini-keycap,#ag-claude-style-css,#ag-prism-motion-off-css,#ag-prism-host-alert-css,' +
+',#ag-prism-css,#ag-prism-omni-css,#ag-prism-sidebar-studio-css,#ag-prism-periodic-picker-root,#ag-prism-periodic-picker-css,.ag-pp-hold-ring,.ag-pp-mini-keycap,#ag-claude-style-css,' +
 EXT_ZH_UI_SEL;
 
   const isOwnPluginNode = (t, selfOnly) => {
@@ -2287,7 +2287,7 @@ modelInfo: latestPrimaryModelInfo ? { ...latestPrimaryModelInfo } : null, perf: 
 suppressEntryMotion(ms) { streamChoreoCtl.suppressEntryMotion?.(ms); },
 destroy() {
 teardownCore();
-for (const k of 'Telemetry,EffortSlider,Thought,Omni,Sidebar,PeriodicStub,PeriodicPicker,HostI18n,Wallpaper,Suggester'.split(',')) safe(() => wMod('__agPrism' + k)?.destroy?.());
+for (const k of 'Telemetry,EffortSlider,Thought,Omni,Sidebar,PeriodicStub,PeriodicPicker,ProjectPartitions,HostI18n,Wallpaper,Suggester'.split(',')) safe(() => wMod('__agPrism' + k)?.destroy?.());
 for (const k of 'PrismPeriodicStub,PrismPeriodicStubFactory,PeriodicPendingOpen,PeriodicFullLoaded,PeriodicStubHash'.split(',')) { safe(() => delete W['__ag' + k]); safe(() => delete GT['__ag' + k]); }
 safe(() => W.__agPrismInlineDiff?.unbindHooks?.());
 safe(() => (ownedCtxMenu || getCtx())?.destroy?.());
@@ -2302,12 +2302,12 @@ for (const s of 'placeholder|orch-active|model-overlay|aux-dual|overview-shell|p
 for (const a of 'data-has-sep,data-pv-warn,data-ag-sp-running'.split(',')) raAll(`[${a}]`, a);
 safe(() => { getDomBus()?.dispose?.(D, W); getMascotHop()?.dispose?.(D); for (const k of ['__agPrismFontCustomizer', '__agPrismReducedMotionGuard']) wMod(k)?.dispose?.(D); });
 const pfx = (p, s) => s.split(',').map((x) => p + x).join(',');
-rmAll('#ag-prism-overlay-portal,#ag-prism-mascot-hop-style,#ag-prism-periodic-picker-css,#ag-prism-periodic-picker-root,' + pfx('#ag-prism-', 'custom-fonts-style,settings-ext-beta4-css,settings-v101-css,studio-v101-css,omni-css,motion-off-css,periodic-stub-css,wallpaper-root,wallpaper-css,suggester-css') + ',.ag-prism-mascot-hop-layer,.ag-pp-hold-ring,.ag-pp-mini-keycap,.ag-omni-dock,.ag-omni-menu,.ag-prism-omni-menu,.ag-prism-omni-pane,.ag-cs-ctx-menu,.ag-cs-ctx-toast,.ag-cs-sb-more-wrap,[data-ag-prism-omni-owned="1"],.ag-cs-code-fold-btn,.ag-cs-nav-outline-popover,.ag-cs-panel-row-glyph,.ag-cs-orbital-backdrop,' + pfx('.ag-cs-', 'home-panel,home-panel-seat,liftoff-veil,sidebar-glide-pill,pill-glide,conv-aura-host,conv-glow,prism-rim-cv,model-glyph,thinking-spark,perf-backdrop') + ',[data-testid="orchestrator-effort-bar"],.ag-v2-habitat-prop,#' + SETTINGS_SEC_ID);
+rmAll('#ag-prism-overlay-portal,#ag-prism-mascot-hop-style,#ag-prism-periodic-picker-css,#ag-prism-periodic-picker-root,' + pfx('#ag-prism-', 'custom-fonts-style,settings-ext-beta4-css,settings-v101-css,studio-v101-css,omni-css,motion-off-css,periodic-stub-css,project-partitions-css,part-hide-css,wallpaper-root,wallpaper-css,suggester-css') + ',[data-ag-prism-partitions="1"],.ag-prism-mascot-hop-layer,.ag-pp-hold-ring,.ag-pp-mini-keycap,.ag-omni-dock,.ag-omni-menu,.ag-prism-omni-menu,.ag-prism-omni-pane,.ag-cs-ctx-menu,.ag-cs-ctx-toast,.ag-cs-sb-more-wrap,[data-ag-prism-omni-owned="1"],.ag-cs-code-fold-btn,.ag-cs-nav-outline-popover,.ag-cs-panel-row-glyph,.ag-cs-orbital-backdrop,' + pfx('.ag-cs-', 'home-panel,home-panel-seat,liftoff-veil,sidebar-glide-pill,pill-glide,conv-aura-host,conv-glow,prism-rim-cv,model-glyph,thinking-spark,perf-backdrop') + ',[data-testid="orchestrator-effort-bar"],.ag-v2-habitat-prop,#' + SETTINGS_SEC_ID);
 const html = de();
 if (html) {
 ra(html, 'data-ag-perf-busy');
 for (const s of 'style|theme|palette|light-preset|motion|ignore-rm|perf-mode|stream-active|target-fps|telemetry|effort-slider|thought-translate|home|composer|logo-ink|sidebar|sidebar-compact|sidebar-collapsed|sb-fold|has-crab|model-menu|takeover-open|lang|cjk|accent|corners|chat-font|code-font|ligatures|ambient|win-blur|scroll-bottom|resizing|mascot-drag|conv-ripple'.split('|')) ra(html, 'data-ag-cs-' + s);
-for (const s of '|thought-view|omni|link-target|sidebar-studio|sidebar-host-sync'.split('|')) ra(html, s ? 'data-ag-prism-' + s : 'data-ag-prism');
+for (const s of '|thought-view|omni|link-target|sidebar-studio|sidebar-host-sync|project-partitions'.split('|')) ra(html, s ? 'data-ag-prism-' + s : 'data-ag-prism');
 rp(html, '--ag-spring-sidebar-ease'); rp(html, '--ag-spring-sidebar-dur');
 }
 },

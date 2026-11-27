@@ -313,7 +313,7 @@
     return row;
   }
 
-  function ensureSwitchRow(rootEl, doc, key, anchorKey, onPick) {
+  function ensureSwitchRow(rootEl, doc, key, anchorKey, onPick, options = [[true, 'on'], [false, 'off']]) {
     let row = qs(rootEl, `[data-ag-cs-row="${key}"]`);
     if (row) return row;
     const anchorRow = qs(rootEl, `[data-ag-cs-row="${anchorKey}"]`);
@@ -337,7 +337,7 @@
     grp.appendChild(thumb);
 
     const BTN_CLS = 'ag-cs-seg-btn data-[pressed]:bg-secondary data-[pressed]:text-foreground';
-    for (const [val, roleTag] of [[true, 'on'], [false, 'off']]) {
+    for (const [val, roleTag] of options) {
       const btn = mk(doc, 'button', BTN_CLS);
       btn.type = 'button'; sa(btn, 'type', 'button');
       sa(btn, 'data-ag-cs-ext-key', key); sa(btn, 'data-ag-cs-ext-val', JSON.stringify(val)); sa(btn, 'data-ag-cs-ext-role', roleTag);
@@ -369,6 +369,13 @@
       if (typeof ctx.saveSetting === 'function') ctx.saveSetting('homeGlow', val);
       if (typeof row.__extResync === 'function') row.__extResync();
     });
+  }
+
+  function ensureProjectPartitionsRow(rootEl, doc, ctx) {
+    return ensureSwitchRow(rootEl, doc, 'projectPartitions', 'sidebarNavFold', (val, row) => {
+      if (typeof ctx.saveSetting === 'function') ctx.saveSetting('projectPartitions', val);
+      if (typeof row.__extResync === 'function') row.__extResync();
+    }, [['on', 'on'], ['off', 'off']]);
   }
 
   function syncSwitchRow(row, key, val, dimmed, titleText, descText, extUi, resyncNow) {
@@ -580,8 +587,10 @@
     const codeFontCustom = String(readLiveCfg(ctx, 'codeFontCustom', '') || '');
     const telOff = readLiveCfg(ctx, 'telemetryModule', 'auto') === 'off';
     const telQuotaMode = readLiveCfg(ctx, 'telemetryQuotaMode', 'compact') === 'both' ? 'both' : 'compact';
+    const rawPart = readLiveCfg(ctx, 'projectPartitions', 'off');
+    const partOn = rawPart === 'on' || rawPart === true;
 
-    const extSig = `${lang}|${perfMode}|${ignoreRm ? 1 : 0}|${motionOff ? 1 : 0}|${homeLayoutOff ? 1 : 0}|${homeGlow ? 1 : 0}|${chatFont}|${chatFontCustom}|${codeFont}|${codeFontCustom}|${telOff ? 1 : 0}|${telQuotaMode}`;
+    const extSig = `${lang}|${perfMode}|${ignoreRm ? 1 : 0}|${motionOff ? 1 : 0}|${homeLayoutOff ? 1 : 0}|${homeGlow ? 1 : 0}|${chatFont}|${chatFontCustom}|${codeFont}|${codeFontCustom}|${telOff ? 1 : 0}|${telQuotaMode}|${partOn ? 1 : 0}`;
     if (
       rootEl.__extBeta4Sig === extSig &&
       qs(rootEl, '[data-ag-cs-row="performanceMode"]') &&
@@ -589,7 +598,8 @@
       (!qs(rootEl, '[data-ag-cs-row="homeRipple"]') || qs(rootEl, '[data-ag-cs-row="homeGlow"]')) &&
       qs(rootEl, '[data-ag-cs-row="chatFont"]') &&
       qs(rootEl, 'button[data-ag-cs-code-custom="1"]') &&
-      (!qs(rootEl, '[data-ag-cs-row="telemetryModule"]') || qs(rootEl, '[data-ag-cs-row="telemetryQuotaMode"]'))
+      (!qs(rootEl, '[data-ag-cs-row="telemetryModule"]') || qs(rootEl, '[data-ag-cs-row="telemetryQuotaMode"]')) &&
+      (!qs(rootEl, '[data-ag-cs-row="sidebarNavFold"]') || qs(rootEl, '[data-ag-cs-row="projectPartitions"]'))
     ) {
       return true;
     }
@@ -643,6 +653,16 @@
         motionOff || homeLayoutOff,
         extUi.setHomeGlowTitle || 'Home Horizon Glow',
         extUi.setHomeGlowDesc || '',
+        extUi,
+        resyncNow
+      );
+      syncSwitchRow(
+        ensureProjectPartitionsRow(rootEl, doc, ctx),
+        'projectPartitions',
+        partOn,
+        false,
+        extUi.setProjectPartitionsLabel || 'Project Partitions',
+        extUi.setProjectPartitionsDesc || '',
         extUi,
         resyncNow
       );

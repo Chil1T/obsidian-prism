@@ -10,6 +10,7 @@ import {
   SIDEBAR_BINDING,
   WALLPAPER_BINDING,
   SUGGESTER_BINDING,
+  PARTITIONS_BINDING,
   WALLPAPER_MAX_PAYLOAD_BYTES,
   WALLPAPER_ALLOWED_ACTIONS,
   SUGGESTER_MAX_PAYLOAD_BYTES,
@@ -21,6 +22,7 @@ import { INLINE_DIFF_MAX_PAYLOAD_BYTES, INLINE_DIFF_MAX_URI_LENGTH } from './inl
 import { readSafeInlineDiff } from './inline-diff-service.mjs';
 import { deliverPeriodicPickerFullToEntry } from './channel-sync-engine.mjs';
 import { buildMetricsBindingReply } from './metrics-delta.mjs';
+import { handleProjectPartitionsBinding } from './project-partitions-rpc.mjs';
 
 // 统一 Fire-and-Forget 回调派发：强制 returnByValue:false / awaitPromise:false 且表达式末尾 ;void 0，防 V8 Inspector objectId 泄漏
 function sendFireAndForgetEval(session, expr, executionContextId = null, timeoutMs = 0, { rethrow = false } = {}) {
@@ -698,6 +700,9 @@ async function handleSuggesterBinding(rpc, entry, payload, executionContextId) {
   return result;
 }
 
+const PARTITIONS_RPC_HELPERS = Object.freeze({ isTrustedHostContext, resolveTrustedBroadcastContextId, sendFireAndForgetEval });
+const dispatchProjectPartitionsBinding = (rpc, entry, payload, ctxId) => handleProjectPartitionsBinding(rpc, entry, payload, ctxId, PARTITIONS_RPC_HELPERS);
+
 const STATIC_BINDING_TABLE = Object.freeze({
   [REPO_BINDING]: handleRepoBinding,
   [METRICS_BINDING]: handleMetricsBinding,
@@ -708,6 +713,7 @@ const STATIC_BINDING_TABLE = Object.freeze({
   [SIDEBAR_BINDING]: handleSidebarBinding,
   [WALLPAPER_BINDING]: handleWallpaperBinding,
   [SUGGESTER_BINDING]: handleSuggesterBinding,
+  [PARTITIONS_BINDING]: dispatchProjectPartitionsBinding,
 });
 
 export class RpcDispatcher {
@@ -769,6 +775,9 @@ export class RpcDispatcher {
     const activeSuggesterBinding = cdp?.SUGGESTER_BINDING || SUGGESTER_BINDING;
     if (name === activeSuggesterBinding) {
       return handleSuggesterBinding(this, entry, payload, executionContextId);
+    }
+    if (name === (cdp?.PARTITIONS_BINDING || PARTITIONS_BINDING)) {
+      return dispatchProjectPartitionsBinding(this, entry, payload, executionContextId);
     }
     const handler = STATIC_BINDING_TABLE[name];
     if (typeof handler === 'function') {

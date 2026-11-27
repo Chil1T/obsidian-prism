@@ -192,6 +192,7 @@ test('CHANNEL_REGISTRY contract covers all 16 delayed/on-demand channels with va
     'effortSlider',
     'workbenchEnhancer',
     'contextMenu',
+    'projectPartitions',
   ];
 
   const descriptors = cdp.getChannelDescriptors();
@@ -268,6 +269,8 @@ test('CHANNEL_REGISTRY contract covers all 16 delayed/on-demand channels with va
   assert.equal(cdp.findChannel('sidebar').shouldEnable(gatedOffCfg), false);
   assert.equal(cdp.findChannel('swarmI18n').shouldEnable(gatedOffCfg), false);
   assert.equal(cdp.findChannel('swarmI18n').build(gatedOffCfg), '');
+  assert.equal(cdp.findChannel('projectPartitions').shouldEnable(gatedOffCfg), false);
+  assert.equal(cdp.findChannel('projectPartitions').build(gatedOffCfg), '');
   assert.equal(cdp.findChannel('thought').shouldEnable(gatedOffCfg), false);
   assert.equal(cdp.findChannel('thought').build(gatedOffCfg), '');
   assert.equal(cdp.findChannel('periodicPicker').shouldEnable(gatedOffCfg), false);
@@ -287,7 +290,7 @@ test('CHANNEL_REGISTRY contract covers all 16 delayed/on-demand channels with va
 
   const offReport = cdp.getChannelBudgetReport(gatedOffCfg, { noDiskCache: true });
   assert.equal(offReport.ok, true);
-  for (const id of ['omni', 'sidebar', 'swarmI18n', 'thought', 'periodicPicker', 'mascot', 'homeStudio', 'telemetry', 'effortSlider', 'workbenchEnhancer', 'contextMenu']) {
+  for (const id of ['omni', 'sidebar', 'swarmI18n', 'thought', 'periodicPicker', 'mascot', 'homeStudio', 'telemetry', 'effortSlider', 'workbenchEnhancer', 'contextMenu', 'projectPartitions']) {
     const row = offReport.channels.find((c) => c.id === id);
     assert.equal(row.enabled, false);
     assert.equal(row.bytes, 0);
@@ -513,10 +516,10 @@ test('Phase 4D: settings-panel schema aligns with schema.cjs, cdp.js prunes 8 zo
   assert.equal(rootAttrs.get('data-theme'), 'dark', 'REMOVE_EXPRESSION must NEVER delete host documentElement[data-theme]');
 });
 
-test('Native CdpClient.cs & CdpClient.swift align 100% bidirectionally with all 55 keys in src/config/schema.cjs', () => {
+test('Native CdpClient.cs & CdpClient.swift align 100% bidirectionally with all 56 keys in src/config/schema.cjs', () => {
   const schema = cdp.CONFIG_SCHEMA;
   const allSchemaKeys = Object.keys(schema).sort();
-  assert.equal(allSchemaKeys.length, 55, 'CONFIG_SCHEMA expected 55 keys');
+  assert.equal(allSchemaKeys.length, 56, 'CONFIG_SCHEMA expected 56 keys');
 
   const canonicalLangs = [...schema.language.values];
   const autoOnOff = ['auto', 'on', 'off'];
