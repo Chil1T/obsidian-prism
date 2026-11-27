@@ -1285,3 +1285,76 @@ test('macOS Cold-start event-driven Launch Guard (default-on with opt-out): Laun
     'CdpClient.swift buildThoughtExpression must safely prepend optional tool-step-verbs.js before thought-client.js'
   );
 });
+
+test('macOS Watcher process queries route all stdout captures through CdpHelper.readProcessOutput with autoreleasepool + defer pipe close', () => {
+  const cdpSwift = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'macos', 'Common', 'CdpClient.swift'), 'utf8');
+  const launchGuardSwift = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'macos', 'Common', 'LaunchGuard.swift'), 'utf8');
+  const watcherSwift = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'macos', 'Watcher', 'main.swift'), 'utf8');
+
+  // 1) Shared readProcessOutput helper drains stdout before waitUntilExit and closes both pipe ends inside autoreleasepool
+  const helperMatch = cdpSwift.match(/static func readProcessOutput\(_ process: Process\) throws -> Data \{[\s\S]*?\n    \}/);
+  assert.ok(helperMatch, 'CdpClient.swift must define static func readProcessOutput(_ process: Process) throws -> Data');
+  const helperBody = helperMatch[0];
+  assert.ok(helperBody.includes('try autoreleasepool {'), 'readProcessOutput must wrap Pipe/FileHandle lifecycle in autoreleasepool');
+  assert.ok(helperBody.includes('try? output.fileHandleForReading.close()'), 'readProcessOutput must close reading pipe handle in defer');
+  assert.ok(helperBody.includes('try? output.fileHandleForWriting.close()'), 'readProcessOutput must close writing pipe handle in defer');
+  assert.ok(helperBody.includes('process.standardError = FileHandle.nullDevice'), 'readProcessOutput must redirect unused stderr to FileHandle.nullDevice');
+  const readIdx = helperBody.indexOf('readDataToEndOfFile()');
+  const waitIdx = helperBody.indexOf('process.waitUntilExit()');
+  assert.ok(readIdx > 0 && waitIdx > readIdx, 'readProcessOutput must drain stdout before process.waitUntilExit()');
+
+  // 2) Zero stray Pipe() allocations outside readProcessOutput across CdpClient, LaunchGuard, and Watcher
+  assert.equal((cdpSwift.match(/\bPipe\(\)/g) || []).length, 1, 'CdpClient.swift should only allocate Pipe() inside readProcessOutput');
+  assert.equal((launchGuardSwift.match(/\bPipe\(\)/g) || []).length, 0, 'LaunchGuard.swift must have 0 raw Pipe() allocations');
+  assert.equal((watcherSwift.match(/\bPipe\(\)/g) || []).length, 0, 'Watcher/main.swift must have 0 raw Pipe() allocations');
+
+  // 3) All 8 subprocess output queries route through CdpHelper.readProcessOutput
+  assert.equal((cdpSwift.match(/CdpHelper\.readProcessOutput\(/g) || []).length, 5, 'CdpClient.swift must route all 5 queries through CdpHelper.readProcessOutput');
+  assert.equal((launchGuardSwift.match(/CdpHelper\.readProcessOutput\(/g) || []).length, 2, 'LaunchGuard.swift must route both ps queries through CdpHelper.readProcessOutput');
+  assert.equal((watcherSwift.match(/CdpHelper\.readProcessOutput\(/g) || []).length, 1, 'Watcher/main.swift must route ps query through CdpHelper.readProcessOutput');
+});
+
+test('macOS Watcher process queries release their pipe descriptors', { skip: process.platform !== 'darwin' }, (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-pipe-test-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const common = path.join(ROOT_DIR, 'installer/macos/Common');
+  const sources = ['MiniJson', 'CdpClient', 'LaunchGuard', 'RuntimeChannels']
+    .map(name => path.join(common, name + '.swift'));
+  const driver = path.join(dir, 'main.swift');
+  const binary = path.join(dir, 'probe');
+  fs.writeFileSync(driver, `
+import Foundation
+import Darwin
+
+func pipeCount() throws -> Int {
+    let descriptors = try FileManager.default.contentsOfDirectory(atPath: "/dev/fd")
+    var info = stat()
+    return descriptors.compactMap(Int32.init).filter { fd in
+        fstat(fd, &info) == 0 && (info.st_mode & S_IFMT) == S_IFIFO
+    }.count
+}
+
+func query() {
+    let missing = Process()
+    missing.executableURL = URL(fileURLWithPath: "/dev/null/missing")
+    precondition((try? CdpHelper.readProcessOutput(missing)) == nil)
+    _ = CdpHelper.isExpectedDaemonProcess(pid: getpid())
+    _ = CdpHelper.listRunningAppFamilyPids(appPath: "/Applications/Antigravity.app")
+}
+
+let seq = Process()
+seq.executableURL = URL(fileURLWithPath: "/usr/bin/seq")
+seq.arguments = ["1", "20000"]
+let output = try CdpHelper.readProcessOutput(seq)
+precondition(output.count > 65536 && seq.terminationStatus == 0)
+
+query() // Warm up Foundation before measuring steady-state usage.
+let before = try pipeCount()
+for _ in 0..<8 { query() }
+print(before, try pipeCount())
+`);
+  execFileSync('xcrun', ['swiftc', '-swift-version', '5', ...sources, driver, '-o', binary]);
+  const counts = execFileSync(binary, { encoding: 'utf8', timeout: 15000 }).trim();
+  const [before, after] = counts.split(/\s+/).map(Number);
+  assert.equal(after, before, 'open pipe descriptors before and after repeated queries: ' + counts);
+});
