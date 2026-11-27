@@ -2208,7 +2208,7 @@
       for (const e of allActiveEnts()) {
         if (e.stackedOn || e.dragging || e.ballisticActive) continue;
         if ((e.y || 0) < -3 || e.leap) continue;
-        if (isMiniEnt(e) && e.act && (e.act.type === 'ride' || e.act.type === 'leap')) continue;
+        if (isMiniEnt(e) && e.act && (e.act.type === 'ride' || e.act.type === 'leap' || e.act.type === 'chase' || e.act.type === 'scatter')) continue;
         groundList.push({
           id: e.id,
           ent: e,
