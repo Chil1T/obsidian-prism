@@ -202,12 +202,13 @@
       else clearHighlightFade();
     }
 
+    const hasNonWs = (s, i, e) => { for (; i < e; i++) { const c = s.charCodeAt(i); if (c > 32 && c !== 160 && c !== 8203 && c !== 65279) return true; } return false; };
     const enqueueFadeRange = (tn, sOff, eOff, now) => {
       if (!tn || eOff <= sOff) return false;
       const d = docOf(), buckets = d && !d.hidden ? getHlBuckets() : null;
       if (!buckets) return false;
       const raw = tn.data ?? tn.nodeValue ?? '';
-      if (eOff > raw.length || !/\S/.test(raw.slice(sOff, eOff))) return false;
+      if (eOff > raw.length || !hasNonWs(raw, sOff, eOff)) return false;
       const prev = fadeItems[fadeItems.length - 1];
       if (prev && prev.n === tn && prev.e === sOff && now - prev.t <= 64 && T(() => (prev.r.setEnd(tn, eOff), prev.e = eOff, true))) return true;
       if (fadeItems.length >= MAX_FADE_RANGES) { const old = fadeItems.shift(); if (old) dropBucketItem(old); }
@@ -941,23 +942,25 @@ states.push([r, run]);
     const onStreamMutations = (mutations) => {
       if (isDestroyed() || streamMutating || !canStreamMotion()) return;
       const now = nowOf();
-      let newBlocks = 0;
+      let newBlocks = 0, lEl = null, bEx, bTb, bPr, bIn;
 
       for (const m of mutations) {
         if (!m || isThoughtMutationRecord(m)) continue;
         const target = m.target;
         if (!target || isThoughtIsolatedNode(target)) continue;
         const baseEl = isEl(target) ? target : peOf(target);
-        if (
-          !baseEl ||
-          getBus()?.isSkipped?.(baseEl) ||
-          closestOf(
-            baseEl,
-            '.ag-prism-thought-overlay, .ag-cs-smooth-caret, .ag-cs-crab, .ag-cs-conv-aura-host, [data-testid="agent-input-box"], script, style'
-          )
-        ) {
-          continue;
+        if (!baseEl || getBus()?.isSkipped?.(baseEl)) continue;
+        if (baseEl !== lEl) {
+          lEl = baseEl;
+          bEx = closestOf(baseEl, '.ag-prism-thought-overlay,.ag-cs-smooth-caret,.ag-cs-crab,.ag-cs-conv-aura-host,[data-testid="agent-input-box"],script,style');
+          if (!bEx) {
+            bTb = findStreamingThoughtBody(baseEl);
+            bPr = bTb ? null : closestOf(baseEl, PROSE_SEL);
+            if (bTb && isManagedThoughtPanel(bTb)) bTb = null;
+            bIn = (bTb || bPr) && closestOf(baseEl, '.ag-cs-stream-chunk,.ag-cs-thought-chunk');
+          }
         }
+        if (bEx) continue;
 
         if (m.type === 'characterData') {
           if (target.nodeType !== 3) continue;
@@ -965,43 +968,35 @@ states.push([r, run]);
           const pLen = textLenMap.get(target);
           textLenMap.set(target, nLen);
           if (pLen !== undefined ? nLen <= pLen : nLen <= 0 || nLen > 28) continue;
-          const tb = findStreamingThoughtBody(baseEl);
-          if (tb) {
-            if (isManagedThoughtPanel(tb)) continue;
-          } else if (!closestOf(baseEl, PROSE_SEL)) continue;
-          if (pLen !== undefined) enqueueFadeRange(target, pLen, nLen, now);
-          else enqueueFadeRange(target, 0, nLen, now);
+          if (!bTb && !bPr) continue;
+          enqueueFadeRange(target, pLen ?? 0, nLen, now);
           continue;
         }
 
         if (m.type !== 'childList' || !m.addedNodes?.length) continue;
 
-        const inAnimBlock = !!(closestOf(baseEl, '.ag-cs-stream-chunk, .ag-cs-thought-chunk'));
-        const thoughtBody = findStreamingThoughtBody(target);
         const eachAdd = (fn) => { for (const a of m.addedNodes) { if (isThoughtIsolatedNode(a)) continue; if (a.nodeType === 3) fadeLeafTexts(a, now, 1); else if (isEl(a)) fn(a); } };
-        if (thoughtBody) {
-          if (isManagedThoughtPanel(thoughtBody)) continue;
+        if (bTb) {
           eachAdd((a) => {
-            if (inAnimBlock || INLINE_TAGS.has(tagOf(a))) fadeLeafTexts(a, now, 4);
+            if (bIn || INLINE_TAGS.has(tagOf(a))) fadeLeafTexts(a, now, 4);
             else if (!seenBlocks.has(a) && newBlocks < 4) { seenBlocks.add(a); newBlocks++; snapTextLens(a, 12); markStreamClass(a, 'ag-cs-thought-chunk', 290); }
           });
           continue;
         }
-        const proseRoot = closestOf(baseEl, PROSE_SEL);
-        if (!proseRoot) continue;
+        if (!bPr) continue;
         const markCode = (el, lim) => { scannedNodes.add(el); lastCodeAt = now; snapTextLens(el, lim); markStreamClass(el, 'ag-cs-code-scan', 240); };
-        const codeCtx = insideCodeOrTable(target, proseRoot);
+        const codeCtx = insideCodeOrTable(target, bPr);
         if (codeCtx) {
           if (TABLE_TAGS.has(tagOf(codeCtx))) {
             eachAdd((a) => {
-              const tr = tagOf(a) === 'TR' ? a : findRowAnc(a, proseRoot) || findRowAnc(codeCtx, proseRoot);
+              const tr = tagOf(a) === 'TR' ? a : findRowAnc(a, bPr) || findRowAnc(codeCtx, bPr);
               if (tr && !scannedNodes.has(tr) && now - lastCodeAt >= STREAM_BATCH_MS) markCode(tr, 12);
               else fadeLeafTexts(a, now, 3);
             });
           } else eachAdd((a) => {
             if (tagOf(a) === 'PRE' || clHas(a, 'code-block')) { if (!scannedNodes.has(a)) markCode(a, 16); return; }
             const ln = clHas(a, 'code-line') ? a : closestOf(a, '.code-line') || a;
-            if (ln && ln !== proseRoot && tagOf(ln) !== 'PRE' && !clHas(ln, 'code-block') && !scannedNodes.has(ln) && now - lastCodeAt >= STREAM_BATCH_MS) markCode(ln, 8);
+            if (ln && ln !== bPr && tagOf(ln) !== 'PRE' && !clHas(ln, 'code-block') && !scannedNodes.has(ln) && now - lastCodeAt >= STREAM_BATCH_MS) markCode(ln, 8);
             else fadeLeafTexts(a, now, 3);
           });
           continue;
@@ -1010,7 +1005,7 @@ states.push([r, run]);
           const tag = tagOf(a);
           if (tag === 'PRE' || tag === 'TABLE' || clHas(a, 'code-block') || clHas(a, 'md-table-host') || clHas(a, 'md-table-frame') || qs(a, 'pre, table, .code-block, .md-table-frame')) {
             if (!scannedNodes.has(a) && now - lastCodeAt >= STREAM_BATCH_MS) markCode(a, 16);
-          } else if (inAnimBlock || (INLINE_TAGS.has(tag) && baseEl !== proseRoot)) fadeLeafTexts(a, now, 4);
+          } else if (bIn || (INLINE_TAGS.has(tag) && baseEl !== bPr)) fadeLeafTexts(a, now, 4);
           else if (!seenBlocks.has(a) && newBlocks < 4) { seenBlocks.add(a); newBlocks++; snapTextLens(a, 12); markStreamClass(a, 'ag-cs-stream-chunk', 310); }
           else fadeLeafTexts(a, now, 4);
         });
