@@ -330,9 +330,11 @@
         tok = sampleTok(cv); cRect = null; updateCalm();
       }
 
+      const SL = 'data-ripple-sleep';
       function enterIdleSleep() {
+        if (st.sleeping && !st.rafId && !timer && !wanted && host?.getAttribute?.(SL) === '1') return;
         stopT(st); wanted = false; wSlp = 1; st.sleeping = true;
-        st.glow?.setPaused?.(true); sa(host, 'data-ripple-sleep', '1');
+        st.glow?.setPaused?.(true); sa(host, SL, '1');
       }
 
       const noRen = () => st.field?.mode === 'none' && (!st.glowCanvas || st.glow?.mode === 'none');
@@ -343,8 +345,8 @@
         if (st.mode === 'conv' && isCB()) return parkRipple();
         if (shrunk) layout();
         if (noRen()) return enterIdleSleep();
-        st.sleeping = false; ra(host, 'data-ripple-sleep');
         if (hP() || isStr()) { if ((!drawn || f1) && hasFSz()) drawFrame(nowOf()); return enterIdleSleep(); }
+        if (st.sleeping) { st.sleeping = false; ra(host, SL); }
         if (imm) { st.rafId = cAF(st.rafId); wanted = false; f1 = true; return drawFrame(nowOf()); }
         if (wanted) return;
         wanted = true; st.rafId = rAF(drawFrame);
@@ -372,7 +374,7 @@
         lastDraw = now;
         const dt = still ? 0 : wSlp ? M.min(16, M.max(0, now - prev)) : cl(now - prev, 0, 50);
         aT = aT === null ? now : aT + dt; wSlp = 0;
-        st.waves.advance(still ? 0 : cl(dt / 1000, 0, 0.05)); prev = now;
+        st.waves.advance(still ? 0 : cl(dt / 1000, 0, 0.05), 12); prev = now;
         const te = st.mode === 'home' && tideAt > 0 ? now - tideAt : -1, inT = !still && te >= 0 && te < 480;
         if (tideAt > 0 && !inT) { tideAt = 0; st.aura.reach = 0.47; st.aura.strength = 1.0; f1 = true; }
         else if (inT) { const e = 1 - M.pow(1 - cl(te / 480, 0, 1), 2.2); st.aura.reach = +(0.2 + 0.27 * e).toFixed(4); st.aura.strength = +(0.32 + 0.68 * e).toFixed(4); }

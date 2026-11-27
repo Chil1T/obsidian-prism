@@ -290,8 +290,9 @@ function createCh1Templates({
           if (o && (!W.__agPrism || Number(o.version) <= 2)) { if (isF(o.destroy)) o.destroy(); delete W.__agClaudeStyle; }
         });
       };
+      const cM = () => W.__agPrismCssMgr;
       const ensureCssMgr = () => {
-        const fk = __AG_INJ_CSSHASH__, prev = W.__agPrismCssMgr;
+        const fk = __AG_INJ_CSSHASH__, prev = cM();
         if (prev && prev.cssHash === fk && !prev._disposed) return prev;
         T(() => prev?.destroy?.());
         const css = getCss(), SC = W.CSSStyleSheet || (typeof CSSStyleSheet === 'function' ? CSSStyleSheet : null);
@@ -343,13 +344,13 @@ function createCh1Templates({
         if (!(D.head || D.documentElement)) return;
         cleanOld();
         ensureCssMgr().sync();
-        T(() => { if (W.__agPrismCssMgr?.mode !== 'adopted') W.__agPrism?.flattenCss?.(); });
+        T(() => { if (cM()?.mode !== 'adopted') W.__agPrism?.flattenCss?.(); });
       };
       const hookApiCssMgr = (api) => {
         if (!api || api.__agCssMgrHooked) return;
         api.__agCssMgrHooked = true;
-        const own = W.__agPrismCssMgr, d = isF(api.destroy) ? api.destroy.bind(api) : null;
-        if (d) api.destroy = (...a) => { T(() => { const m = W.__agPrismCssMgr; if (m && !m._hold && (!own || m === own)) m.destroy?.(); }); return d(...a); };
+        const own = cM(), d = isF(api.destroy) && api.destroy.bind(api);
+        if (d) api.destroy = (...a) => { T(() => { const m = cM(); if (m && !m._hold && (!own || m === own)) m.destroy?.(); }); return d(...a); };
       };
 
       const mkRpc = (bk, lim, onTo, onErr, disp) => {
@@ -428,6 +429,7 @@ function createCh1Templates({
       });
 
       const destroyMods = (extra) => {
+        T(() => W.__agPrismRippleWorker?.disposeAll?.());
         const ks = sp('__agPrismTelemetry,__agPrismEffortSlider,__agPrismThought,__agPrismOmni,__agPrismContextMenu');
         if (extra) ks.push(...sp(extra));
         for (const k of ks) T(() => W[k]?.destroy?.());
@@ -438,7 +440,7 @@ function createCh1Templates({
         T(() => {
           const de = D.documentElement;
           for (const a of sp('data-ag-prism-host-i18n,data-ag-prism-periodic-picker,data-ag-pp-open,data-ag-cs-model-menu')) de?.removeAttribute?.(a);
-          qa('[data-ag-cs-aux-dual],[data-ag-cs-model-overlay]').forEach((el) => { el.removeAttribute('data-ag-cs-aux-dual'); el.removeAttribute('data-ag-cs-model-overlay'); });
+          for (const a of sp('data-ag-cs-aux-dual,data-ag-cs-model-overlay')) qa('[' + a + ']').forEach((el) => el.removeAttribute(a));
           qa('[data-testid="prism-thought-ai-config"],[data-testid="prism-thought-general-config"],.ag-cs-ctx-menu,.ag-cs-ctx-toast,.ag-cs-inline-diff-box,.ag-cs-diff-ctx-menu,.ag-pp-hold-ring,.ag-pp-mini-keycap').forEach((el) => el.remove());
         });
         for (const k of sp('__agPrismRepoBridge,__agPrismThoughtBridge,__agPrismUsageBridge,__agPrismOmniBridge')) T(() => W[k]?.dispose?.());
@@ -487,16 +489,17 @@ function createCh1Templates({
             T(() => qa('[data-ag-prism-fallback="1"]').forEach((n) => n.remove()));
             __AG_INJ_BUNDLE__();
             autoPm();
-            const km = W.__agPrismCssMgr;
+            const km = cM();
             if (km) km._hold = 1;
-            try { if (isF(G.__agCsUiMain)) G.__agCsUiMain(bootCfg); } finally { if (km) km._hold = 0; }
-            if (W.__agPrismCssMgr?._disposed || (D.head && !W.__agPrismCssMgr)) applyStyle();
+            try { isF(G.__agCsUiMain) && G.__agCsUiMain(bootCfg); } finally { if (km) km._hold = 0; }
+            const cm = cM();
+            if (cm?._disposed || (D.head && !cm)) applyStyle();
           }
           if (W.__agClaudeStyle && !W.__agPrism) W.__agPrism = W.__agClaudeStyle;
           else if (W.__agPrism) W.__agClaudeStyle = W.__agPrism;
           hookApiCssMgr(W.__agPrism);
           const eCfg = (isF(W.__agPrism?.getState) ? W.__agPrism.getState()?.cfg : null) || bootCfg;
-          T(() => W.__agPrismCssMgr?.sync?.());
+          T(() => cM()?.sync?.());
           T(() => (eCfg?.omniModule === 'off' ? W.__agPrismOmni?.destroy?.() : W.__agPrismOmni?.sync?.(eCfg, W.__agPrismOmniServerMeta || null)));
           const de = D.documentElement;
           if (de) {

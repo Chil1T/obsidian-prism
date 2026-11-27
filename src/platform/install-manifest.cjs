@@ -48,8 +48,9 @@ const DEFAULT_OBSOLETE_PATHS = Object.freeze([
   'vendor/wallpaper/studio-ui/studio.js',
   'vendor/wallpaper/wallpaper-hud.js',
   'vendor/wallpaper/wallpaper-procedural.js',
-  // 已彻底退役的旧版 app.asar 补丁脚本
+  // 已彻底退役的旧版 app.asar 补丁与旧多通道注入文件
   'tools/patch-asar.cjs',
+  'src/channels/inject-runtime-channels.cjs',
   // 历史已迁移至 docs/CONTRIBUTORS.md 的根目录旧副本（安全清理老插件目录残留）
   'CONTRIBUTORS.md',
 ]);
