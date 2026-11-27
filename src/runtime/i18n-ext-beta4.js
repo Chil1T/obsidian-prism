@@ -325,6 +325,28 @@
       'Beide (5h + W)',
       'İkisi (5s + Hf)',
     ],
+    setHomeGlowTitle: [
+      '首页底部光晕',
+      '首頁底部光暈',
+      'Home Horizon Glow',
+      'ホーム下部グロー',
+      '홈 하단 글로우',
+      'Resplandor inferior en inicio',
+      'Lueur d’horizon d’accueil',
+      'Startseiten-Horizontglühen',
+      'Ana Sayfa Alt Parıltısı',
+    ],
+    setHomeGlowDesc: [
+      '首页底部的柔和棱镜地平线光晕，可独立于字符点阵波纹单独开启。',
+      '首頁底部的柔和稜鏡地平線光暈，可獨立於字元點陣波紋單獨開啟。',
+      'Soft prismatic horizon glow at the bottom of the home screen; works independently from the character matrix ripple.',
+      'ホーム画面下部の柔らかなプリズム地平線グロー。文字リップルとは独立して有効化できます。',
+      '홈 화면 하단의 부드러운 프리즘 지평선 글로우입니다. 문자 리플과 독립적으로 켤 수 있습니다.',
+      'Suave resplandor prismático en la base de la pantalla de inicio; funciona de forma independiente a la onda matricial.',
+      'Douce lueur prismatique en bas de l’écran d’accueil ; fonctionne indépendamment de l’onde matricielle.',
+      'Sanftes prismatisches Horizontglühen am unteren Rand der Startseite; unabhängig von der Matrixwelle nutzbar.',
+      'Ana ekranın altındaki yumuşak prizmatik ufuk parıltısı; karakter matrisi dalgasından bağımsız çalışır.',
+    ],
   });
 
   function normalizeLocale(lang) {

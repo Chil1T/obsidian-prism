@@ -80,7 +80,7 @@ const safeParseJsonObj = (raw) => { if (!raw || typeof raw !== 'string') return 
 
 const BOOL_ALIAS_PAIRS = [['homeRipple', 'ripple'], ['composerRestyle', 'composer'], ['sidebarRestyle', 'sidebar']];
 const ONOFF_STR_KEYS = 'telemetryModule|effortSliderModule|effortMemory|periodicModelPicker|omniModule|sidebarStudio|autoUpdate|sidebarNavFold'.split('|');
-const BF_KEYS = 'sidebarCompact|codeLigatures|autoArchiveOnExit|ignoreReducedMotion'.split('|'), BT_KEYS = ['smoothCaret', 'contextMenu'];
+const BF_KEYS = 'sidebarCompact|codeLigatures|autoArchiveOnExit|ignoreReducedMotion'.split('|'), BT_KEYS = ['homeGlow', 'smoothCaret', 'contextMenu'];
 const PICK_SETS = new Map();
 const pickOf = (v, s, d) => { let set = PICK_SETS.get(s); if (!set) PICK_SETS.set(s, set = new Set(s.split('|'))); return set.has(v) ? v : d; };
 const normConvRipple = (v) => (v === true || v === 'true' || v === 'on' ? 'medium' : pickOf(v, 'subtle|medium|full', 'off'));
@@ -97,6 +97,7 @@ for (const k of ['telemetryModule', 'effortSliderModule', 'hostLocalization']) o
 out.thoughtTranslate = pickOf(out.thoughtTranslate, 'machine|ai', 'off');
 out.homeLayout = out.homeMode = pickOf(out.homeLayout ?? out.homeMode, 'classic|off', 'studio');
 for (const [bKey, sKey] of BOOL_ALIAS_PAIRS) { const v = out[bKey] !== undefined ? out[bKey] : out[sKey], on = v === undefined ? true : v !== false && v !== 'off'; out[bKey] = on; out[sKey] = on ? 'on' : 'off'; }
+if (out.homeGlow === undefined && out.homeRipple === false) out.homeGlow = false;
 out.placeholderStyle = out.promptStyle = (out.placeholderStyle ?? out.promptStyle) === 'host' ? 'host' : 'studio';
 out.mascot = out.mascot === 'off' || out.mascot === false ? 'off' : /^(minis|quad(-minis)?|r:[ckdw0-4,+m]+)$/.test(out.mascot) ? out.mascot : 'crab';
 out.convRipple = normConvRipple(out.convRipple);
@@ -217,7 +218,7 @@ const any = (s) => s.split('|').some((k) => prevCfg[k] !== nextCfg[k] || O.hasOw
 if (any('performanceMode')) dirtyFlags.t = dirtyFlags.c = dirtyFlags.r = true;
 if (any('palette|lightPreset|accentTone|ambientIntensity|darkAura|darkAuraStyle|cornerStyle|chatFont|chatFontCustom|codeFont|codeFontCustom|codeLigatures')) dirtyFlags.t = true;
 if (any('accentTone|composerRestyle|placeholderStyle|mascot|smoothCaret|telemetryModule|motionLevel|ignoreReducedMotion|language')) dirtyFlags.c = true;
-if (any('homeLayout|homeRipple|convRipple|motionLevel|ignoreReducedMotion|language')) dirtyFlags.r = true;
+if (any('homeLayout|homeRipple|homeGlow|convRipple|motionLevel|ignoreReducedMotion|language')) dirtyFlags.r = true;
 if (any('sidebarRestyle|sidebarCompact|sidebarNavFold')) dirtyFlags.s = true;
 if (any('thoughtTranslate|thoughtTrigger|thoughtView')) dirtyFlags.l = dirtyFlags.tk = true;
 };
@@ -570,7 +571,7 @@ activeHomeStudioInst = mod.createHomeStudioPanelController({ usageCore: uc, stor
 return activeHomeStudioInst;
 };
 const homeStudioCtl = mkDel(resolveHomeStudioCtl, HS_KS);
-const rippleCtl = homeRippleMod?.createHomeRippleController ? homeRippleMod.createHomeRippleController({ rippleCore, isDestroyed: () => destroyed, isAllowed: () => cfg.homeRipple !== false && cfg.homeLayout !== 'off', isConvAllowed: () => cfg.convRipple !== 'off', getConvLevel: () => cfg.convRipple, isConvRunning, isDarkTheme, motionReduced, getMinFrameGapMs, getAmbientIntensity: getAmbientFloat, getAccentTone, getEffectivePalette, setAttrIfChanged, onPointerPressMascot: (x) => { if (msRig && msRoot) safe(() => { const mr = rc(msRoot); if (mr) notifyMascot('ripple', { x: x - mr.left }); }); } }) : mkStub('sync|refreshTheme|unmount|getMount');
+const rippleCtl = homeRippleMod?.createHomeRippleController ? homeRippleMod.createHomeRippleController({ rippleCore, isDestroyed: () => destroyed, isAllowed: () => cfg.homeRipple !== false && cfg.homeLayout !== 'off', isGlowAllowed: () => cfg.homeGlow !== false && cfg.homeLayout !== 'off', isConvAllowed: () => cfg.convRipple !== 'off', getConvLevel: () => cfg.convRipple, isConvRunning, isDarkTheme, motionReduced, getMinFrameGapMs, getAmbientIntensity: getAmbientFloat, getAccentTone, getEffectivePalette, setAttrIfChanged, onPointerPressMascot: (x) => { if (msRig && msRoot) safe(() => { const mr = rc(msRoot); if (mr) notifyMascot('ripple', { x: x - mr.left }); }); } }) : mkStub('sync|refreshTheme|unmount|getMount');
 const convAuraCtl = convAuraMod?.createConvAuraController ? convAuraMod.createConvAuraController({ isDestroyed: () => destroyed, isHomeRippleEnabled: () => getAmbientFloat() > 0, isMotionStandardOrUltra, isDarkTheme, getMinFrameGapMs, getAmbientIntensity: getAmbientFloat, getSpectrumMode: resolveAuraSpectrumMode, isWindowFocused: () => (isFn(D.hasFocus) ? D.hasFocus() : !D.hidden), rippleCore, setAttrIfChanged, runGuardedMut }) : mkStub('sync|refreshTheme|unmount|getInstance|setActiveView|setSemanticState|prime|wake|triggerStart', { advancePhase: () => 'off' });
 const HE_KS = 'sync|onThemeChange|destroy';
 const hostEnhancerFallback = mkStub(HE_KS);
@@ -2322,7 +2323,8 @@ qa(D, '.agy-overlay,.agy-fastpick,[data-testid="context-menu-popup"],[data-testi
 for (const s of 'placeholder|orch-active|model-overlay|aux-dual|overview-shell|prism-mirror|prism-reflect|settings-dlg|settings-nav|nav-active|conv-seat|conv-ripple-host|vp-wrap|home-sheet|row-running|menu-open|auto-unfolded|outer-open|caustic|fiber-camp|pane-camp|sonar|stage-glide|liftoff-bubble|thought-streaming|spark-streaming|prism-cv|code-folded|bg-cmd-wrap|input-layer|hdr-open|rich-pre|glide-item|crab-anchor|bleed'.split('|')) raAll(`[data-ag-cs-${s}]`, 'data-ag-cs-' + s);
 for (const a of 'data-has-sep,data-pv-warn,data-ag-sp-running'.split(',')) raAll(`[${a}]`, a);
 safe(() => { getDomBus()?.dispose?.(D, W); getMascotHop()?.dispose?.(D); for (const k of ['__agPrismFontCustomizer', '__agPrismReducedMotionGuard']) wMod(k)?.dispose?.(D); });
-rmAll('#ag-prism-overlay-portal,#ag-prism-mascot-hop-style,.ag-prism-mascot-hop-layer,#ag-prism-custom-fonts-style,#ag-prism-settings-ext-beta4-css,#ag-prism-settings-v101-css,#ag-prism-studio-v101-css,#ag-prism-omni-css,#ag-prism-motion-off-css,#ag-prism-periodic-stub-css,#ag-prism-periodic-picker-css,#ag-prism-periodic-picker-root,.ag-pp-hold-ring,.ag-pp-mini-keycap,#ag-prism-wallpaper-root,#ag-prism-wallpaper-css,#ag-prism-suggester-css,.ag-omni-dock,.ag-omni-menu,.ag-prism-omni-menu,.ag-prism-omni-pane,.ag-cs-ctx-menu,.ag-cs-ctx-toast,.ag-cs-sb-more-wrap,[data-ag-prism-omni-owned="1"],.ag-cs-home-panel,.ag-cs-home-panel-seat,.ag-cs-liftoff-veil,.ag-cs-sidebar-glide-pill,.ag-cs-pill-glide,.ag-cs-conv-aura-host,.ag-cs-conv-glow,.ag-cs-prism-rim-cv,.ag-cs-code-fold-btn,.ag-cs-nav-outline-popover,.ag-cs-model-glyph,.ag-cs-panel-row-glyph,[data-testid="orchestrator-effort-bar"],.ag-cs-thinking-spark,.ag-cs-orbital-backdrop,.ag-cs-perf-backdrop,.ag-v2-habitat-prop,#' + SETTINGS_SEC_ID);
+const pfx = (p, s) => s.split(',').map((x) => p + x).join(',');
+rmAll('#ag-prism-overlay-portal,#ag-prism-mascot-hop-style,#ag-prism-periodic-picker-css,#ag-prism-periodic-picker-root,' + pfx('#ag-prism-', 'custom-fonts-style,settings-ext-beta4-css,settings-v101-css,studio-v101-css,omni-css,motion-off-css,periodic-stub-css,wallpaper-root,wallpaper-css,suggester-css') + ',.ag-prism-mascot-hop-layer,.ag-pp-hold-ring,.ag-pp-mini-keycap,.ag-omni-dock,.ag-omni-menu,.ag-prism-omni-menu,.ag-prism-omni-pane,.ag-cs-ctx-menu,.ag-cs-ctx-toast,.ag-cs-sb-more-wrap,[data-ag-prism-omni-owned="1"],.ag-cs-code-fold-btn,.ag-cs-nav-outline-popover,.ag-cs-panel-row-glyph,.ag-cs-orbital-backdrop,' + pfx('.ag-cs-', 'home-panel,home-panel-seat,liftoff-veil,sidebar-glide-pill,pill-glide,conv-aura-host,conv-glow,prism-rim-cv,model-glyph,thinking-spark,perf-backdrop') + ',[data-testid="orchestrator-effort-bar"],.ag-v2-habitat-prop,#' + SETTINGS_SEC_ID);
 const html = de();
 if (html) {
 ra(html, 'data-ag-perf-busy');

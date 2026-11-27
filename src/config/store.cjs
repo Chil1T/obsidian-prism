@@ -27,7 +27,18 @@ function createConfigStore({ rootDir = path.resolve(__dirname, '..', '..'), conf
         return { ..._configCache.value };
       }
       const diskRaw = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-      const merged = reconcileConfigAliases({ ...DEFAULT_CONFIG, ...reconcileConfigAliases(diskRaw) });
+      const reconciledDisk = reconcileConfigAliases(diskRaw);
+      if (
+        diskRaw &&
+        typeof diskRaw === 'object' &&
+        !Object.prototype.hasOwnProperty.call(diskRaw, 'homeGlow') &&
+        (Object.prototype.hasOwnProperty.call(diskRaw, 'homeRipple') ||
+          Object.prototype.hasOwnProperty.call(diskRaw, 'ripple')) &&
+        reconciledDisk.homeRipple === false
+      ) {
+        reconciledDisk.homeGlow = false;
+      }
+      const merged = reconcileConfigAliases({ ...DEFAULT_CONFIG, ...reconciledDisk });
       _configCache = { sig, value: merged };
       return { ...merged };
     } catch {

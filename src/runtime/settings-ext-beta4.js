@@ -313,67 +313,85 @@
     return row;
   }
 
-  function ensureIgnoreRmRow(rootEl, doc, ctx) {
-    let row = qs(rootEl, '[data-ag-cs-row="ignoreReducedMotion"]');
+  function ensureSwitchRow(rootEl, doc, key, anchorKey, onPick) {
+    let row = qs(rootEl, `[data-ag-cs-row="${key}"]`);
     if (row) return row;
-    const motionRow = qs(rootEl, '[data-ag-cs-row="motionLevel"]');
-    if (!motionRow || !motionRow.parentElement) return null;
+    const anchorRow = qs(rootEl, `[data-ag-cs-row="${anchorKey}"]`);
+    if (!anchorRow || !anchorRow.parentElement) return null;
 
     row = mk(doc, 'div');
-    sa(row, 'data-ag-cs-row', 'ignoreReducedMotion');
+    sa(row, 'data-ag-cs-row', key);
     sa(row, 'data-ag-cs-ext-owned', '1');
 
     const inner = mk(doc, 'div', 'py-2');
     const textCol = mk(doc, 'div', 'flex-1');
     const titleLine = mk(doc, 'div', 'ag-cs-settings-title-line');
-    const tSpan = mk(doc, 'span');
-    sa(tSpan, 'data-k', 't');
-    const dSpan = mk(doc, 'span', 'whitespace-pre-wrap');
-    sa(dSpan, 'data-k', 'd');
-    titleLine.appendChild(tSpan);
-    textCol.appendChild(titleLine);
-    textCol.appendChild(dSpan);
+    const tSpan = mk(doc, 'span'); sa(tSpan, 'data-k', 't');
+    const dSpan = mk(doc, 'span', 'whitespace-pre-wrap'); sa(dSpan, 'data-k', 'd');
+    titleLine.appendChild(tSpan); textCol.appendChild(titleLine); textCol.appendChild(dSpan);
 
     const ctrlWrap = mk(doc, 'div', 'shrink-0');
     const grp = mk(doc, 'div', 'ag-cs-seg-group');
-    sa(grp, 'role', 'group');
-    sa(grp, 'data-ui-kind', 'switch');
-    sa(grp, 'data-switch-on', '0');
-
-    const thumb = mk(doc, 'span', 'ag-cs-switch-thumb');
-    sa(thumb, 'aria-hidden', 'true');
+    sa(grp, 'role', 'group'); sa(grp, 'data-ui-kind', 'switch'); sa(grp, 'data-switch-on', '0');
+    const thumb = mk(doc, 'span', 'ag-cs-switch-thumb'); sa(thumb, 'aria-hidden', 'true');
     grp.appendChild(thumb);
 
     const BTN_CLS = 'ag-cs-seg-btn data-[pressed]:bg-secondary data-[pressed]:text-foreground';
     for (const [val, roleTag] of [[true, 'on'], [false, 'off']]) {
       const btn = mk(doc, 'button', BTN_CLS);
-      btn.type = 'button';
-      sa(btn, 'type', 'button');
-      sa(btn, 'data-ag-cs-ext-key', 'ignoreReducedMotion');
-      sa(btn, 'data-ag-cs-ext-val', JSON.stringify(val));
-      sa(btn, 'data-ag-cs-ext-role', roleTag);
+      btn.type = 'button'; sa(btn, 'type', 'button');
+      sa(btn, 'data-ag-cs-ext-key', key); sa(btn, 'data-ag-cs-ext-val', JSON.stringify(val)); sa(btn, 'data-ag-cs-ext-role', roleTag);
       btn.addEventListener('click', (ev) => {
         ev?.stopPropagation?.();
-        const applyFn = (ctx.win && ctx.win.__agPrismApplyIgnoreReducedMotion) || G.__agPrismApplyIgnoreReducedMotion;
-        if (typeof applyFn === 'function') applyFn(val, doc, ctx.win);
-        if (typeof ctx.saveSetting === 'function') ctx.saveSetting('ignoreReducedMotion', val);
-        if (typeof row.__extResync === 'function') row.__extResync();
+        onPick(val, row);
       });
       grp.appendChild(btn);
     }
 
-    ctrlWrap.appendChild(grp);
-    inner.appendChild(textCol);
-    inner.appendChild(ctrlWrap);
-    row.appendChild(inner);
-
-    const parent = motionRow.parentElement;
-    if (motionRow.nextSibling && typeof parent.insertBefore === 'function') {
-      parent.insertBefore(row, motionRow.nextSibling);
-    } else {
-      parent.appendChild(row);
-    }
+    ctrlWrap.appendChild(grp); inner.appendChild(textCol); inner.appendChild(ctrlWrap); row.appendChild(inner);
+    const parent = anchorRow.parentElement;
+    if (anchorRow.nextSibling && typeof parent.insertBefore === 'function') parent.insertBefore(row, anchorRow.nextSibling);
+    else parent.appendChild(row);
     return row;
+  }
+
+  function ensureIgnoreRmRow(rootEl, doc, ctx) {
+    return ensureSwitchRow(rootEl, doc, 'ignoreReducedMotion', 'motionLevel', (val, row) => {
+      const applyFn = (ctx.win && ctx.win.__agPrismApplyIgnoreReducedMotion) || G.__agPrismApplyIgnoreReducedMotion;
+      if (typeof applyFn === 'function') applyFn(val, doc, ctx.win);
+      if (typeof ctx.saveSetting === 'function') ctx.saveSetting('ignoreReducedMotion', val);
+      if (typeof row.__extResync === 'function') row.__extResync();
+    });
+  }
+
+  function ensureHomeGlowRow(rootEl, doc, ctx) {
+    return ensureSwitchRow(rootEl, doc, 'homeGlow', 'homeRipple', (val, row) => {
+      if (typeof ctx.saveSetting === 'function') ctx.saveSetting('homeGlow', val);
+      if (typeof row.__extResync === 'function') row.__extResync();
+    });
+  }
+
+  function syncSwitchRow(row, key, val, dimmed, titleText, descText, extUi, resyncNow) {
+    if (!row) return;
+    row.__extResync = resyncNow;
+    const tEl = qs(row, '[data-k="t"]'), dEl = qs(row, '[data-k="d"]');
+    if (tEl && tEl.textContent !== titleText) tEl.textContent = titleText;
+    if (dEl && dEl.textContent !== descText) dEl.textContent = descText;
+    if (row.style) row.style.opacity = dimmed ? '0.55' : '';
+    if (dimmed) sa(row, 'data-ag-cs-dimmed', '1'); else ra(row, 'data-ag-cs-dimmed');
+    const grp = qs(row, '.ag-cs-seg-group');
+    if (!grp) return;
+    sa(grp, 'data-switch-on', val ? '1' : '0');
+    const btns = grp.querySelectorAll ? grp.querySelectorAll(`button[data-ag-cs-ext-key="${key}"]`) : [];
+    for (let i = 0; i < btns.length; i++) {
+      const b = btns[i], isOnBtn = ga(b, 'data-ag-cs-ext-role') === 'on';
+      const lbl = isOnBtn ? (extUi.onLabel || 'On') : (extUi.offLabel || 'Off');
+      if (b.textContent !== lbl) b.textContent = lbl;
+      const act = isOnBtn === val;
+      sa(b, 'aria-pressed', act ? 'true' : 'false');
+      if (act) sa(b, 'data-pressed'); else ra(b, 'data-pressed');
+      b.tabIndex = act ? -1 : 0; sa(b, 'tabindex', act ? '-1' : '0');
+    }
   }
 
   function ensureChatFontRow(rootEl, doc, ctx) {
@@ -554,6 +572,8 @@
     const perfMode = normPerfMode(readLiveCfg(ctx, 'performanceMode', 'balanced'));
     const ignoreRm = Boolean(readLiveCfg(ctx, 'ignoreReducedMotion', false));
     const motionOff = readLiveCfg(ctx, 'motionLevel', 'ultra') === 'off';
+    const homeLayoutOff = readLiveCfg(ctx, 'homeLayout', 'studio') === 'off';
+    const homeGlow = readLiveCfg(ctx, 'homeGlow', true) !== false;
     const chatFont = String(readLiveCfg(ctx, 'chatFont', 'default') || 'default');
     const chatFontCustom = String(readLiveCfg(ctx, 'chatFontCustom', '') || '');
     const codeFont = String(readLiveCfg(ctx, 'codeFont', 'default') || 'default');
@@ -561,11 +581,12 @@
     const telOff = readLiveCfg(ctx, 'telemetryModule', 'auto') === 'off';
     const telQuotaMode = readLiveCfg(ctx, 'telemetryQuotaMode', 'compact') === 'both' ? 'both' : 'compact';
 
-    const extSig = `${lang}|${perfMode}|${ignoreRm ? 1 : 0}|${motionOff ? 1 : 0}|${chatFont}|${chatFontCustom}|${codeFont}|${codeFontCustom}|${telOff ? 1 : 0}|${telQuotaMode}`;
+    const extSig = `${lang}|${perfMode}|${ignoreRm ? 1 : 0}|${motionOff ? 1 : 0}|${homeLayoutOff ? 1 : 0}|${homeGlow ? 1 : 0}|${chatFont}|${chatFontCustom}|${codeFont}|${codeFontCustom}|${telOff ? 1 : 0}|${telQuotaMode}`;
     if (
       rootEl.__extBeta4Sig === extSig &&
       qs(rootEl, '[data-ag-cs-row="performanceMode"]') &&
       qs(rootEl, '[data-ag-cs-row="ignoreReducedMotion"]') &&
+      (!qs(rootEl, '[data-ag-cs-row="homeRipple"]') || qs(rootEl, '[data-ag-cs-row="homeGlow"]')) &&
       qs(rootEl, '[data-ag-cs-row="chatFont"]') &&
       qs(rootEl, 'button[data-ag-cs-code-custom="1"]') &&
       (!qs(rootEl, '[data-ag-cs-row="telemetryModule"]') || qs(rootEl, '[data-ag-cs-row="telemetryQuotaMode"]'))
@@ -604,36 +625,27 @@
         }
       }
 
-      // 1. 忽略系统减弱动效开关（动效区）
-      const rmRow = ensureIgnoreRmRow(rootEl, doc, ctx);
-      if (rmRow) {
-        rmRow.__extResync = resyncNow;
-        const tEl = qs(rmRow, '[data-k="t"]');
-        const dEl = qs(rmRow, '[data-k="d"]');
-        if (tEl && tEl.textContent !== extUi.setIgnoreReducedMotionTitle) tEl.textContent = extUi.setIgnoreReducedMotionTitle || 'Ignore System Reduced Motion';
-        if (dEl && dEl.textContent !== extUi.setIgnoreReducedMotionDesc) dEl.textContent = extUi.setIgnoreReducedMotionDesc || '';
-        if (rmRow.style) rmRow.style.opacity = motionOff ? '0.55' : '';
-        if (motionOff) sa(rmRow, 'data-ag-cs-dimmed', '1');
-        else ra(rmRow, 'data-ag-cs-dimmed');
-
-        const grp = qs(rmRow, '.ag-cs-seg-group');
-        if (grp) {
-          sa(grp, 'data-switch-on', ignoreRm ? '1' : '0');
-          const btns = grp.querySelectorAll ? grp.querySelectorAll('button[data-ag-cs-ext-key="ignoreReducedMotion"]') : [];
-          for (let i = 0; i < btns.length; i++) {
-            const b = btns[i];
-            const isOnBtn = ga(b, 'data-ag-cs-ext-role') === 'on';
-            const lbl = isOnBtn ? (extUi.onLabel || 'On') : (extUi.offLabel || 'Off');
-            if (b.textContent !== lbl) b.textContent = lbl;
-            const act = isOnBtn === ignoreRm;
-            sa(b, 'aria-pressed', act ? 'true' : 'false');
-            if (act) sa(b, 'data-pressed');
-            else ra(b, 'data-pressed');
-            b.tabIndex = act ? -1 : 0;
-            sa(b, 'tabindex', act ? '-1' : '0');
-          }
-        }
-      }
+      // 1. 忽略系统减弱动效开关（动效区）与首页底部光晕独立开关（紧随 homeRipple）
+      syncSwitchRow(
+        ensureIgnoreRmRow(rootEl, doc, ctx),
+        'ignoreReducedMotion',
+        ignoreRm,
+        motionOff,
+        extUi.setIgnoreReducedMotionTitle || 'Ignore System Reduced Motion',
+        extUi.setIgnoreReducedMotionDesc || '',
+        extUi,
+        resyncNow
+      );
+      syncSwitchRow(
+        ensureHomeGlowRow(rootEl, doc, ctx),
+        'homeGlow',
+        homeGlow,
+        motionOff || homeLayoutOff,
+        extUi.setHomeGlowTitle || 'Home Horizon Glow',
+        extUi.setHomeGlowDesc || '',
+        extUi,
+        resyncNow
+      );
 
       // 2. 会话正文字体（字体/排版区）
       const chatRow = ensureChatFontRow(rootEl, doc, ctx);

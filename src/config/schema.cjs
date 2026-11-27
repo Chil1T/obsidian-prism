@@ -72,6 +72,7 @@ const CONFIG_SCHEMA = Object.freeze({
   homeLayout: Object.freeze({ type: 'enum', values: Object.freeze(['studio', 'classic', 'off']), default: 'studio', aliasPair: 'homeMode', aliasKind: 'string' }),
   homeMode: Object.freeze({ type: 'enum', values: Object.freeze(['studio', 'classic', 'off']), default: 'studio', aliasOf: 'homeLayout' }),
   homeRipple: Object.freeze({ type: 'boolean', default: true, aliasPair: 'ripple', aliasKind: 'boolOnOff' }),
+  homeGlow: Object.freeze({ type: 'boolean', default: true, stringBoolMode: 'notOff' }),
   convRipple: Object.freeze({ type: 'enum', values: Object.freeze(['off', 'subtle', 'medium', 'full']), default: 'off' }),
   ripple: Object.freeze({ type: 'enum', values: ON_OFF_VALUES, default: 'on', aliasOf: 'homeRipple' }),
   composerRestyle: Object.freeze({ type: 'boolean', default: true, aliasPair: 'composer', aliasKind: 'boolOnOff' }),

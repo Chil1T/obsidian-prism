@@ -18,6 +18,7 @@
   "homeLayout": "studio",
   "homeMode": "studio",
   "homeRipple": true,
+  "homeGlow": true,
   "convRipple": "off",
   "ripple": "on",
   "composerRestyle": true,

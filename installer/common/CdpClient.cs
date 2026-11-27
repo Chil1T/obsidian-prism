@@ -544,7 +544,7 @@ namespace AgyClaudeStyle
             HttpClientHandler handler = new HttpClientHandler();
             handler.UseProxy = false;
             HttpClient client = new HttpClient(handler);
-            // Windows loopback 关闭端口 TCP SYN 重传耗时约 2000~2100ms，Timeout 需高于该值才能准确捕获 ConnectionRefused 而非被 2000ms 超时截胡
+            // 高于 Windows loopback TCP SYN 重传(~2.1s)，以捕获 ConnectionRefused
             client.Timeout = TimeSpan.FromMilliseconds(3000);
             return client;
         }
@@ -712,7 +712,7 @@ namespace AgyClaudeStyle
                 res.IsConnectionRefused = isRefused;
                 res.IsTransientTimeout = isTimeout;
                 res.ConsecutiveFailures = nextFailures;
-                // 已有活跃 attached 会话时：ConnectionRefused 立即判死，瞬态超时需连续 2 次失败才判 IsStalePort 断连
+                // 活跃会话：Refused 立即判死，瞬态超时连败 2 次判死
                 if (isRefused)
                 {
                     res.IsStalePort = true;
@@ -835,10 +835,10 @@ namespace AgyClaudeStyle
         private static readonly string[] OnOffValues = new string[] { "on", "off" };
         private static readonly string[] AutoOnOffValues = new string[] { "auto", "on", "off" };
         private static readonly string[] StrictOnBoolKeys = new string[] { "ignoreReducedMotion", "sidebarCompact", "codeLigatures", "autoArchiveOnExit" };
-        private static readonly string[] NotOffBoolKeys = new string[] { "smoothCaret", "contextMenu" };
+        private static readonly string[] NotOffBoolKeys = new string[] { "homeGlow", "smoothCaret", "contextMenu" };
         private static readonly string[] BoolToOnOffKeys = new string[] { "telemetryModule", "effortSliderModule", "effortMemory", "periodicModelPicker", "sidebarNavFold", "omniModule", "sidebarStudio", "autoUpdate" };
 
-        // 单源声明式 Schema 表（与 src/config/schema.cjs 全部 54 键 100% 对齐：40 枚举 + 9 非可选布尔 + 2 字符串 + 1 整数 + 2 可选受控布尔）
+        // Schema 表（与 schema.cjs 55 键对齐）
         private static readonly string[,] EnumSchemaSpecs = new string[,]
         {
             { "language", "auto", "L" }, { "lang", "auto", "L" },
@@ -861,7 +861,7 @@ namespace AgyClaudeStyle
             { "sidebarStudio", "off", "O" }, { "hostLocalization", "auto", "A" },
             { "autoUpdate", "off", "O" }, { "updateChannel", "stable", "stable,beta" }
         };
-        private static readonly string[] BoolSchemaDefaultTrueKeys = new string[] { "homeRipple", "composerRestyle", "sidebarRestyle", "smoothCaret", "contextMenu" };
+        private static readonly string[] BoolSchemaDefaultTrueKeys = new string[] { "homeRipple", "homeGlow", "composerRestyle", "sidebarRestyle", "smoothCaret", "contextMenu" };
         private static readonly string[] BoolSchemaDefaultFalseKeys = new string[] { "ignoreReducedMotion", "sidebarCompact", "codeLigatures", "autoArchiveOnExit" };
         private static readonly string[] StringSchemaKeys = new string[] { "chatFontCustom", "codeFontCustom" };
 
@@ -1122,6 +1122,11 @@ namespace AgyClaudeStyle
                 if (File.Exists(cfgPath))
                 {
                     Dictionary<string, object> userCfg = ReconcileConfigAliases(MiniJson.ParseObject(File.ReadAllText(cfgPath, Encoding.UTF8)));
+                    object hrVal;
+                    if (!userCfg.ContainsKey("homeGlow") && userCfg.TryGetValue("homeRipple", out hrVal) && hrVal is bool && !(bool)hrVal)
+                    {
+                        userCfg["homeGlow"] = false;
+                    }
                     foreach (KeyValuePair<string, object> kv in userCfg)
                     {
                         if (kv.Value == null) continue;
@@ -1249,10 +1254,7 @@ namespace AgyClaudeStyle
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool FindClose(IntPtr hFindFile);
 
-        /// <summary>
-        /// 仅放行微软标准非重定向存储层/云占位重解析标签（WOF CompactOS 压缩、OneDrive Cloud Filter、NTFS Dedup）。
-        /// Symlink / Junction / 未知标签一律返回 false（Fail-Closed）。
-        /// </summary>
+        // 放行 WOF/OneDrive/Dedup 非重定向标签，其余 Fail-Closed
         public static bool IsSafeNonRedirectReparseTag(uint tag)
         {
             if (tag == IO_REPARSE_TAG_WOF ||
@@ -1396,11 +1398,7 @@ namespace AgyClaudeStyle
             return IsUnsafeReparsePoint(path, out tag);
         }
 
-        /// <summary>
-        /// 判断路径是否为具有重定向风险的重解析点（符号链接、目录联接、悬空软链或未知重解析点）。
-        /// 直接通过 FindFirstFileW 判定（拦截通配符，超长路径自动补 \\?\ 前缀），放行纯存储层/云占位标签（WOF / OneDrive Cloud / Dedup）；
-        /// 仅在 ERROR_FILE_NOT_FOUND(2) 或 ERROR_PATH_NOT_FOUND(3) 时返回 false，其余任何错误/异常严格 Fail-Closed 返回 true。
-        /// </summary>
+        // FindFirstFileW 判定不安全重解析点（非 NotFound 错误一律 Fail-Closed）
         public static bool IsUnsafeReparsePoint(string path, out uint reparseTag)
         {
             reparseTag = 0u;
@@ -1461,10 +1459,7 @@ namespace AgyClaudeStyle
             return full.TrimEnd('\\', '/');
         }
 
-        /// <summary>
-        /// 检查目录链路（覆盖 ~/.gemini → cfgDir 或沙盒 .gemini → cfgDir 祖先链）是否存在不安全重解析点。
-        /// 任何无法解析或越界异常均 Fail-Closed 返回 true。
-        /// </summary>
+        // 检查目录祖先链不安全重解析点（异常 Fail-Closed）
         public static bool HasUnsafeReparsePointInChain(string dirPath, out string unsafePath, out uint reparseTag)
         {
             unsafePath = dirPath ?? "";
@@ -1901,7 +1896,7 @@ namespace AgyClaudeStyle
         {
             accessDenied = false;
             if (pid <= 0) return "";
-            // 纯 Win32 PEB 通道：遇 ACCESS_DENIED 或进程已退出立即返回；仅对瞬态空串执行有界极短退避重试（零外部进程、零 WMI）
+            // 纯 PEB 通道：遇拒绝/退出即返，瞬态空串极短重试
             int maxAttempts = 2;
             int retryDelayMs = allowRetry ? 50 : 25;
             for (int attempt = 0; attempt < maxAttempts; attempt++)
@@ -2750,8 +2745,7 @@ namespace AgyClaudeStyle
                 return dirs;
             }
 
-            // 严格隔离自动化测试与临时沙盒目录，避免触碰真实桌面快捷方式；
-            // 允许真实用户在非默认目录安装时正常修补快捷方式。
+            // 隔离测试沙盒，避免触碰真实桌面快捷方式
             if (IsTestSandboxEnvironment(installDir))
             {
                 return dirs;
@@ -2964,7 +2958,7 @@ namespace AgyClaudeStyle
                         string nextArgs = string.IsNullOrEmpty(origArgs.Trim())
                             ? CdpOptInFlag
                             : (origArgs.TrimEnd() + " " + CdpOptInFlag);
-                        // 仅对非符号链接的普通 .lnk 文件尝试清理只读属性后再以纯 MS-SHLLINK 写回；若位于受保护目录无权限或被锁定则记录告警继续
+                        // 清理普通 .lnk 只读属性后以 MS-SHLLINK 写回
                         ClearReadOnlyAndHiddenAttributes(lnkPath);
                         WindowsLnkCodec.WriteArguments(lnkPath, nextArgs);
                         recorded.Add(lnkPath);
@@ -3169,7 +3163,7 @@ namespace AgyClaudeStyle
                         }
                         catch (Win32Exception wex)
                         {
-                            // 权限不足（如管理员宿主进程）直接跳过，绝不误判为裸启
+                            // 权限不足跳过，防误判裸启
                             if (wex.NativeErrorCode == ERROR_ACCESS_DENIED) continue;
                         }
                         if (exited) continue;
@@ -3179,7 +3173,7 @@ namespace AgyClaudeStyle
                         string cmd = QueryWindowsProcessCommandLine(p.Id, hasMainWindow, out accessDenied);
                         if (string.IsNullOrEmpty(cmd))
                         {
-                            // 权限不足导致命令行不可读时绝不激活 windowFallbackCandidate，避免将已带参管理员主窗口误判为裸启
+                            // 命令行不可读时不激活 fallback，防误判带参管理员窗口
                             if (!accessDenied && windowFallbackCandidate == null && hasMainWindow)
                             {
                                 bool mainModuleDenied = false;
@@ -3371,7 +3365,7 @@ namespace AgyClaudeStyle
         public static void RecordPromptedForHost(int hostPid, long startTimeMs, string decision, string installDir, string pluginDir)
         {
             if (hostPid <= 0) return;
-            // 先写入进程内 HashSet 兜底，即使磁盘只读/满导致状态文件写盘失败，也绝不每 2s 无限弹窗
+            // 先记内存防磁盘只读时重复弹窗
             RememberPromptedHostInMemory(hostPid, startTimeMs);
             string hostKey = hostPid + ":" + startTimeMs;
             Dictionary<string, object> obj = new Dictionary<string, object>(StringComparer.Ordinal);
@@ -4037,11 +4031,7 @@ namespace AgyClaudeStyle
         public int ExtraDataStart;
     }
 
-    /// <summary>
-    /// 纯 C# MS-SHLLINK (.lnk) 二进制读写器与原生标准 ShellLink COM 创建器。
-    /// 读写已有快捷方式全程零 COM、零子进程，逐字节无损保留 Header/IDList/LinkInfo/ExtraData；
-    /// 新建快捷方式使用 Explorer 标准 CLSID_ShellLink (IShellLinkW + IPersistFile)。
-    /// </summary>
+    // 纯 C# MS-SHLLINK 读写器与 ShellLink COM 创建器
     public static class WindowsLnkCodec
     {
         public const int HeaderSize = 0x4C;
@@ -4558,7 +4548,7 @@ namespace AgyClaudeStyle
                 return output;
             }
 
-            // ANSI .lnk 写入非 ASCII 参数时升格 IsUnicode 并无损转码已有 StringData，其余字节原样保留
+            // ANSI .lnk 写非 ASCII 时升格 IsUnicode 并无损转码 StringData
             uint upgradedFlags = parsed.Flags | FlagIsUnicode | FlagHasArguments;
             List<byte[]> chunks = new List<byte[]>();
             byte[] beforeStrings = new byte[parsed.StringDataStart];

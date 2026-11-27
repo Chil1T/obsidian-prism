@@ -586,9 +586,9 @@ enum CdpHelper {
     private static let onOffValues = ["on", "off"]
     private static let autoOnOffValues = ["auto", "on", "off"]
     private static let strictOnBoolKeys = ["ignoreReducedMotion", "sidebarCompact", "codeLigatures", "autoArchiveOnExit"]
-    private static let notOffBoolKeys = ["smoothCaret", "contextMenu"]
+    private static let notOffBoolKeys = ["homeGlow", "smoothCaret", "contextMenu"]
 
-    // 单源声明式 Schema 表（与 src/config/schema.cjs 全部 54 键 100% 对齐：40 枚举 + 9 非可选布尔 + 2 字符串 + 1 整数 + 2 可选受控布尔）
+    // 单源声明式 Schema 表（与 src/config/schema.cjs 全部 55 键 100% 对齐）
     private static let enumSchemaSpecs: [(String, String, String)] = [
         ("language", "auto", "L"), ("lang", "auto", "L"),
         ("palette", "obsidian", "host,obsidian,warm,claude"), ("lightPreset", "crystal", "crystal,alabaster"),
@@ -610,7 +610,7 @@ enum CdpHelper {
         ("sidebarStudio", "off", "O"), ("hostLocalization", "auto", "A"),
         ("autoUpdate", "off", "O"), ("updateChannel", "stable", "stable,beta"),
     ]
-    private static let boolSchemaDefaultTrueKeys = ["homeRipple", "composerRestyle", "sidebarRestyle", "smoothCaret", "contextMenu"]
+    private static let boolSchemaDefaultTrueKeys = ["homeRipple", "homeGlow", "composerRestyle", "sidebarRestyle", "smoothCaret", "contextMenu"]
     private static let boolSchemaDefaultFalseKeys = ["ignoreReducedMotion", "sidebarCompact", "codeLigatures", "autoArchiveOnExit"]
     private static let stringSchemaKeys = ["chatFontCustom", "codeFontCustom"]
 
@@ -807,7 +807,10 @@ enum CdpHelper {
         let cfgPath = (baseDir as NSString).appendingPathComponent("config.json")
         if let text = try? String(contentsOfFile: cfgPath, encoding: .utf8),
            let userCfg = try? MiniJson.parseObject(text) {
-            let reconciled = reconcileConfigAliases(userCfg)
+            var reconciled = reconcileConfigAliases(userCfg)
+            if reconciled["homeGlow"] == nil, reconciled["homeRipple"]?.boolValue == false {
+                reconciled["homeGlow"] = .bool(false)
+            }
             for (k, v) in reconciled {
                 if case .null = v { continue }
                 if k == "pollIntervalMs" {

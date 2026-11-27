@@ -151,6 +151,7 @@
     targetFps: mkSp(['60', '120', '180', 'native'], '180'),
     homeLayout: mkSp(['studio', 'classic', 'off']),
     homeRipple: S_T,
+    homeGlow: S_T,
     convRipple: mkSp(['off', 'subtle', 'medium', 'full'], 'off', { on: 'medium', true: 'medium', false: 'off' }),
     logoInk: mkSp(['accent', 'foreground']),
     language: mkSp(['auto', 'zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de', 'tr'], 'auto', { yue: 'zh-CN', 'zh-HK': 'zh-TW', 'zh-MO': 'zh-TW' }),
@@ -182,9 +183,9 @@
   });
 
   const SCENE_PRESETS = O.freeze({
-    ultra: O.freeze({ motionLevel: 'ultra', targetFps: '180', homeRipple: true, mascot: 'crab', sidebarCompact: false, smoothCaret: true, ambientIntensity: '100' }),
-    focus: O.freeze({ motionLevel: 'subtle', targetFps: '120', homeRipple: false, convRipple: 'off', mascot: 'off', sidebarCompact: true, smoothCaret: true, ambientIntensity: '35' }),
-    eco: O.freeze({ motionLevel: 'off', targetFps: '60', homeRipple: false, convRipple: 'off', mascot: 'off', sidebarCompact: false, smoothCaret: false, ambientIntensity: '0' }),
+    ultra: O.freeze({ motionLevel: 'ultra', targetFps: '180', homeRipple: true, homeGlow: true, mascot: 'crab', sidebarCompact: false, smoothCaret: true, ambientIntensity: '100' }),
+    focus: O.freeze({ motionLevel: 'subtle', targetFps: '120', homeRipple: false, homeGlow: false, convRipple: 'off', mascot: 'off', sidebarCompact: true, smoothCaret: true, ambientIntensity: '35' }),
+    eco: O.freeze({ motionLevel: 'off', targetFps: '60', homeRipple: false, homeGlow: false, convRipple: 'off', mascot: 'off', sidebarCompact: false, smoothCaret: false, ambientIntensity: '0' }),
   });
 
   const normThoughtStyle = (s) => (s === 'tech' || s === 'technical' ? 'technical' : s === 'concise' || s === 'custom' ? s : null);
