@@ -627,3 +627,58 @@ test('prism-rim-canvas 2D 渐变按尺寸/主题缓存复用、切换失效重�
     if (prevBus === undefined) delete globalThis.__agDomBus; else globalThis.__agDomBus = prevBus;
   }
 });
+
+test('原生 C# / Swift 注入器对齐 N8 __pmAuto & resolveAutoBootPerfMode、configRefresh G.__agDomBus 兜底与代码签名口径一致', () => {
+  const csSrc = fs.readFileSync(path.join(ROOT, 'installer', 'common', 'CdpClient.cs'), 'utf8');
+  const swiftSrc = fs.readFileSync(path.join(ROOT, 'installer', 'macos', 'Common', 'CdpClient.swift'), 'utf8');
+  const ch1TplSrc = fs.readFileSync(path.join(ROOT, 'src', 'compiler', 'ch1-templates.cjs'), 'utf8');
+  const signDoc = fs.readFileSync(path.join(ROOT, 'docs', 'CODE_SIGNING_POLICY.md'), 'utf8');
+
+  // 1) ch1-templates.cjs configRefresh 补齐 (W.__agDomBus || G.__agDomBus) 并在仅 globalThis.__agDomBus 存在时正常工作
+  assert.ok(
+    ch1TplSrc.includes('(W.__agDomBus || G.__agDomBus)?.resolveAutoBootPerfMode?.(cfg, W)'),
+    'ch1-templates.cjs configRefresh must use (W.__agDomBus || G.__agDomBus) consistently with mount wrapper'
+  );
+  {
+    const { sb, html } = createMockBrowserSandbox({ navigator: { deviceMemory: 4, hardwareConcurrency: 4 } });
+    const expr = cdp.buildInjectExpression({ palette: 'obsidian', language: 'en', performanceMode: 'balanced' }, { noDiskCache: true });
+    assert.equal(vm.runInNewContext(expr, sb).status, 'ok');
+    assert.equal(sb.__agPrism.getState().cfg.performanceMode, 'balanced');
+    // 模拟仅 globalThis.__agDomBus 可用的上下文：移除 window 侧引用但保留 globalThis.__agDomBus
+    const isolatedWin = { ...sb, __agDomBus: undefined };
+    const refSandbox = {
+      ...sb,
+      window: isolatedWin,
+      globalThis: { ...sb, __agDomBus: sb.__agDomBus },
+    };
+    const refAuto = cdp.buildConfigRefreshExpression({ performanceMode: 'auto' });
+    const refRes = vm.runInNewContext(refAuto, refSandbox);
+    assert.equal(refRes.refreshed, true);
+    assert.equal(sb.__agPrism.getState().cfg.performanceMode, 'performance');
+    assert.equal(html.getAttribute('data-ag-cs-perf-mode'), 'performance');
+    sb.__agPrism.destroy();
+  }
+
+  // 2) C# CdpClient.cs 与 Swift CdpClient.swift 均完整实现 __pmAuto 判定与首次注入/热刷新 resolveAutoBootPerfMode 调用
+  assert.ok(csSrc.includes('public static int ResolvePerfModeAutoTag(string baseDir)'));
+  assert.ok(csSrc.includes('nextCfg["__pmAuto"] = pmAuto;'));
+  assert.ok(csSrc.includes('initCfg["__pmAuto"] = pmAuto;'));
+  assert.ok(csSrc.includes('(window.__agDomBus || globalThis.__agDomBus)?.resolveAutoBootPerfMode?.(nextCfg, window)'));
+  assert.ok(csSrc.includes('(window.__agDomBus || globalThis.__agDomBus)?.resolveAutoBootPerfMode?.(bootCfg, window)'));
+
+  assert.ok(swiftSrc.includes('static func resolvePerfModeAutoTag(baseDir: String) -> Int'));
+  assert.ok(swiftSrc.includes('nextCfg["__pmAuto"] = .int(Int64(pmAuto))'));
+  assert.ok(swiftSrc.includes('initCfg["__pmAuto"] = .int(Int64(pmAuto))'));
+  assert.ok(swiftSrc.includes('(window.__agDomBus || globalThis.__agDomBus)?.resolveAutoBootPerfMode?.(nextCfg, window)'));
+  assert.ok(swiftSrc.includes('(window.__agDomBus || globalThis.__agDomBus)?.resolveAutoBootPerfMode?.(bootCfg, window)'));
+
+  // 3) docs/CODE_SIGNING_POLICY.md 英文声明与中文及 README 口径 100% 统一
+  assert.ok(
+    signDoc.includes('is planned to be provided by [SignPath.io]'),
+    'CODE_SIGNING_POLICY.md English notice must state "is planned to be provided by [SignPath.io]"'
+  );
+  assert.equal(
+    /Free code signing for official Windows release binaries of \*\*Obsidian Prism\*\* is provided by/.test(signDoc),
+    false
+  );
+});

@@ -168,7 +168,19 @@ export async function writeFileAtomicAsync(targetPath, content, { mode = 0o600, 
   let fh = null;
   try {
     fh = await fs.promises.open(tmpPath, 'wx', mode);
+    if (aborted()) {
+      await fh.close();
+      fh = null;
+      try { await fs.promises.unlink(tmpPath); } catch {}
+      return false;
+    }
     await fh.writeFile(content, 'utf8');
+    if (aborted()) {
+      await fh.close();
+      fh = null;
+      try { await fs.promises.unlink(tmpPath); } catch {}
+      return false;
+    }
     try { await fh.sync(); } catch {}
     await fh.close();
     fh = null;

@@ -42,6 +42,8 @@ const DEFAULT_OBSOLETE_PATHS = Object.freeze([
   'vendor/wallpaper/wallpaper-procedural.js',
   // 已彻底退役的旧版 app.asar 补丁脚本
   'tools/patch-asar.cjs',
+  // 历史已迁移至 docs/CONTRIBUTORS.md 的根目录旧副本（安全清理老插件目录残留）
+  'CONTRIBUTORS.md',
 ]);
 const ATOMIC_UPGRADE_RETRY_BACKOFFS_MS = Object.freeze([100, 250, 500]);
 

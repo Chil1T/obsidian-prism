@@ -593,3 +593,131 @@ test('AntigravityClient: 120s Probe proxy reuse (15m OS recheck), iterative byte
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('Redteam P2-3 & P2-4: releaseIdleTelemetry/flushUsageDiskCache flushGen TOCTOU hardening & 0o700 telemetry dir mode', async () => {
+  const tmpDir = mkTempDir('prism-tel-race-');
+  const origChmod = fs.promises.chmod;
+  const origMkdirSync = fs.mkdirSync;
+  try {
+    // 1) P2-4: resolveTelemetryDataDir passes explicit { recursive: true, mode: 0o700 }
+    const telCacheSrc = fs.readFileSync(path.join(ROOT, 'src', 'daemon', 'telemetry-cache.mjs'), 'utf8');
+    assert.ok(
+      /resolveTelemetryDataDir[\s\S]*?fs\.mkdirSync\s*\(\s*dir\s*,\s*\{\s*recursive:\s*true\s*,\s*mode:\s*0o700\s*\}\s*\)/.test(telCacheSrc),
+      'resolveTelemetryDataDir must create directory with { recursive: true, mode: 0o700 }'
+    );
+    const mkdirCalls = [];
+    fs.mkdirSync = (p, opts) => {
+      mkdirCalls.push({ p: String(p), opts });
+      return origMkdirSync.call(fs, p, opts);
+    };
+    const usageCachePath = path.join(tmpDir, 'usage-cache.json');
+    const daemon = new PrismDaemon({
+      rootDir: ROOT,
+      usageCachePath,
+      bundleCachePath: false,
+      enableAutoUpdateTimer: false,
+      enableStorageGuardTimer: false,
+      silent: true,
+    });
+    try {
+      const dataDir = daemon._resolveTelemetryDataDir();
+      const matchedCall = mkdirCalls.find((c) => c.p === dataDir);
+      assert.ok(matchedCall, 'resolveTelemetryDataDir should invoke fs.mkdirSync on first call');
+      assert.deepEqual(matchedCall.opts, { recursive: true, mode: 0o700 });
+      fs.mkdirSync = origMkdirSync;
+
+      // 2) P2-3: non-force releaseIdleTelemetry defers while async flush is in flight;
+      //    force releaseIdleTelemetry bumps flushGen, detaches stale promise, aborts stale async before rename, and commits latest sync snapshot
+      let releasePause = null;
+      let reachedPause = null;
+      const paused = new Promise((r) => { reachedPause = r; });
+      let armPause = true;
+      fs.promises.chmod = async (target, mode) => {
+        if (armPause && String(target).includes('usage-cache.json') && String(target).endsWith('.tmp')) {
+          armPause = false;
+          reachedPause();
+          await new Promise((r) => { releasePause = r; });
+        }
+        return origChmod.call(fs.promises, target, mode);
+      };
+
+      let disposed = false;
+      daemon._lazyStore = { dispose() { disposed = true; }, background: { active: false } };
+      daemon._lastTelemetryActivityAt = Date.now() - 300000;
+      daemon._putUsageDiskCache(
+        CID_A,
+        7,
+        1763621007,
+        { cascadeId: CID_A, stepCount: 7, lastModifiedSec: 1763621007, days: { '2026-11-27': { calls: 1, total: 700 } } },
+        'local'
+      );
+      const stalePromise = daemon._flushUsageDiskCacheAsync();
+      await paused;
+      const genDuringAsync = daemon._usageCacheFlushGen;
+      assert.ok(genDuringAsync >= 1, 'flushGen must advance when async flush starts');
+
+      // Non-force idle release must NOT tear down cache while async flush is in flight
+      assert.equal(daemon._releaseIdleTelemetry(false), false, 'Soft idle release must defer while _usageCacheFlushPromise is in flight');
+      assert.equal(disposed, false);
+
+      // Update cache to newer value and force idle release
+      daemon._putUsageDiskCache(
+        CID_A,
+        88,
+        1763621088,
+        { cascadeId: CID_A, stepCount: 88, lastModifiedSec: 1763621088, days: { '2026-11-27': { calls: 8, total: 8800 } } },
+        'local'
+      );
+      assert.equal(daemon._releaseIdleTelemetry(true), true, 'Force idle release must succeed and preempt stale async flush');
+      assert.equal(disposed, true);
+      assert.ok(daemon._usageCacheFlushGen > genDuringAsync, 'Force release must increment flushGen');
+      assert.equal(daemon._usageCacheFlushPromise, null, 'Preempted stale async flush must be detached immediately');
+      assert.equal(JSON.parse(fs.readFileSync(usageCachePath, 'utf8')).scopes.local[CID_A].stepCount, 88);
+
+      // Resume stale async flush: must abort before rename and leave newer sync snapshot + zero temp files
+      releasePause();
+      await stalePromise;
+      await daemon.telemetrySubsystem.waitPendingUsageFlush();
+      assert.equal(JSON.parse(fs.readFileSync(usageCachePath, 'utf8')).scopes.local[CID_A].stepCount, 88);
+      assert.equal(fs.readdirSync(tmpDir).filter((f) => f.endsWith('.tmp')).length, 0);
+
+      // 3) Even if _usageDiskCache was cleared while an async flush is in flight, sync flushUsageDiskCache must still invalidate flushGen
+      let releasePause2 = null;
+      let reachedPause2 = null;
+      const paused2 = new Promise((r) => { reachedPause2 = r; });
+      let armPause2 = true;
+      fs.promises.chmod = async (target, mode) => {
+        if (armPause2 && String(target).includes('usage-cache.json') && String(target).endsWith('.tmp')) {
+          armPause2 = false;
+          reachedPause2();
+          await new Promise((r) => { releasePause2 = r; });
+        }
+        return origChmod.call(fs.promises, target, mode);
+      };
+      daemon._putUsageDiskCache(
+        CID_A,
+        12,
+        1763621012,
+        { cascadeId: CID_A, stepCount: 12, lastModifiedSec: 1763621012, days: { '2026-11-27': { calls: 2, total: 1200 } } },
+        'local'
+      );
+      const stalePromise2 = daemon._flushUsageDiskCacheAsync();
+      await paused2;
+      const genBeforeNullFlush = daemon._usageCacheFlushGen;
+      daemon._usageDiskCache = null;
+      daemon._flushUsageDiskCache();
+      assert.ok(daemon._usageCacheFlushGen > genBeforeNullFlush, 'flushUsageDiskCache must bump flushGen even when _usageDiskCache is null');
+      assert.equal(daemon._usageCacheFlushPromise, null);
+      releasePause2();
+      await stalePromise2;
+      assert.equal(JSON.parse(fs.readFileSync(usageCachePath, 'utf8')).scopes.local[CID_A].stepCount, 88, 'Aborted async write after null-cache sync flush must not overwrite disk');
+      assert.equal(fs.readdirSync(tmpDir).filter((f) => f.endsWith('.tmp')).length, 0);
+    } finally {
+      fs.mkdirSync = origMkdirSync;
+      fs.promises.chmod = origChmod;
+      await daemon.stop(false, { skipAutoArchive: true });
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

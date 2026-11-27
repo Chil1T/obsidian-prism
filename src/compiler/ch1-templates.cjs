@@ -184,7 +184,7 @@ function createCh1Templates({
       const api = W.__agPrism || W.__agClaudeStyle;
       if (api && api.version === __AG_REF_VER__ && api.codeHash === __AG_REF_HASH__ && typeof api.refreshConfig === 'function') {
         const off = (v) => v === 'off' || v === false, T = (f) => { try { f(); } catch {} };
-        if (cfg.__pmAuto) T(() => W.__agDomBus?.resolveAutoBootPerfMode?.(cfg, W));
+        if (cfg.__pmAuto) T(() => (W.__agDomBus || G.__agDomBus)?.resolveAutoBootPerfMode?.(cfg, W));
         if (api.refreshConfig(cfg) === false) return { refreshed: true, skippedStale: true, version: api.version };
         const e = api.getState?.()?.cfg || cfg, de = D.documentElement;
         const qa = (s) => D.querySelectorAll?.(s) || [];

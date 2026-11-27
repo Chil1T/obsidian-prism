@@ -51,6 +51,8 @@ const SYNC_ROOT_FILES = [
   'plugin.json',
   'package.json',
   'README.md',
+  'README.en.md',
+  'CHANGELOG.md',
   'LICENSE',
   'THIRD_PARTY_NOTICES.md',
   'config.example.json',
@@ -59,6 +61,7 @@ const SYNC_ROOT_FILES = [
   'remove.js',
   'style.css',
   'tools/install-plugin.cjs',
+  'workbench/app.js',
   ...DEFERRED_ROOT_MODULES,
   ...RUNTIME_PARTS.filter((p) => !p.includes('/')),
 ];

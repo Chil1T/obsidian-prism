@@ -263,6 +263,8 @@ export class PrismDaemonCompatBase {
   set _usageCacheFlushPromise(v) { this._s().telemetrySubsystem._usageCacheFlushPromise = v; }
   get _usageCacheFlushEpoch() { return this._s().telemetrySubsystem._usageCacheFlushEpoch; }
   set _usageCacheFlushEpoch(v) { this._s().telemetrySubsystem._usageCacheFlushEpoch = v; }
+  get _usageCacheFlushGen() { return this._s().telemetrySubsystem._usageCacheFlushGen; }
+  set _usageCacheFlushGen(v) { this._s().telemetrySubsystem._usageCacheFlushGen = v; }
   get _scopedTrajCache() { return this._s().telemetrySubsystem._scopedTrajCache; }
   set _scopedTrajCache(v) { this._s().telemetrySubsystem._scopedTrajCache = v; }
   get _scopedTrajInFlight() { return this._s().telemetrySubsystem._scopedTrajInFlight; }

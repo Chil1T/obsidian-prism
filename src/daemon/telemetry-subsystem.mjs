@@ -69,6 +69,8 @@ export class TelemetrySubsystem {
     this._usageCacheTimer = null;
     this._usageCacheFlushPromise = null;
     this._usageCacheFlushEpoch = 0;
+    this._usageCacheFlushGen = 0;
+    this._usageCacheRetiredPromises = new Set();
     this._scopedTrajCache = new Map();
     this._scopedTrajInFlight = new Map();
     this._lastTelemetryActivityAt = 0;
@@ -126,8 +128,13 @@ export class TelemetrySubsystem {
   flushUsageDiskCache() { return flushUsageDiskCache(this); }
   flushUsageDiskCacheAsync() { return flushUsageDiskCacheAsync(this); }
   async waitPendingUsageFlush() {
-    while (this._usageCacheFlushPromise) {
-      await this._usageCacheFlushPromise.catch(() => {});
+    while (this._usageCacheFlushPromise || (this._usageCacheRetiredPromises && this._usageCacheRetiredPromises.size > 0)) {
+      const pending = [];
+      if (this._usageCacheFlushPromise) pending.push(this._usageCacheFlushPromise.catch(() => {}));
+      if (this._usageCacheRetiredPromises && this._usageCacheRetiredPromises.size > 0) {
+        for (const p of this._usageCacheRetiredPromises) pending.push(p.catch(() => {}));
+      }
+      await Promise.all(pending);
     }
   }
 

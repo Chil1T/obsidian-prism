@@ -39,6 +39,7 @@ export function releaseIdleTelemetry(tel, force = false) {
     const idleMs = Date.now() - (tel._lastTelemetryActivityAt || 0);
     if (idleMs < 120000) return false;
     if (
+      tel._usageCacheFlushPromise ||
       tel._lazyUsage?.syncing ||
       tel._lazyUsage?.ledger?.diskWrites > 0 ||
       tel._lazyUsage?.ledger?.diskSummaryPending ||
@@ -58,6 +59,14 @@ export function releaseIdleTelemetry(tel, force = false) {
   tel._scopedTrajCache?.clear?.();
   tel._scopedTrajInFlight?.clear?.();
   flushUsageDiskCache(tel);
+  // 无论内存缓存是否已为空，均再次确保飞行中异步刷盘代数失效并解除引用，杜绝释后晚到覆盖
+  if (tel._usageCacheFlushPromise || tel._usageCacheTimer) {
+    if (tel._usageCacheTimer) {
+      clearTimeout(tel._usageCacheTimer);
+      tel._usageCacheTimer = null;
+    }
+    invalidateInFlightUsageFlush(tel);
+  }
   tel._usageDiskCache = null;
   for (const svc of targets) {
     if (!svc) continue;
@@ -73,7 +82,7 @@ export function resolveTelemetryDataDir(tel) {
   if (tel._telemetryDataDir) return tel._telemetryDataDir;
   const dir = path.join(os.homedir(), '.gemini', 'antigravity', 'sidecar_data', 'obsidian-prism', 'telemetry');
   try {
-    fs.mkdirSync(dir, { recursive: true });
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   } catch {}
   tel._telemetryDataDir = dir;
   return dir;
@@ -423,14 +432,45 @@ export function buildUsageDiskCacheSerialized(tel) {
   return Buffer.byteLength(serialized, 'utf8') <= USAGE_CACHE_MAX_BYTES ? serialized : null;
 }
 
+function bumpUsageFlushGen(tel) {
+  const next = Math.max(tel._usageCacheFlushGen || 0, tel._usageCacheFlushEpoch || 0) + 1;
+  tel._usageCacheFlushGen = next;
+  tel._usageCacheFlushEpoch = next;
+  return next;
+}
+
+function invalidateInFlightUsageFlush(tel) {
+  const gen = bumpUsageFlushGen(tel);
+  if (tel._usageCacheFlushPromise) {
+    if (!(tel._usageCacheRetiredPromises instanceof Set)) {
+      tel._usageCacheRetiredPromises = new Set();
+    }
+    const stale = tel._usageCacheFlushPromise;
+    tel._usageCacheRetiredPromises.add(stale);
+    stale
+      .finally(() => {
+        tel._usageCacheRetiredPromises?.delete?.(stale);
+      })
+      .catch(() => {});
+    tel._usageCacheFlushPromise = null;
+  }
+  return gen;
+}
+
 export function flushUsageDiskCache(tel) {
   if (tel._usageCacheTimer) {
     clearTimeout(tel._usageCacheTimer);
     tel._usageCacheTimer = null;
   }
-  if ((!tel._usageCacheDirty && !tel._usageCacheFlushPromise) || !(tel._usageDiskCache instanceof Map)) return;
+  const hadInFlight = Boolean(tel._usageCacheFlushPromise);
+  if (!tel._usageCacheDirty && !hadInFlight) return;
+  // 先行递增 flushGen/epoch 并解绑飞行中异步刷盘，确保旧异步写在 rename/copyFile 前中止
+  invalidateInFlightUsageFlush(tel);
+  if (!(tel._usageDiskCache instanceof Map)) {
+    tel._usageCacheDirty = false;
+    return;
+  }
   tel._usageCacheDirty = false;
-  tel._usageCacheFlushEpoch = (tel._usageCacheFlushEpoch || 0) + 1;
   try {
     const cacheFile = resolveActiveUsageCachePath(tel);
     const dir = path.dirname(cacheFile);
@@ -447,7 +487,9 @@ export function flushUsageDiskCache(tel) {
       writeFileAtomicSync(cacheFile, serialized, { mode: 0o600 });
       tel._lastFlushedUsageJson = serialized;
     }
-  } catch {}
+  } catch {
+    tel._usageCacheDirty = true;
+  }
 }
 
 export function flushUsageDiskCacheAsync(tel) {
@@ -460,7 +502,8 @@ export function flushUsageDiskCacheAsync(tel) {
   }
   if (!tel._usageCacheDirty || !(tel._usageDiskCache instanceof Map)) return Promise.resolve();
   tel._usageCacheDirty = false;
-  const epoch = (tel._usageCacheFlushEpoch = (tel._usageCacheFlushEpoch || 0) + 1);
+  const flushGen = bumpUsageFlushGen(tel);
+  const isStale = () => flushGen !== tel._usageCacheFlushGen || flushGen !== tel._usageCacheFlushEpoch;
   const cacheFile = resolveActiveUsageCachePath(tel);
   const dir = path.dirname(cacheFile);
   let serialized = null;
@@ -473,28 +516,44 @@ export function flushUsageDiskCacheAsync(tel) {
   const task = (async () => {
     try {
       await assertNotSymlinkAsync(cacheFile, 'usage cache file');
+      if (isStale()) return;
       await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
       await assertNotSymlinkAsync(dir, 'usage cache directory');
-      if (epoch !== tel._usageCacheFlushEpoch) return;
+      if (isStale()) return;
       if (tel._lastFlushedUsageJson === serialized) {
         try {
           await fs.promises.access(cacheFile);
           return;
         } catch {}
       }
+      if (isStale()) return;
       const wrote = await writeFileAtomicAsync(cacheFile, serialized, {
         mode: 0o600,
-        shouldAbort: () => epoch !== tel._usageCacheFlushEpoch,
+        shouldAbort: isStale,
       });
-      if (wrote && epoch === tel._usageCacheFlushEpoch) {
-        tel._lastFlushedUsageJson = serialized;
+      if (wrote) {
+        if (!isStale()) {
+          tel._lastFlushedUsageJson = serialized;
+        } else if (
+          typeof tel._lastFlushedUsageJson === 'string' &&
+          tel._lastFlushedUsageJson &&
+          tel._lastFlushedUsageJson !== serialized
+        ) {
+          // 极端 libuv 线程池竞态兜底：若旧 rename 已派发并在同步写之后完成，立即写回最新已确认快照
+          const latestGen = tel._usageCacheFlushGen;
+          const latestJson = tel._lastFlushedUsageJson;
+          await writeFileAtomicAsync(cacheFile, latestJson, {
+            mode: 0o600,
+            shouldAbort: () => latestGen !== tel._usageCacheFlushGen || latestGen !== tel._usageCacheFlushEpoch,
+          });
+        }
       }
     } catch {
     } finally {
       if (tel._usageCacheFlushPromise === task) {
         tel._usageCacheFlushPromise = null;
       }
-      if (tel._usageCacheDirty && tel._usageDiskCache instanceof Map) {
+      if (!tel._usageCacheFlushPromise && tel._usageCacheDirty && tel._usageDiskCache instanceof Map) {
         void flushUsageDiskCacheAsync(tel);
       }
     }
