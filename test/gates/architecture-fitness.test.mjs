@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { builtinModules, createRequire } from 'node:module';
+import { builtinModules, createRequire, isBuiltin } from 'node:module';
 import { execFileSync } from 'node:child_process';
 import { assertCssHygiene } from '../helpers/mini-dom.mjs';
 
@@ -10,6 +10,7 @@ const require = createRequire(import.meta.url);
 
 const ROOT = path.resolve(import.meta.dirname, '..', '..');
 const BUILTINS = new Set([...builtinModules, ...builtinModules.map((m) => `node:${m}`)]);
+const isNodeBuiltin = (spec) => BUILTINS.has(spec) || (typeof isBuiltin === 'function' && isBuiltin(spec));
 
 function listRepoFiles() {
   try {
@@ -242,7 +243,7 @@ test('Law 1: Zero external runtime node_modules dependencies, 0 static/Worker cy
             extViolations.push(`${f} synchronously require()s ESM module ${target} (breaks Node 22.0-22.11 ERR_REQUIRE_ESM)`);
           }
         }
-      } else if (BUILTINS.has(spec)) {
+      } else if (isNodeBuiltin(spec)) {
         if (browserOnly) {
           layerViolations.push(`${f} (browser) imports Node builtin "${spec}"`);
         }
@@ -253,7 +254,7 @@ test('Law 1: Zero external runtime node_modules dependencies, 0 static/Worker cy
       } else if (!spec.includes('${') && !spec.startsWith('http://') && !spec.startsWith('https://')) {
         // Guard against real third-party npm imports
         const barePkg = spec.split('/')[0];
-        if (!BUILTINS.has(barePkg) && !spec.startsWith('file:')) {
+        if (!isNodeBuiltin(barePkg) && !spec.startsWith('file:')) {
           externalDeps.push(`${f} -> "${spec}"`);
         }
       }
