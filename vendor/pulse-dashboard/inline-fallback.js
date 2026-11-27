@@ -10,7 +10,7 @@ const isFn=v=>typeof v==='function',isStr=v=>typeof v==='string',isFin=v=>typeof
 const gA=(e,k)=>e?.getAttribute?.(k),sA=(e,k,v)=>e?.setAttribute?.(k,v),rA=(e,k)=>e?.removeAttribute?.(k);
 const qS=(e,s)=>e?.querySelector?.(s),qA=(e,s)=>e?.querySelectorAll?.(s);
 const emitB=(w,p)=>{try{w?.__agPulseExternalBridge?.(p);}catch{}};
-const TI=s=>`[data-testid="${s}"]`,cT=t=>(t!==null&&clearTimeout(t),null),stTm=(fn,ms)=>{const t=setTimeout(fn,ms);t?.unref?.();return t;},on=(e,t,f,c)=>(e?.addEventListener?.(t,f,c),()=>e?.removeEventListener?.(t,f,c)),setIf=(e,k,v)=>{if(gA(e,k)!==v)sA(e,k,v);},qAll=(d,s)=>{let r=isFn(d?.querySelectorAll)?Array.from(d.querySelectorAll(s)):[];if(!r.length&&isFn(d?.querySelector)){const o=d.querySelector(s);if(o)r=[o];}return r;},mkTier=(anc,host)=>({anc,host,ro:null,raf:0,curFtTier:0,curBarTier:0,pendW:0,hasPendW:false,lastFtTv:'',lastBarTv:'',lastWide:false});
+const TI=s=>`[data-testid="${s}"]`,TIs=s=>s.split('|').map(TI).join(','),cT=t=>(t!==null&&clearTimeout(t),null),stTm=(fn,ms)=>{const t=setTimeout(fn,ms);t?.unref?.();return t;},on=(e,t,f,c)=>(e?.addEventListener?.(t,f,c),()=>e?.removeEventListener?.(t,f,c)),setIf=(e,k,v)=>{if(gA(e,k)!==v)sA(e,k,v);},qAll=(d,s)=>{let r=isFn(d?.querySelectorAll)?Array.from(d.querySelectorAll(s)):[];if(!r.length&&isFn(d?.querySelector)){const o=d.querySelector(s);if(o)r=[o];}return r;},mkTier=(anc,host)=>({anc,host,ro:null,raf:0,curFtTier:0,curBarTier:0,pendW:0,hasPendW:false,lastFtTv:'',lastBarTv:'',lastWide:false});
 
 const BAR_ID='ag-pulse-status-bar',PRISM_BAR_ID='ag-prism-pulse-bar',PRISM_BAR_ATTR='data-ag-prism-pulse-bar',FALLBACK_ATTR='data-ag-prism-fallback',HID_ATTR='data-ag-prism-hidden',METRICS_BINDING='__agPrismMetricsCall';
 const WAIT_MS=1500,GRACE_MS=3500,SW_DEBOUNCE_MS=30,HOVER_OPEN_MS=180,HOVER_CLOSE_MS=220,LRU_MAX=32,GUID_RE=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,URL_CID_RE=/\/c\/([0-9a-f-]{36})/i;
@@ -121,9 +121,9 @@ const HOST_ATTRS=Object.freeze({[FALLBACK_ATTR]:'1',[PRISM_BAR_ATTR]:'true','dat
 const HIDE_PROPS='position:fixed|left:-9999px|top:-9999px|width:1px|height:1px|opacity:0|pointer-events:none|visibility:hidden|overflow:hidden'.split('|').map(s=>s.split(':'));
 const FT_CUTS=[440,360],BAR_CUTS=[880,660,530,440,360],WIDE_CUT=1080,FT_SEL='.agy-composer-footer,'+TI('input-box-bottom-toolbar'),HC_A='data-hover-card-popup',QMODE_ATTR='data-ag-cs-telemetry-quota';
 const stepTier=(cur,w,cuts)=>{let t=cur;while(t<cuts.length&&w<cuts[t])t++;while(t>0&&w>=cuts[t-1]+12)t--;return t;};
-const SB_SEL='aside,'+TI('sidebar-split')+'>div:first-child,'+TI('conversation-row-sidebar')+','+TI('project-header')+',[data-hover-card-popup]';
-const IGN_STREAM_SEL='autoscroll-viewport|planner-response-text|agent-response|background-task-command|running-items-card'.split('|').map(TI).join(',')+',[data-markdown-root],'+SB_SEL+',[data-op-thought="1"],.ag-prism-thought-overlay,.ag-cs-conv-aura-host,.ag-cs-crab,.ag-cs-prism-rim-cv,.ag-anim-icon,.ag-cs-thinking-spark,[data-agy-hans-ui],#agy-theme-switcher,#agy-theme-menu,#antigravity-quota-widget,#antigravity-translation-audit';
-const BURST_STEPS=[450,700,900,1100,1400,1800,2200,2500],BUSY_SEL='input-cancel-button|stop-button|cancel-button|stop-generation-button'.split('|').map(TI).join(','),SEND_SEL=TI('input-send-button')+','+TI('send-button')+','+IB_S+' button[type="submit"]',SLASH_OPT_SEL='[id^="typeahead-item-"][role="option"],'+TI('slash-command-menu')+' [role="option"],[role="listbox"] [role="option"]',CMP_RE=/^\/compact(?:\s|$)/i;
+const SB_SEL='aside,'+TI('sidebar-split')+'>div:first-child,'+TIs('conversation-row-sidebar|project-header')+',['+HC_A+']';
+const IGN_STREAM_SEL=TIs('autoscroll-viewport|planner-response-text|agent-response|background-task-command|running-items-card')+',[data-markdown-root],'+SB_SEL+',[data-op-thought="1"],.ag-prism-thought-overlay,.ag-cs-conv-aura-host,.ag-cs-crab,.ag-cs-prism-rim-cv,.ag-anim-icon,.ag-cs-thinking-spark,[data-agy-hans-ui],#agy-theme-switcher,#agy-theme-menu,#antigravity-quota-widget,#antigravity-translation-audit';
+const BURST_STEPS=[450,700,900,1100,1400,1800,2200,2500],BUSY_SEL=TIs('input-cancel-button|stop-button|cancel-button|stop-generation-button'),SEND_SEL=TIs('input-send-button|send-button')+','+IB_S+' button[type="submit"]',SLASH_OPT_SEL='[id^="typeahead-item-"][role="option"],'+TI('slash-command-menu')+' [role="option"],[role="listbox"] [role="option"]',PT_SEL=TIs('agy-context-ring-trigger|agy-speed-stats-trigger'),CMP_RE=/^\/compact(?:\s|$)/i;
 let reqSeq=0;
 
 function createTelemetryController(envOpts){
@@ -314,9 +314,9 @@ return true;
 };
 const findExtBars=doc=>{
 if(!doc)return[];
-const seen=new Set(),out=[],add=e=>{if(e&&!seen.has(e)){seen.add(e);out.push(e);}};
+const s=new Set(),add=e=>{if(e)s.add(e);};
 try{for(const e of qA(doc,`#${BAR_ID},[id^="${BAR_ID}"],[data-ag-pulse-bar="true"]`)||[])add(e);}catch{}
-add(doc.getElementById?.(BAR_ID));return out;
+add(doc.getElementById?.(BAR_ID));return[...s];
 };
 const purgeOrphans=doc=>{
 const live=new Set();for(const it of insts.values())live.add(it.host);
@@ -331,6 +331,7 @@ if(!b||gA(b,FALLBACK_ATTR)==='1'||!isConn(doc,b)||gA(b,HID_ATTR)==='1')continue;
 if(usableExt(doc,b)){detAt=0;return true;}
 sawDead=true;
 }
+for(const e of qAll(doc,PT_SEL))if(usableExt(doc,e)){detAt=0;return true;}
 if(sawDead)return false;
 const sig=[w.__agPulseRuntimeOwner?String(w.__agPulseRuntimeOwner):'',w.__agPulseRuntimeBridge?'b':'',w.__agPulseInlineInstalled&&!extGuardHeld?'1':'',w.agPulseHost&&!w.agPulseHost.__prismFallback?'h':''].join('|');
 if(sig!=='|||'){const now=Date.now();if(sig!==lastSig){lastSig=sig;detAt=now;return true;}if(!detAt)detAt=now;return now-detAt<GRACE_MS;}
@@ -371,8 +372,8 @@ const unmountFb=(keepBridge=false)=>{
 clrWait();clrSw();clrBurst();clrPoll();clrCompactWatch();clrBlur();
 if(docOff){try{docOff();}catch{}docOff=null;}
 if(!keepBridge){clrSeat();for(const it of pend.values()){cT(it.timer);it.onSettle?.();it.resolve(null);}pend.clear();inFlight.clear();rmHost();}
-const list=[...insts.values()];for(let i=0;i<list.length;i++)disposeInst(list[i],false);
-if(list.length>0)emitB(gW(),{event:'dispose'});
+const n=insts.size;for(const it of[...insts.values()])disposeInst(it,false);
+if(n)emitB(gW(),{event:'dispose'});
 purgeOrphans(gD());activeHost=null;
 };
 
@@ -683,6 +684,7 @@ const inC=isConv(doc,w);let bars=null;
 const gB=()=>bars||(bars=findExtBars(doc)),visB=b=>b&&gA(b,HID_ATTR)!=='1';
 if(!inC){if(insts.size||gB().some(visB))schedHeal(true);return;}
 if(insts.size){
+if(mode==='auto'&&hasExt(gB(),true)){schedHeal(true);return;}
 const nowB=hasBusyBtn(doc);
 if(wasBusy&&!nowB){wasBusy=false;armCompactBurst(null,null,[180,650,1100]);}else wasBusy=nowB;
 const sw=checkConvSwitch(doc,w,false);if(anchorsChanged(doc)){schedHeal(sw);return;}if(sw)return;

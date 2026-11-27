@@ -3975,3 +3975,88 @@ test('Sidebar chrome (Projects/Conversations/Pinned/Coordinator) translates in o
   offInst.destroy();
   assert.equal(offEnv.docListeners.get('click:true')?.size || 0, 0);
 });
+
+test('External localization auto-yield for agy-powertools (__agyLocalization): auto yields initially and on delayed Layer 2b injection, while explicit on takes control', () => {
+  const dict = { exact: { Settings: '设置', Save: '保存' }, patterns: [] };
+
+  // 1) Initial Layer 1 auto-yield when __agyLocalization is present
+  const envAuto = createTestEnv(1000);
+  envAuto.win.__agyLocalization = { version: '1.0.0' };
+  const btnAuto = envAuto.makeEl('button', { text: 'Settings' });
+  envAuto.doc.body.append(btnAuto);
+
+  const l1 = runtime.detectLayer1External(envAuto.win, envAuto.doc);
+  assert.equal(l1.hit, true);
+  assert.equal(l1.provider, 'agy-powertools');
+  assert.equal(l1.detail, 'global:__agyLocalization');
+
+  const instAuto = runtime.mountHostI18n({
+    root: envAuto.win,
+    doc: envAuto.doc,
+    dict,
+    mode: 'auto',
+    nowFn: envAuto.nowFn,
+    setTimeoutFn: envAuto.setTimeoutFn,
+    clearTimeoutFn: envAuto.clearTimeoutFn,
+    rafFn: envAuto.rafFn,
+    cancelRafFn: envAuto.cancelRafFn,
+  });
+  const stAuto = instAuto.getStatus();
+  assert.equal(stAuto.active, false);
+  assert.equal(stAuto.status, 'yielded');
+  assert.equal(stAuto.yielded, true);
+  assert.equal(stAuto.detectedProvider, 'agy-powertools');
+  assert.equal(btnAuto.textContent, 'Settings', 'auto mode must leave UI untouched when __agyLocalization is present');
+  instAuto.destroy();
+
+  // 2) Delayed Layer 2b arrival of __agyLocalization rolls back cleanly in auto mode
+  const envLate = createTestEnv(1000);
+  const btnLate = envLate.makeEl('button', { text: 'Settings' });
+  envLate.doc.body.append(btnLate);
+  const instLate = runtime.mountHostI18n({
+    root: envLate.win,
+    doc: envLate.doc,
+    dict,
+    mode: 'auto',
+    nowFn: envLate.nowFn,
+    setTimeoutFn: envLate.setTimeoutFn,
+    clearTimeoutFn: envLate.clearTimeoutFn,
+    rafFn: envLate.rafFn,
+    cancelRafFn: envLate.cancelRafFn,
+  });
+  assert.equal(instLate.getStatus().status, 'active');
+  assert.equal(btnLate.textContent, '设置');
+  envLate.win.__agyLocalization = { active: true };
+  envLate.advanceTime(500);
+  const stLate = instLate.getStatus();
+  assert.equal(stLate.status, 'yielded');
+  assert.equal(stLate.yielded, true);
+  assert.equal(stLate.detectedProvider, 'agy-powertools');
+  assert.equal(btnLate.textContent, 'Settings', 'Delayed __agyLocalization must roll back translated text losslessly');
+  instLate.destroy();
+
+  // 3) Explicit mode="on" overrides auto-yield and keeps user in control
+  const envOn = createTestEnv(1000);
+  envOn.win.__agyLocalization = { active: true };
+  const btnOn = envOn.makeEl('button', { text: 'Save' });
+  envOn.doc.body.append(btnOn);
+  const instOn = runtime.mountHostI18n({
+    root: envOn.win,
+    doc: envOn.doc,
+    dict,
+    mode: 'on',
+    nowFn: envOn.nowFn,
+    setTimeoutFn: envOn.setTimeoutFn,
+    clearTimeoutFn: envOn.clearTimeoutFn,
+    rafFn: envOn.rafFn,
+    cancelRafFn: envOn.cancelRafFn,
+  });
+  envOn.advanceTime(1300);
+  const stOn = instOn.getStatus();
+  assert.equal(stOn.active, true);
+  assert.equal(stOn.status, 'active');
+  assert.equal(stOn.yielded, false);
+  assert.equal(btnOn.textContent, '保存', 'Explicit mode="on" must translate even when __agyLocalization exists');
+  instOn.destroy();
+  assert.equal(btnOn.textContent, 'Save');
+});

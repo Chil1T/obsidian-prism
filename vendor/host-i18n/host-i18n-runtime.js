@@ -57,6 +57,7 @@
  { provider: 'Ace2025001', keys: ['__AGY_ZHCN__', '__AGY_ZHCN_LOOKUP__'] },
  { provider: 'Zero-Touch', keys: ['__antigravityZh', '__antigravityZhDict'] },
  { provider: 'yunjuanyunshu', keys: ['__AG_ZH__'] },
+ { provider: 'agy-powertools', keys: ['__agyLocalization'] },
  { provider: 'generic-external', keys: ['__ANTIGRAVITY_CN__', '__ANTIGRAVITY_I18N__', '__AG_I18N__', '__AG_CN_PATCH__', '__AGY_CN__', '__I18N_PATCHED__'] },
  ];
  var KNOWN_EXTERNAL_ATTRS = ['data-agy-i18n', 'data-ag-cn', 'data-i18n-patched', 'data-translated'];
