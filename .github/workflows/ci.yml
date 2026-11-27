@@ -63,4 +63,4 @@ jobs:
           fi
 
       - name: Run full test suite
-        run: npm test
+        run: node scripts/run-tests.mjs --all

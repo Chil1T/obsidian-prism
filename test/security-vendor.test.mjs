@@ -26,6 +26,10 @@ const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, '..');
 const SIDEBAR_CLIENT_FILE = path.join(ROOT_DIR, 'vendor', 'sidebar-studio', 'sidebar-client.js');
 
+function mkRealTempDir(prefix) {
+  return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
+}
+
 function createSidebarClientHarness({
   initialBootCfg = null,
   assignments = {},
@@ -550,7 +554,7 @@ test('P1 translator-service: blocks IPv6/multicast SSRF variants, keeps explicit
   assert.equal(isKeylessAllowedEndpoint('https://fd99.example.org/v1'), false);
 
   // 4) 显式 http:// 公网与局域网渠道 saveConfig 保存不回弹 OpenAI，且防第三方 Key 静默泄漏至 api.openai.com
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-sec-trans-'));
+  const tmpDir = mkRealTempDir('prism-sec-trans-');
   try {
     const fetchCalls = [];
     const spyFetch = async (url, init) => {
@@ -717,7 +721,7 @@ test('P2 live-host-adapter: rejects __proto__/constructor/prototype cascadeId an
 });
 
 test('P2 pulse-dashboard: store LRU preserves processing background sessions & bounds cachedSession; trajectory-reader drops stale 0-byte zombies; usage & background-statistics cap caches and surface diagnostics', async () => {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-sec-pulse-'));
+  const tmpDir = mkRealTempDir('prism-sec-pulse-');
   try {
     // 1) MetricsStore: LRU 淘汰跳过活跃后台处理态会话，且 cachedSession 复用 32 条上限淘汰
     const mkGuid = (n) => `10000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
@@ -838,7 +842,7 @@ test('P2 pulse-dashboard: store LRU preserves processing background sessions & b
 });
 
 test('security-vendor 7: ThoughtTranslatorService _request blocks DNS-rebinding SSRF (direct & HTTP proxy), allows explicit loopback/LAN/http, and forces redirect=error', async () => {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-tt-ssrf-'));
+  const tmpDir = mkRealTempDir('prism-tt-ssrf-');
   try {
     const blockedIps = [
       { address: '127.0.0.1', family: 4 },
@@ -941,7 +945,7 @@ test('security-vendor 7: ThoughtTranslatorService _request blocks DNS-rebinding 
 });
 
 test('security-vendor 8: ThoughtTranslatorService _persistStore and _flushCacheToDisk reject symlink/junction paths and write atomically', () => {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-tt-atomic-'));
+  const tmpDir = mkRealTempDir('prism-tt-atomic-');
   try {
     // 1) 正常原子落盘校验
     const cleanDir = path.join(tmpDir, 'clean');
@@ -1195,7 +1199,7 @@ test('security-vendor 12: thought-settings-ui preserves explicit http:// URLs an
     path.join(ROOT_DIR, 'vendor', 'thought-translator', 'thought-settings-ui.js'),
     'utf8'
   );
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-tt-ui-err-'));
+  const tmpDir = mkRealTempDir('prism-tt-ui-err-');
   try {
     const svc = new ThoughtTranslatorService({ configDir: tmpDir });
     const listeners = new Map();

@@ -39,6 +39,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, '..');
 
+function mkRealTempDir(prefix) {
+  return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
+}
+
 async function waitUntil(pred, timeoutMs = 1500, stepMs = 15) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -302,7 +306,7 @@ test('Open-source defaults use neutral engineering prompts, enforce HTTP(S) URL 
 });
 
 test('Multi-profile CRUD and key masking never expose raw API keys in sanitized payloads', () => {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-thought-cfg-'));
+  const tmpDir = mkRealTempDir('prism-thought-cfg-');
   try {
     const svc = new ThoughtTranslatorService({
       configDir: path.join(tmpDir, 'gemini-cfg'),
@@ -368,7 +372,7 @@ test('Multi-profile CRUD and key masking never expose raw API keys in sanitized 
 });
 
 test('OpenAI /models fetch, testConnection latency, SSE AI stream, and inline-code machine translate work end-to-end', async () => {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-thought-net-'));
+  const tmpDir = mkRealTempDir('prism-thought-net-');
   try {
     const encoder = new TextEncoder();
     const mockFetch = async (url, init = {}) => {
@@ -645,7 +649,7 @@ test('Task 2: Allows keyless local Ollama / LM Studio / vLLM with Qwen3 no-think
   const o3Params = buildNoThinkingParams('o3-mini', 'https://api.openai.com/v1');
   assert.equal(o3Params.reasoning_effort, 'low');
 
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-thought-local-'));
+  const tmpDir = mkRealTempDir('prism-thought-local-');
   try {
     const capturedRequests = [];
     let rejectExtendedOnce = false;
@@ -773,7 +777,7 @@ test('Task 2: Allows keyless local Ollama / LM Studio / vLLM with Qwen3 no-think
 
 test('Task 3: Enforces MAX_CONCURRENCY=3 LIFO/priority semaphore, cancels unstarted tasks, and supports retry & retranslate', async () => {
   assert.equal(MAX_CONCURRENCY, 3);
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-thought-queue-'));
+  const tmpDir = mkRealTempDir('prism-thought-queue-');
   try {
     let activeFetches = 0;
     let peakFetches = 0;
@@ -904,7 +908,7 @@ test('Task 3: Enforces MAX_CONCURRENCY=3 LIFO/priority semaphore, cancels unstar
 });
 
 test('Task 4: Supports global bilingual stacked view mode and dual-end cache stats / clear (with daemon-unwired fallback)', async () => {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-thought-cache-'));
+  const tmpDir = mkRealTempDir('prism-thought-cache-');
   try {
     const svc = new ThoughtTranslatorService({
       configDir: tmpDir,
@@ -1391,7 +1395,7 @@ test('Issue #105: clicking a style preset persists it right away so it survives 
     path.join(ROOT_DIR, 'vendor', 'thought-translator', 'thought-settings-ui.js'),
     'utf8'
   );
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-thought-style-'));
+  const tmpDir = mkRealTempDir('prism-thought-style-');
   let svc = null;
   try {
     // 真实持久化层落在隔离临时配置目录，仅 mock 桥接调用。
@@ -1512,7 +1516,7 @@ test('Issue #105 coalescing queue: rapid style preset clicks A -> B -> C seriali
     path.join(ROOT_DIR, 'vendor', 'thought-translator', 'thought-settings-ui.js'),
     'utf8'
   );
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-thought-style-queue-'));
+  const tmpDir = mkRealTempDir('prism-thought-style-queue-');
   let svc = null;
   try {
     svc = new ThoughtTranslatorService({ configDir: tmpDir });
@@ -1686,7 +1690,7 @@ test('Phase 2 TS-1~TS-8 security & lifecycle audit: SSRF/redirect defense, key r
   assert.equal(redacted.includes('7788'), false);
   assert.ok(redacted.includes('?api_key=***REDACTED***&x=1'));
 
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-thought-sec-'));
+  const tmpDir = mkRealTempDir('prism-thought-sec-');
   try {
     const encoder = new TextEncoder();
     const seenRedirects = [];
@@ -2102,7 +2106,7 @@ test('Smooth Token Pacer + incremental .ag-prism-thought-chunk fade-in, paragrap
 });
 
 test('Cache jank root-cause guards: persisted custom styleTag 0ms hit, collapsed preload O(1) skip, checkVisibility/800px lazy hydration & capture scroll', async () => {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-thought-cacheperf-'));
+  const tmpDir = mkRealTempDir('prism-thought-cacheperf-');
   try {
     // 1) Backend getWarmCacheSnapshot caps at <= 40 entries & <= 80,000 chars, and cached hit skips duplicate onPartial
     const svc = new ThoughtTranslatorService({ configDir: tmpDir });
@@ -2500,7 +2504,7 @@ test('Zero-flicker streaming: appendData preserves CSS.highlights Range offsets,
 });
 
 test('Mixed-language CoT regression: Chinese-prefixed English reasoning is never skipped, skipped responses never poison cache/lock panel, and stale overlays clear', async () => {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-thought-mixed-'));
+  const tmpDir = mkRealTempDir('prism-thought-mixed-');
   try {
     const gtxCalls = [];
     const aiSystemPrompts = [];
@@ -2653,7 +2657,7 @@ test('Mixed-language CoT regression: Chinese-prefixed English reasoning is never
 });
 
 test('8-locale targetLang adaptation: prompt/boundary routing, GTX tl= mapping, EN/JA/KO/ES/FR/DE/zh-TW trigger rules, yue->zh-CN migration & cache isolation', async () => {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-thought-8lang-'));
+  const tmpDir = mkRealTempDir('prism-thought-8lang-');
   try {
     // 1) normalizeTargetLang & canonicalizeThoughtSkeleton Japanese/Korean preservation
     assert.equal(normalizeTargetLang('zh'), 'zh-CN');
@@ -2893,7 +2897,7 @@ test('8-locale targetLang adaptation: prompt/boundary routing, GTX tl= mapping, 
 });
 
 test('PR #13 security hardening: cross-origin key isolation, bounded 4 MiB response reader, thought_source tag stripping & non-silent _persistStore failure', async () => {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-thought-pr13-'));
+  const tmpDir = mkRealTempDir('prism-thought-pr13-');
   try {
     const capturedRequests = [];
     let oversizedMode = '';
@@ -3167,7 +3171,7 @@ test('Issue #14 system proxy detection: Windows reg query, macOS scutil, env pri
   assert.equal(bypassedByNoProxy, null);
 
   let execCount = 0;
-  const proxyCfgDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-thought-proxy-probe-'));
+  const proxyCfgDir = mkRealTempDir('prism-thought-proxy-probe-');
   try {
     const cachedSvc = new ThoughtTranslatorService({
       configDir: proxyCfgDir,
@@ -3209,7 +3213,7 @@ test('Issue #14 system proxy detection: Windows reg query, macOS scutil, env pri
 });
 
 test('Issue #14 end-to-end local proxy transport: HTTP forwarding, SSE streaming, CONNECT handshake, AbortSignal cancel & redirect:error enforcement', async () => {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-thought-proxy-e2e-'));
+  const tmpDir = mkRealTempDir('prism-thought-proxy-e2e-');
   const activeSockets = new Set();
   const trackSocket = (sock) => {
     activeSockets.add(sock);
@@ -3562,7 +3566,7 @@ test('Issue #14 thought-settings-ui: renders 8-locale usage hint, 5+1 anti-trans
 });
 
 test('Red-team security hardening: HTTPS proxy SNI servername, microtask queue cancel slot release, 8 MiB stream/zlib bomb cap, single-segment credential redaction, NO_PROXY ReDoS & absolute OS proxy commands', async () => {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-thought-redteam-'));
+  const tmpDir = mkRealTempDir('prism-thought-redteam-');
   const activeSockets = new Set();
   const trackSocket = (s) => {
     activeSockets.add(s);

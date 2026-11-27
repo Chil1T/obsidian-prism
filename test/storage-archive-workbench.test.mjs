@@ -22,7 +22,7 @@ const NON_CJK_4 = ['en', 'es', 'fr', 'de', 'tr'];
 const CJK_RE = /[\u4e00-\u9fff\u3400-\u4dbf]/;
 
 function makeTempDir(prefix) {
-  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
 }
 
 function writeSizedFile(filePath, bytes, mtimeMs) {

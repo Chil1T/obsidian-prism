@@ -51,7 +51,7 @@ const ROOT_DIR = path.resolve(path.dirname(__filename), '..');
 const cdp = require(path.join(ROOT_DIR, 'cdp.js'));
 
 function makeTempDir(prefix) {
-  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
 }
 
 function makeMockEntry({
