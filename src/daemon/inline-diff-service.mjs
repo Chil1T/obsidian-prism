@@ -381,6 +381,7 @@ function projectInlineDiffEntry(rawEntry, { maxDiffLines, maxSnapshotLines, maxL
       lines: parsed.lines,
     };
     if (parsed.cumulativeDiff) projected.cumulativeDiff = true;
+    if (Number.isInteger(parsed.focusHunk) && parsed.focusHunk >= 0) projected.focusHunk = parsed.focusHunk;
     return projected;
   }
   const textLines = rawEntry.rawText.length > 0 ? rawEntry.rawText.split('\n') : [];
