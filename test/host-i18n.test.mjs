@@ -3466,3 +3466,206 @@ test('N1 hardening: nested/testid thinking panels stay blocked, step arg chips (
   fbBus.destroy(fbEnv.doc, fbEnv.win);
   bus.destroy(cvEnv.doc, cvEnv.win);
 });
+
+test('Visible blurred-window cold scan drains pendingNodes step rows cleanly while preserving hidden=true and performance-tier hibernation', () => {
+  const dict = {
+    exact: {
+      Settings: '设置',
+      Save: '保存',
+      'Asking 4 questions': '正在询问 4 个问题',
+      'Waiting for user input': '正在等待用户输入',
+    },
+    patterns: [],
+  };
+
+  function buildLargeTreeWithSteps(env, buttonCount = 190, stepCount = 30) {
+    const header = env.makeEl('div');
+    const btns = [];
+    for (let i = 0; i < buttonCount; i++) {
+      const b = env.makeEl('button', { text: 'Settings' });
+      btns.push(b);
+      header.append(b);
+    }
+    const convView = env.makeEl('div', { attrs: { 'data-testid': 'conversation-view' } });
+    const stepList = env.makeEl('div', { attrs: { 'data-step-rows': 'true' } });
+    const steps = [];
+    for (let i = 0; i < stepCount; i++) {
+      const row = env.makeEl('div', { attrs: { 'data-step-index': String(i) } });
+      const sp = env.makeEl('span', { text: i % 2 === 0 ? 'Asking 4 questions' : 'Waiting for user input' });
+      row.append(sp);
+      stepList.append(row);
+      steps.push(sp);
+    }
+    convView.append(stepList);
+    env.doc.body.append(header, convView);
+    return { btns, steps };
+  }
+
+  // 1a. Hot-inject / cold-boot on visible but unfocused window (data-ag-cs-win-blur="1", hidden=false, default balanced tier)
+  const blurBootEnv = createTestEnv(1000);
+  blurBootEnv.doc.documentElement.setAttribute('data-ag-cs-win-blur', '1');
+  const tree1a = buildLargeTreeWithSteps(blurBootEnv);
+  const inst1a = runtime.mountHostI18n({
+    root: blurBootEnv.win,
+    doc: blurBootEnv.doc,
+    dict,
+    mode: 'auto',
+    nowFn: blurBootEnv.nowFn,
+    setTimeoutFn: blurBootEnv.setTimeoutFn,
+    clearTimeoutFn: blurBootEnv.clearTimeoutFn,
+    rafFn: blurBootEnv.rafFn,
+    cancelRafFn: blurBootEnv.cancelRafFn,
+  });
+  assert.equal(tree1a.btns[0].textContent, '设置', 'Initial visible-blur sync budget translates top controls');
+  blurBootEnv.advanceTime(1300);
+  assert.equal(tree1a.btns.filter((b) => b.textContent === '设置').length, 190, 'All deferred header buttons must drain');
+  assert.equal(
+    tree1a.steps.filter((s) => s.textContent === '正在询问 4 个问题' || s.textContent === '正在等待用户输入').length,
+    30,
+    'All deferred conversation step rows in pendingNodes must drain cleanly even under data-ag-cs-win-blur="1"'
+  );
+  assert.equal(blurBootEnv.observerInstances[0].connected, false, 'After initial drain completes, MO disconnects under win-blur');
+  assert.equal(blurBootEnv.timers.size, 0, '0 rAF/timers remain after drain + Layer 2b window under win-blur');
+
+  // Subsequent mutations while still blurred still stay hibernated until focus
+  const lateBtn1a = blurBootEnv.makeEl('button', { text: 'Save' });
+  blurBootEnv.doc.body.append(lateBtn1a);
+  blurBootEnv.advanceTime(100);
+  assert.equal(lateBtn1a.textContent, 'Save', 'Regular post-boot mutation still hibernates under win-blur');
+  blurBootEnv.doc.documentElement.removeAttribute('data-ag-cs-win-blur');
+  blurBootEnv.win.dispatchEvent({ type: 'focus' });
+  blurBootEnv.advanceTime(100);
+  assert.equal(lateBtn1a.textContent, '保存', 'Focus wake catches up missed DOM after win-blur');
+  inst1a.destroy();
+
+  // 1b. Mid-drain blur transition (focused on frame 0, then data-ag-cs-win-blur="1" arrives before rAF flush)
+  const midBlurEnv = createTestEnv(1000);
+  const tree1b = buildLargeTreeWithSteps(midBlurEnv);
+  const inst1b = runtime.mountHostI18n({
+    root: midBlurEnv.win,
+    doc: midBlurEnv.doc,
+    dict,
+    mode: 'on',
+    nowFn: midBlurEnv.nowFn,
+    setTimeoutFn: midBlurEnv.setTimeoutFn,
+    clearTimeoutFn: midBlurEnv.clearTimeoutFn,
+    rafFn: midBlurEnv.rafFn,
+    cancelRafFn: midBlurEnv.cancelRafFn,
+  });
+  const syncDone1b = tree1b.steps.filter((s) => s.textContent !== 'Asking 4 questions' && s.textContent !== 'Waiting for user input').length;
+  assert.ok(syncDone1b < 30, 'Step rows exceed initial 160-node budget and are queued into pendingNodes');
+  midBlurEnv.doc.documentElement.setAttribute('data-ag-cs-win-blur', '1');
+  const midBlurObs = midBlurEnv.observerInstances.find((o) => o.options?.attributeFilter?.includes('data-ag-cs-win-blur'));
+  midBlurObs?.cb([{ type: 'attributes', attributeName: 'data-ag-cs-win-blur' }]);
+  midBlurEnv.flushObservers();
+  midBlurEnv.advanceTime(200);
+  assert.equal(
+    tree1b.steps.filter((s) => s.textContent === '正在询问 4 个问题' || s.textContent === '正在等待用户输入').length,
+    30,
+    'Mid-drain win-blur must NOT drop pendingNodes step rows half-translated'
+  );
+  assert.equal(midBlurEnv.observerInstances[0].connected, false, 'MO disconnects once pendingNodes finish draining under win-blur');
+  assert.equal(midBlurEnv.timers.size, 0);
+  inst1b.destroy();
+
+  // 2. document.hidden === true must ALWAYS hibernate immediately (both on mount and mid-drain)
+  const hiddenEnv = createTestEnv(1000);
+  hiddenEnv.doc.hidden = true;
+  const treeHidden = buildLargeTreeWithSteps(hiddenEnv, 10, 5);
+  const instHidden = runtime.mountHostI18n({
+    root: hiddenEnv.win,
+    doc: hiddenEnv.doc,
+    dict,
+    mode: 'on',
+    nowFn: hiddenEnv.nowFn,
+    setTimeoutFn: hiddenEnv.setTimeoutFn,
+    clearTimeoutFn: hiddenEnv.clearTimeoutFn,
+    rafFn: hiddenEnv.rafFn,
+    cancelRafFn: hiddenEnv.cancelRafFn,
+  });
+  hiddenEnv.advanceTime(200);
+  assert.equal(treeHidden.btns.filter((b) => b.textContent === '设置').length, 0, 'Hidden doc must perform 0 initial scan');
+  assert.equal(treeHidden.steps.filter((s) => s.textContent === '正在询问 4 个问题').length, 0);
+  assert.equal(hiddenEnv.timers.size, 0, 'Hidden doc must schedule 0 timers/rAF');
+  hiddenEnv.doc.hidden = false;
+  hiddenEnv.doc.dispatchEvent({ type: 'visibilitychange' });
+  hiddenEnv.advanceTime(100);
+  assert.equal(treeHidden.btns[0].textContent, '设置', 'Restoring visibility translates pending UI');
+  assert.equal(treeHidden.steps[0].textContent, '正在询问 4 个问题');
+  instHidden.destroy();
+
+  const hiddenMidEnv = createTestEnv(1000);
+  const treeHiddenMid = buildLargeTreeWithSteps(hiddenMidEnv);
+  const instHiddenMid = runtime.mountHostI18n({
+    root: hiddenMidEnv.win,
+    doc: hiddenMidEnv.doc,
+    dict,
+    mode: 'on',
+    nowFn: hiddenMidEnv.nowFn,
+    setTimeoutFn: hiddenMidEnv.setTimeoutFn,
+    clearTimeoutFn: hiddenMidEnv.clearTimeoutFn,
+    rafFn: hiddenMidEnv.rafFn,
+    cancelRafFn: hiddenMidEnv.cancelRafFn,
+  });
+  hiddenMidEnv.doc.hidden = true;
+  hiddenMidEnv.doc.dispatchEvent({ type: 'visibilitychange' });
+  assert.equal(hiddenMidEnv.timers.size, 0, 'Becoming hidden mid-drain must cancel rAF immediately');
+  assert.equal(treeHiddenMid.steps[29].textContent, 'Waiting for user input', 'Hidden mid-drain must halt immediately');
+  hiddenMidEnv.doc.hidden = false;
+  hiddenMidEnv.doc.dispatchEvent({ type: 'visibilitychange' });
+  hiddenMidEnv.advanceTime(200);
+  assert.equal(treeHiddenMid.steps[29].textContent, '正在等待用户输入', 'Unhiding resumes and finishes all steps');
+  instHiddenMid.destroy();
+
+  // 3. performance tier keeps strict win-blur power-saving hibernation (on mount and mid-drain)
+  const perfEnv = createTestEnv(1000);
+  perfEnv.doc.documentElement.setAttribute('data-ag-cs-perf-mode', 'performance');
+  perfEnv.doc.documentElement.setAttribute('data-ag-cs-win-blur', '1');
+  const treePerf = buildLargeTreeWithSteps(perfEnv, 10, 5);
+  const instPerf = runtime.mountHostI18n({
+    root: perfEnv.win,
+    doc: perfEnv.doc,
+    dict,
+    mode: 'on',
+    nowFn: perfEnv.nowFn,
+    setTimeoutFn: perfEnv.setTimeoutFn,
+    clearTimeoutFn: perfEnv.clearTimeoutFn,
+    rafFn: perfEnv.rafFn,
+    cancelRafFn: perfEnv.cancelRafFn,
+  });
+  perfEnv.advanceTime(200);
+  assert.equal(treePerf.btns.filter((b) => b.textContent === '设置').length, 0, 'performance tier under win-blur must skip cold scan');
+  assert.equal(perfEnv.timers.size, 0);
+  perfEnv.doc.documentElement.removeAttribute('data-ag-cs-win-blur');
+  perfEnv.win.dispatchEvent({ type: 'focus' });
+  perfEnv.advanceTime(100);
+  assert.equal(treePerf.btns[0].textContent, '设置', 'Clearing win-blur wakes performance tier');
+  assert.equal(treePerf.steps[0].textContent, '正在询问 4 个问题');
+  instPerf.destroy();
+
+  const perfMidEnv = createTestEnv(1000);
+  perfMidEnv.doc.documentElement.setAttribute('data-ag-cs-perf-mode', 'performance');
+  const treePerfMid = buildLargeTreeWithSteps(perfMidEnv);
+  const instPerfMid = runtime.mountHostI18n({
+    root: perfMidEnv.win,
+    doc: perfMidEnv.doc,
+    dict,
+    mode: 'on',
+    nowFn: perfMidEnv.nowFn,
+    setTimeoutFn: perfMidEnv.setTimeoutFn,
+    clearTimeoutFn: perfMidEnv.clearTimeoutFn,
+    rafFn: perfMidEnv.rafFn,
+    cancelRafFn: perfMidEnv.cancelRafFn,
+  });
+  perfMidEnv.doc.documentElement.setAttribute('data-ag-cs-win-blur', '1');
+  const perfBlurObs = perfMidEnv.observerInstances.find((o) => o.options?.attributeFilter?.includes('data-ag-cs-win-blur'));
+  perfBlurObs?.cb([{ type: 'attributes', attributeName: 'data-ag-cs-win-blur' }]);
+  perfMidEnv.advanceTime(200);
+  assert.equal(perfMidEnv.timers.size, 0, 'performance tier must halt mid-drain rAF immediately on win-blur');
+  assert.equal(treePerfMid.steps[29].textContent, 'Waiting for user input');
+  perfMidEnv.doc.documentElement.removeAttribute('data-ag-cs-win-blur');
+  perfMidEnv.win.dispatchEvent({ type: 'focus' });
+  perfMidEnv.advanceTime(200);
+  assert.equal(treePerfMid.steps[29].textContent, '正在等待用户输入', 'Focus wake completes remaining steps on performance tier');
+  instPerfMid.destroy();
+});

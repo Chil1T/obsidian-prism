@@ -1899,6 +1899,7 @@
  var pausedByWindowBlur = false;
  var hibernating = false;
  var missedWhilePaused = false;
+ var initialScanDraining = false;
  var MAX_NODES_PER_FRAME = 80;
  var FRAME_BUDGET_MS = 5;
  var INITIAL_SYNC_MAX_NODES = 160;
@@ -1909,6 +1910,9 @@
  var NODE_CONFLICT_THRESHOLD = 3;
  var GLOBAL_CONFLICT_NODE_THRESHOLD = 5;
  var OFF_RETRY_DELAY_MS = 16;
+ function isDocHidden() {
+ return Boolean(doc && doc.hidden === true);
+ }
  function isWinBlurAttrSet() {
  return Boolean(doc && doc.documentElement && getAttr(doc.documentElement, 'data-ag-cs-win-blur') === '1');
  }
@@ -1916,9 +1920,20 @@
  function isPeriodicPickerOpen() {
  return Boolean(doc && doc.documentElement && getAttr(doc.documentElement, 'data-ag-pp-open') === '1');
  }
+ function isPerformancePerfMode() {
+ if (!doc || !doc.documentElement) return false;
+ var ds = doc.documentElement.dataset;
+ var raw = String((ds && ds.agCsPerfMode) || getAttr(doc.documentElement, 'data-ag-cs-perf-mode') || '').trim().toLowerCase();
+ return raw === 'performance' || raw === 'eco';
+ }
+ function canDrainVisibleBlur() {
+ return !isDocHidden() && !isPeriodicPickerOpen() && !isPerformancePerfMode();
+ }
+ function canContinuePendingFlush() {
+ return initialScanDraining && canDrainVisibleBlur();
+ }
  function isPaused() {
- var hidden = Boolean(doc && doc.hidden === true);
- return hidden || pausedByWindowBlur || isWinBlurAttrSet() || isPeriodicPickerOpen();
+ return isDocHidden() || pausedByWindowBlur || isWinBlurAttrSet() || isPeriodicPickerOpen();
  }
  function setRootStatusAttr(val) {
  try {
@@ -2342,6 +2357,7 @@
  state.yielded = Boolean(yieldedFlag);
  hibernating = false;
  pausedByWindowBlur = false;
+ initialScanDraining = false;
  inOffRetryPass = false;
  clearAllTimersAndListeners();
  rollbackAllSnapshots();
@@ -3000,7 +3016,9 @@
  function safeBudgetedScan() {
  if (!state.active || state.destroyed || !doc || !doc.documentElement) return;
  if (!hasRafSupport) {
+initialScanDraining = false;
  safeFullScan();
+if (isPaused()) disconnectObserver();
  return;
  }
  var visitedSet = new WeakSet();
@@ -3010,20 +3028,32 @@
  translateElement(doc.documentElement, visitedSet, null, budget);
  if (state.mode === 'off') scanOffSidebarChrome();
  } catch (e) {}
+if (!isPaused() || (state.mode === 'auto' && nowFn() - bootAt <= LAYER2B_WINDOW_MS)) {
  reconnectObserver();
-if (state.active && !state.destroyed && pendingNodes.length > 0) scheduleFlush();
+ }
+if (state.active && !state.destroyed && pendingNodes.length > 0) {
+initialScanDraining = true;
+scheduleFlush();
+ } else {
+initialScanDraining = false;
+ }
  }
 function flushPendingNodes() {
  rafId = null;
  if (!state.active || state.destroyed) return;
- if (isPaused()) {
+ if (isPaused() && !canContinuePendingFlush()) {
+initialScanDraining = false;
 if (!hibernating) enterHibernation(true);
 else missedWhilePaused = true;
  return;
  }
 modifiedTextNodes.prune();
  modifiedAttrElements.prune();
-if (pendingNodes.length === 0) return;
+if (pendingNodes.length === 0) {
+initialScanDraining = false;
+if (isPaused() && !hibernating) enterHibernation(false);
+ return;
+ }
 var takeCount = Math.min(pendingNodes.length, MAX_NODES_PER_FRAME);
 var batch = pendingNodes.splice(0, takeCount);
 for (var b = 0; b < batch.length; b++) {
@@ -3031,6 +3061,7 @@ pendingNodeSet.delete(batch[b]);
  }
 var budget = createScanBudget(MAX_NODES_PER_FRAME, FRAME_BUDGET_MS);
  var visitedSet = new WeakSet();
+var shouldObserve = !isPaused() || (state.mode === 'auto' && nowFn() - bootAt <= LAYER2B_WINDOW_MS);
  disconnectObserver();
  try {
 for (var i = 0; i < batch.length; i++) {
@@ -3051,12 +3082,18 @@ budget.tick();
  }
  }
  } catch (e) {}
- reconnectObserver();
-if (state.active && !state.destroyed && pendingNodes.length > 0) scheduleFlush();
+if (shouldObserve) reconnectObserver();
+if (state.active && !state.destroyed && pendingNodes.length > 0) {
+scheduleFlush();
+ } else {
+initialScanDraining = false;
+if (state.active && !state.destroyed && isPaused() && !hibernating) enterHibernation(false);
+ }
  }
 function scheduleFlush() {
  if (!state.active || state.destroyed) return;
- if (isPaused()) {
+ if (isPaused() && !canContinuePendingFlush()) {
+initialScanDraining = false;
 if (!hibernating) enterHibernation(true);
 else missedWhilePaused = true;
  return;
@@ -3292,6 +3329,15 @@ if (needParent && state.active && !state.destroyed) translateElement(parent, vis
  }
 function enterHibernation(markMissed) {
  if (!state.active || state.destroyed) return;
+if (canContinuePendingFlush() && pendingNodes.length > 0) {
+if (markMissed) missedWhilePaused = true;
+if (state.mode !== 'auto' || nowFn() - bootAt > LAYER2B_WINDOW_MS) {
+disconnectObserver(true);
+missedWhilePaused = true;
+ }
+ return;
+ }
+initialScanDraining = false;
 var wasCovered = observing || dirtyProbeActive;
 hibernating = true;
  pendingFullFloatScan = false;
@@ -3515,12 +3561,20 @@ doc.addEventListener('contentvisibilityautostatechange', cvRevealHandler, { capt
 }
 if (!isPaused()) {
 safeBudgetedScan();
- } else {
+ } else if (state.mode === 'off' && !isDocHidden()) {
 // 窗口可见但暂时失焦（如热切换配置/外部改 config.json）时，off 模式先同步执行一次全量还原，随后保持 0fps 休眠
-if (state.mode === 'off' && !(doc && doc.hidden === true)) {
  safeFullScan();
  disconnectObserver();
+hibernating = true;
+ missedWhilePaused = true;
+ } else if (state.mode !== 'off' && canDrainVisibleBlur()) {
+// 默认 balanced/quality 档下，可见但失焦的主窗热注入/冷启动需先完成一次性首扫与 pendingNodes 排空，再进入 0fps 休眠
+hibernating = false;
+safeBudgetedScan();
+if (pendingNodes.length === 0 && isPaused()) {
+enterHibernation(false);
  }
+ } else {
 hibernating = true;
  missedWhilePaused = true;
  }
@@ -3537,7 +3591,7 @@ if (muts[wi].type === 'attributes' && (!attrName || attrName === 'data-ag-cs-win
  }
 if (!sawPauseAttr) return;
 if (isPaused()) enterHibernation();
-else if (hibernating) wakeFromHibernation();
+else if (hibernating || !observing) wakeFromHibernation();
  };
 if (doc.documentElement) {
 if (domBusInst && typeof domBusInst.subscribe === 'function') {
@@ -3569,7 +3623,9 @@ yieldAndRollback('external-ui-zh', 'generic-zh-dom');
  }
 if (delayMs >= 1150 && isPaused()) {
  disconnectObserver();
-if (doc && doc.hidden === true) {
+if (canContinuePendingFlush() && pendingNodes.length > 0) {
+ missedWhilePaused = true;
+} else if (isDocHidden()) {
  missedWhilePaused = true;
 } else if (!missedWhilePaused) {
 armDirtyObserver();
@@ -3662,7 +3718,8 @@ state.reason = null;
 state.detectedProvider = null;
 bootAt = nowFn();
  pausedByWindowBlur = false;
-hibernating = Boolean((doc && doc.hidden === true) || isWinBlurAttrSet());
+ initialScanDraining = false;
+hibernating = Boolean(isDocHidden() || ((isWinBlurAttrSet() || isPeriodicPickerOpen()) && !canDrainVisibleBlur()));
 missedWhilePaused = false;
  dirtyProbeActive = false;
  pendingFullFloatScan = false;
