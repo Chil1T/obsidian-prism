@@ -126,7 +126,7 @@ Download the latest installer directly below (or browse all versions & Beta pre-
 2. **macOS (`Apple Silicon & Intel Universal`)**: Download [**`Obsidian-Prism-macOS-universal.dmg`**](https://github.com/RMvdesi/obsidian-prism/releases/latest/download/Obsidian-Prism-macOS-universal.dmg), mount the disk image, drag `Obsidian Prism.app` into `/Applications`, and **double-click `Obsidian Prism.app` once** to complete local plugin deployment and `LaunchAgent` setup (the same app also provides one-click clean uninstall).
 
 > **First-Launch OS Security Prompt (Open-Source Build Note)**
-> - **Windows SmartScreen**: Because the installer is built independently without a commercial EV code-signing certificate, if Windows shows *"Windows protected your PC"*, click **More info → Run anyway**.
+> - **Windows SmartScreen**: Because the installer is built independently without a commercial EV code-signing certificate, if Windows shows *"Windows protected your PC"*, click **More info → Run anyway**. Free open-source code signing for official Windows release binaries is planned via [SignPath.io](https://signpath.io/) / [SignPath Foundation](https://signpath.org/), taking effect once the public CI signing pipeline is enabled on official public release tags (see [**Code Signing Policy (`CODE_SIGNING_POLICY.md`)**](./docs/CODE_SIGNING_POLICY.md)).
 > - **macOS 15+ Gatekeeper**: Because the Universal `.app` uses open-source ad-hoc signing (not notarized under a paid Apple Developer ID), if macOS blocks first launch due to browser quarantine, open **System Settings → Privacy & Security**, scroll down and click **Open Anyway**, or strip the quarantine attribute once in Terminal before launching:
 >   ```bash
 >   xattr -cr "/Applications/Obsidian Prism.app"
@@ -262,3 +262,11 @@ Heartfelt thanks to every community contributor whose Pull Requests, security ha
 
 - **Full Hall of Contributors & Detailed Credits**: See [**`docs/CONTRIBUTORS.md`**](./docs/CONTRIBUTORS.md) (permanently crediting all PR authors and key issue reporters, alongside release notes in [`CHANGELOG.md`](./CHANGELOG.md)).
 - Contributions via [Issues](https://github.com/RMvdesi/obsidian-prism/issues) and [Pull Requests](https://github.com/RMvdesi/obsidian-prism/pulls) are always welcome!
+
+---
+
+### 4. Code Signing Policy & Release Verification
+
+- **Code Signing Policy**: Full signing scope, reproducible public-CI two-step signing order, and approval governance are documented in [**`docs/CODE_SIGNING_POLICY.md`**](./docs/CODE_SIGNING_POLICY.md). Free open-source code signing for official Windows release binaries (`obsidian-prism-watcher.exe` and `obsidian-prism-installer.exe`) is planned to be provided by [SignPath.io](https://signpath.io/) with a certificate issued by the [SignPath Foundation](https://signpath.org/), **taking effect once the public CI signing pipeline is enabled on official public release tags** (unsigned builds continue to trigger standard OS first-run prompts until enabled).
+- **License, Project Members & Security Policy**: Obsidian Prism is publicly auditable open-source software with zero runtime npm dependencies under **[`GPL-3.0-only`](./LICENSE)** (with [`NOTICE`](./NOTICE)). Project maintainers and contributors are listed in [`docs/CONTRIBUTORS.md`](./docs/CONTRIBUTORS.md), and vulnerability disclosure & artifact revocation procedures are documented in [`.github/SECURITY.md`](./.github/SECURITY.md).
+- **Verifying Releases**: Every GitHub Release publishes a CI-generated `SHA256SUMS.txt` checksum file. Users can verify SHA-256 digests anytime before running any binary, and verify Authenticode signatures via PowerShell `Get-AuthenticodeSignature` once SignPath signing is enabled.
