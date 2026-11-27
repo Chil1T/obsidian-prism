@@ -3669,3 +3669,151 @@ test('Visible blurred-window cold scan drains pendingNodes step rows cleanly whi
   assert.equal(treePerfMid.steps[29].textContent, '正在等待用户输入', 'Focus wake completes remaining steps on performance tier');
   instPerfMid.destroy();
 });
+
+test('ReDoS regression: isStepPlainTextAllowed and looksLikeStepPathOrCmd handle 50k adversarial inputs in < 50ms with 100% semantic parity', () => {
+  const dict = JSON.parse(fs.readFileSync(path.join(ROOT, 'vendor', 'host-i18n', 'zh-CN.json'), 'utf8'));
+
+  // 1) Semantic parity checks for isStepPlainTextAllowed
+  const allowedPlain = [
+    'Thought for 12s',
+    'Worked for 54s',
+    'Thinking...',
+    'Thinking…',
+    'Thought process',
+    'Asking 4 questions',
+    'Waiting for user input',
+    'Explored 3 files, ran 2 commands',
+    'Ran npm test',
+    'Running build',
+    'Edited foo.js',
+    'Read 1 message from board',
+    'Analyzed src/index.js',
+    'Searched files',
+    'Viewed file',
+    'Listed directory',
+    'Checked status',
+    'Deleted temp.txt',
+    'Posted #12 to board',
+    'Killed worker w1',
+    'Worked',
+    'Timed 5s',
+    'Timer has expired',
+    '4/4 steps',
+    '3 tasks running',
+    'Outside of Project',
+    'Inside of Project',
+    'Task Log',
+    'Task Logs',
+    'Agent finished',
+    'Process exited',
+    'Exited with code -1',
+    'Notification timeout reached',
+    'finished',
+    'Finished',
+    'Run MOSS server finished',
+    'npm test · Exited with code 1',
+    'BuildTask: Notification timeout reached',
+  ];
+  for (const s of allowedPlain) {
+    assert.equal(runtime.isStepPlainTextAllowed(s), true, `Expected step plain text allowed: ${s}`);
+  }
+  const blockedPlain = [
+    '',
+    'Settings',
+    'Save',
+    'unfinished',
+    'My task finished yesterday',
+    'npm test · Exited with code abc',
+    'BuildTask: Notification timeout reached soon',
+    'a'.repeat(261) + ' finished',
+  ];
+  for (const s of blockedPlain) {
+    assert.equal(runtime.isStepPlainTextAllowed(s), false, `Expected step plain text blocked: ${s.slice(0, 40)}`);
+  }
+
+  // 2) Semantic parity checks for looksLikeStepPathOrCmd
+  const matchedPathsOrCmds = [
+    'C:\\repo\\file.js',
+    '/usr/local/bin/node',
+    './run.sh',
+    '../package.json',
+    '~/notes.md',
+    'npm test --watch',
+    'git status',
+    'src/components/Settings.ts',
+    'a/b',
+    'foo\\bar',
+    'cmd --flag-1',
+    'task --dry_run',
+  ];
+  for (const s of matchedPathsOrCmds) {
+    assert.equal(runtime.looksLikeStepPathOrCmd(s), true, `Expected step path/cmd matched: ${s}`);
+  }
+  const nonPathsOrCmds = [
+    '',
+    'Settings',
+    'Task Log',
+    'foo --',
+    'foo --.bar',
+    'a'.repeat(261) + '/b',
+    'npm ' + 'a'.repeat(260),
+  ];
+  for (const s of nonPathsOrCmds) {
+    assert.equal(runtime.looksLikeStepPathOrCmd(s), false, `Expected non-path/cmd: ${s.slice(0, 40)}`);
+  }
+
+  // 3) 50,000-char adversarial ReDoS stress tests (each individual call < 50ms)
+  const advInputs = [
+    'a' + ' '.repeat(50000) + 'b',
+    ' '.repeat(50000) + 'b',
+    'a'.repeat(50000) + '!',
+  ];
+  for (const input of advInputs) {
+    const tPlain0 = performance.now();
+    assert.equal(runtime.isStepPlainTextAllowed(input), false);
+    const plainElapsed = performance.now() - tPlain0;
+    assert.ok(plainElapsed < 50, `isStepPlainTextAllowed took ${plainElapsed.toFixed(2)}ms on 50k input`);
+
+    const tPath0 = performance.now();
+    assert.equal(runtime.looksLikeStepPathOrCmd(input), false);
+    const pathElapsed = performance.now() - tPath0;
+    assert.ok(pathElapsed < 50, `looksLikeStepPathOrCmd took ${pathElapsed.toFixed(2)}ms on 50k input`);
+  }
+
+  // 4) Full DOM mountHostI18n execution path (translateTextNode + isStepArgElementSelf + translateAttributes)
+  const env = createTestEnv(1000);
+  const conv = env.makeEl('div', { attrs: { 'data-testid': 'conversation-view' } });
+  const stepRow = env.makeEl('div', { attrs: { 'data-step-index': '0' } });
+  const spans = advInputs.map((txt) => env.makeEl('span', { attrs: { title: txt }, text: txt }));
+  const pathTitleSpan = env.makeEl('span', { attrs: { title: 'src/components/Settings.ts' }, text: 'Settings' });
+  const normalTitleBtn = env.makeEl('button', { attrs: { title: 'Settings' }, text: 'Save' });
+  stepRow.append(...spans, pathTitleSpan, normalTitleBtn);
+  conv.append(stepRow);
+  env.doc.body.append(conv);
+
+  const tDom0 = performance.now();
+  const inst = runtime.mountHostI18n({
+    root: env.win,
+    doc: env.doc,
+    dict,
+    mode: 'on',
+    nowFn: env.nowFn,
+    setTimeoutFn: env.setTimeoutFn,
+    clearTimeoutFn: env.clearTimeoutFn,
+    rafFn: env.rafFn,
+    cancelRafFn: env.cancelRafFn,
+  });
+  const domElapsed = performance.now() - tDom0;
+  assert.ok(domElapsed < 50, `mountHostI18n on 50k adversarial step nodes took ${domElapsed.toFixed(2)}ms`);
+
+  for (let i = 0; i < advInputs.length; i++) {
+    assert.equal(spans[i].textContent, advInputs[i]);
+    assert.equal(spans[i].getAttribute('title'), advInputs[i]);
+  }
+  assert.equal(pathTitleSpan.getAttribute('title'), 'src/components/Settings.ts');
+  assert.equal(pathTitleSpan.textContent, 'Settings');
+  assert.equal(normalTitleBtn.getAttribute('title'), '设置');
+  assert.equal(normalTitleBtn.textContent, '保存');
+
+  inst.destroy();
+});

@@ -54,7 +54,7 @@
    - **Channel 1 全语种（`auto` + 9 语：`zh-CN`/`zh-TW`/`en`/`ja`/`ko`/`es`/`fr`/`de`/`tr`）**：硬上限 `< 390,000 B`（当前实测 `auto = 388,370 B`，9 语单包 `387,517–387,848 B`，含 `tr = 387,704 B`）；
    - **`pulse-vial-bridge.js`**：硬上限 `< 31,000 B`（当前实测 `30,671 B`）；
    - **增量 `configRefresh` 表达式**（不含语言包切换）：硬上限 `< 4,096 B`（当前实测 `3,911 B`）；
-   - **16 条按需通道实测 / 预算对照**：`omni` `70,363 / 81,920 B`、`sidebar` `137,802 / 147,456 B`、`hostI18n` `552,300 B`（`tr` `287,157 B`）`/ 573,440 B`、`swarmI18n` `34,505 B`（`tr` `35,346 B`）`/ 49,152 B`、`thought` `149,971 / 163,840 B`、`inlineDiff` `54,101 / 57,344 B`、`wallpaper` `47,815 / 65,536 B`、`periodicPicker` `829,949 / 839,680 B`、`settings` `507,588 / 512,000 B`、`mascot` `124,764 / 131,072 B`、`suggester` `60,908 / 73,728 B`、`homeStudio` `57,220 / 57,344 B`、`telemetry` `115,686 / 131,072 B`、`effortSlider` `92,153 / 98,304 B`、`workbenchEnhancer` `51,002 / 57,344 B`、`contextMenu` `25,062 / 28,672 B`；
+   - **16 条按需通道实测 / 预算对照**：`omni` `70,363 / 81,920 B`、`sidebar` `137,802 / 147,456 B`、`hostI18n` `553,204 B`（`tr` `288,062 B`）`/ 573,440 B`、`swarmI18n` `34,505 B`（`tr` `35,346 B`）`/ 49,152 B`、`thought` `149,971 / 163,840 B`、`inlineDiff` `54,101 / 57,344 B`、`wallpaper` `47,815 / 65,536 B`、`periodicPicker` `829,949 / 839,680 B`、`settings` `507,588 / 512,000 B`、`mascot` `124,764 / 131,072 B`、`suggester` `60,908 / 73,728 B`、`homeStudio` `57,220 / 57,344 B`、`telemetry` `115,686 / 131,072 B`、`effortSlider` `92,153 / 98,304 B`、`workbenchEnhancer` `51,002 / 57,344 B`、`contextMenu` `25,062 / 28,672 B`；
    - 任何涉及 Channel 1 的变更须保持字节中性或同步无损瘦身。
 
 ---

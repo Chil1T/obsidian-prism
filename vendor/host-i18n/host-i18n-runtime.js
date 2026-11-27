@@ -178,9 +178,53 @@
  var STEP_ARG_CLASS_MAP = toLookupMap(['font-mono', 'monospace', 'file-path', 'file-name', 'cmd-arg', 'command-text']);
  var STEP_ARG_ATTRS = ['data-path', 'data-filename', 'data-command', 'data-symbol', 'data-arg'];
  var STEP_VERB_SET = toLookupMap(['Read', 'Edited', 'Analyzed', 'Searched', 'Ran', 'Running', 'Viewed', 'Explored', 'Created', 'Updated', 'Deleted', 'Listed', 'Checked', 'Posted', 'Killed', '已读取', '已编辑', '已分析', '已搜索', '已运行', '正在运行', '已查看', '已探索', '已创建', '创建于', '已更新', '更新于', '已删除', '已列出', '已检查', '已发布', '已终止', 'Okundu', 'Düzenlendi', 'Analiz edildi', 'Arandı', 'Çalıştırıldı', 'Çalışıyor', 'Görüntülendi', 'Keşfedildi', 'Oluşturuldu', 'Güncellendi', 'Silindi', 'Listelendi', 'Kontrol edildi', 'Gönderildi', 'Sonlandırıldı', 'İncelendi']);
- var STEP_PATH_OR_CMD_RE = /^(?:[a-zA-Z]:[\\/]|\/|\.\.?[\\/]|~[\\/]|(?:npm|pnpm|yarn|npx|node|git|python3?|pip|uv|cargo|go|make|bash|sh|pwsh|powershell|cmd|curl|rg|grep|find|ls|dir|cat|sed|awk|docker|kubectl|gh|tsc|eslint|vitest|jest)\s+)|[a-zA-Z0-9_.-]+[\\/][a-zA-Z0-9_.-]+|\s--[a-zA-Z0-9_-]+/;
+ function isStepPathSegChar(c) {
+ return (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || (c >= 48 && c <= 57) || c === 95 || c === 46 || c === 45;
+ }
+ function isStepWhitespaceChar(c) {
+ return c === 32 || c === 9 || c === 10 || c === 13 || c === 12 || c === 11 || c === 160;
+ }
+ var STEP_CMD_PREFIX_RE = /^(?:[a-zA-Z]:[\\/]|\/|\.\.?[\\/]|~[\\/]|(?:npm|pnpm|yarn|npx|node|git|python3?|pip|uv|cargo|go|make|bash|sh|pwsh|powershell|cmd|curl|rg|grep|find|ls|dir|cat|sed|awk|docker|kubectl|gh|tsc|eslint|vitest|jest)\s)/;
+ function looksLikeStepPathOrCmd(s) {
+ if (!s || typeof s !== 'string' || s.length > 260) return false;
+ if (STEP_CMD_PREFIX_RE.test(s)) return true;
+ var len = s.length;
+ for (var i = 1; i < len - 1; i++) {
+ var ch = s.charCodeAt(i);
+ if ((ch === 47 || ch === 92) && isStepPathSegChar(s.charCodeAt(i - 1)) && isStepPathSegChar(s.charCodeAt(i + 1))) {
+ return true;
+ }
+ if (
+ ch === 45 &&
+ i + 2 < len &&
+ s.charCodeAt(i + 1) === 45 &&
+ (isStepWhitespaceChar(s.charCodeAt(i - 1)) || /\s/.test(s.charAt(i - 1))) &&
+ isStepPathSegChar(s.charCodeAt(i + 2)) &&
+ s.charCodeAt(i + 2) !== 46
+ ) {
+ return true;
+ }
+ }
+ return false;
+ }
  var STEP_SAFE_SUFFIX_RE = /^(?:Task Log|任务日志|Görev günlüğü|finished|Finished)$|(?:^|\s)finished$|(?:^|\s|·\s*)Exited\s+with\s+code\s+-?\d+$|:\s*Notification\s+timeout\s+reached$|^Notification\s+timeout\s+reached$/;
- var STEP_PLAIN_TEXT_ALLOW_RE = /^(?:(?:Thought|Worked)\s+for\b|Thinking(?:\.\.\.|…)?$|Thought\s+process$|Asking(?:\s|$)|Waiting(?:\s|$)|Explored(?:\s|,|$)|Ran(?:\s|$)|Running(?:\s|$)|Edited(?:\s|$)|Read(?:\s|$)|Analyzed(?:\s|$)|Searched(?:\s|$)|Viewed(?:\s|$)|Listed(?:\s|$)|Checked(?:\s|$)|Deleted(?:\s|$)|Posted(?:\s|$)|Killed(?:\s|$)|Worked$|Timed\s+\d+|Timer\s+has\s+expired$|\d+(?:\s*\/\s*\d+)?\s+steps?$|\d+\s+tasks?\s+running$|(?:Outside|Inside)\s+of\s+Project$|Task\s+Logs?$|Agent\s+finished|Process\s+exited|Exited\s+with\s+code\s+-?\d+$|Notification\s+timeout\s+reached$|finished$|Finished$)|(?:\s+finished|\s*·\s*Exited\s+with\s+code\s+-?\d+|:\s*Notification\s+timeout\s+reached)$/;
+ var STEP_PLAIN_TEXT_PREFIX_RE = /^(?:(?:Thought|Worked)\s+for\b|Thinking(?:\.\.\.|…)?$|Thought\s+process$|Asking(?:\s|$)|Waiting(?:\s|$)|Explored(?:\s|,|$)|Ran(?:\s|$)|Running(?:\s|$)|Edited(?:\s|$)|Read(?:\s|$)|Analyzed(?:\s|$)|Searched(?:\s|$)|Viewed(?:\s|$)|Listed(?:\s|$)|Checked(?:\s|$)|Deleted(?:\s|$)|Posted(?:\s|$)|Killed(?:\s|$)|Worked$|Timed\s+\d+|Timer\s+has\s+expired$|\d+(?:\s*\/\s*\d+)?\s+steps?$|\d+\s+tasks?\s+running$|(?:Outside|Inside)\s+of\s+Project$|Task\s+Logs?$|Agent\s+finished|Process\s+exited|Exited\s+with\s+code\s+-?\d+$|Notification\s+timeout\s+reached$|finished$|Finished$)/;
+ var STEP_TAIL_EXITED_RE = /^\s*Exited\s+with\s+code\s+-?\d+$/;
+ var STEP_TAIL_TIMEOUT_RE = /^\s*Notification\s+timeout\s+reached$/;
+ function isStepPlainTextAllowed(trimmed) {
+ if (!trimmed || typeof trimmed !== 'string' || trimmed.length > 260) return false;
+ if (STEP_PLAIN_TEXT_PREFIX_RE.test(trimmed)) return true;
+ var len = trimmed.length;
+ if (len >= 9 && trimmed.slice(len - 8) === 'finished') {
+ var prevCh = trimmed.charAt(len - 9);
+ if (isStepWhitespaceChar(prevCh.charCodeAt(0)) || /\s/.test(prevCh)) return true;
+ }
+ var dotIdx = trimmed.lastIndexOf('·');
+ if (dotIdx !== -1 && STEP_TAIL_EXITED_RE.test(trimmed.slice(dotIdx + 1))) return true;
+ var colonIdx = trimmed.lastIndexOf(':');
+ if (colonIdx !== -1 && STEP_TAIL_TIMEOUT_RE.test(trimmed.slice(colonIdx + 1))) return true;
+ return false;
+ }
  function firstElemChild(el) {
  if (!el) return null;
  if (el.firstElementChild !== undefined) return el.firstElementChild;
@@ -267,7 +311,7 @@
  var tokens = getClassTokens(el);
  for (var ti = 0; ti < tokens.length; ti++) { if (STEP_ARG_CLASS_MAP[tokens[ti]]) return true; }
  var ttl = getAttr(el, 'title');
- if (ttl && ttl.length <= 260 && STEP_PATH_OR_CMD_RE.test(ttl.trim())) return true;
+ if (ttl && ttl.length <= 260 && looksLikeStepPathOrCmd(ttl.trim())) return true;
  var pSib = prevElemSib(el);
  for (var hops = 0; pSib && hops < 3; hops++, pSib = prevElemSib(pSib)) {
  if (isStepContainerSelf(pSib)) break;
@@ -2742,7 +2786,7 @@
  } else { textUntranslatedCache.set(node, original); }
  return;
  }
- if (nodeCtx && nodeCtx.inStep && !nodeCtx.inStepControl && !STEP_PLAIN_TEXT_ALLOW_RE.test(trimmed)) return;
+ if (nodeCtx && nodeCtx.inStep && !nodeCtx.inStepControl && !isStepPlainTextAllowed(trimmed)) return;
  if (trimmed === '.' && node.previousSibling && ZH_CHAR_RE.test(node.previousSibling.textContent || '')) {
  applyTextWrite(node, original, original.replace('.', '。'));
  return;
@@ -2767,7 +2811,7 @@
  if (!hasAttr(el, attr)) continue;
  var val = getAttr(el, attr);
  if (!val) continue;
- if (attr === 'title' && (hasUri || (elCtx && elCtx.inStep && STEP_PATH_OR_CMD_RE.test(val.trim())))) continue;
+ if (attr === 'title' && (hasUri || (elCtx && elCtx.inStep && val.length <= 260 && looksLikeStepPathOrCmd(val.trim())))) continue;
  var mapRec = attrSnapshots.get(el);
  var snap = mapRec && attr in mapRec.entries ? mapRec.entries[attr] : null;
  if (snap && snap.expected === val) { modifiedAttrElements.add(el); continue; }
@@ -3839,5 +3883,7 @@ wakeFromHibernation();
  isUserContentBoundary: isUserContentBoundary,
  isIgnoredBoundary: isIgnoredBoundary,
  measureSafeBoundaryDepth: measureSafeBoundaryDepth,
+ isStepPlainTextAllowed: isStepPlainTextAllowed,
+ looksLikeStepPathOrCmd: looksLikeStepPathOrCmd,
  };
  });
