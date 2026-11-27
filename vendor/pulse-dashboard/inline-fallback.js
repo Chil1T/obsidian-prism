@@ -325,15 +325,16 @@ bOff=()=>{for(const f of u)f();};
 if(!bObs&&d.documentElement)try{bObs=subMo('pulse-blur',d.documentElement,{childList:false,subtree:false,attributes:true,attributeFilter:[AG+'win-blur',QMA,AG+'theme',AG+'resizing',AG+'ignore-rm']},()=>{const b=gA(gD()?.documentElement,AG+'win-blur')==='1';if(!b)wBl=false;syBl(!b);syAH();const q=rdQm();if(q&&q!==qm){qm=q;for(const it of IS.values())if(it.snap||lS)apSn(it,it.snap||lS);reT();}},'high');}catch{}
 };
 const cSt=()=>{cSw();hTm=cT(hTm);try{sObs?.disconnect?.();pOff?.();}catch{}sObs=pOff=null;cTr();};
-const isConv=(d,w,anc)=>{
-if(!d||anc?.closest?.('.agy-home')||qS(d,'.agy-home, [data-testid="home-greeting"]'))return false;
+const isVisH=e=>{for(let c=e;c&&(c.nodeType==null||c.nodeType===1);c=c.parentElement)if(c.hidden||c.inert||c.hasAttribute?.('hidden')||c.hasAttribute?.('inert')||gA(c,'aria-hidden')==='true'||c.style?.display==='none'||c.style?.visibility==='hidden')return false;return!!e;};
+const HS='.agy-home,'+TI('home-greeting'),isConv=(d,w,anc)=>{
+if(!d||anc?.closest?.('.agy-home'))return false;
+const h=qS(d,HS);if(h&&(isVisH(h)||[...qA(d,HS)||[]].some(e=>e!==h&&isVisH(e))))return false;
 const pn=w?.location?.pathname;
-if(isStr(pn)&&pn&&!/\/c\/[0-9a-f-]{8,}/i.test(pn)&&!qS(d,CV_S)&&!anc?.closest?.(CID_S)&&!qS(d,CID_S))return false;
-return true;
+return!(isStr(pn)&&pn&&!/\/c\/[0-9a-f-]{8,}/i.test(pn)&&!qS(d,CV_S)&&!anc?.closest?.(CID_S)&&!qS(d,CID_S));
 };
 const fEB=d=>{
 if(!d)return[];
-const s=new Set(),a=e=>{if(e)s.add(e);};
+const s=new Set(),a=e=>{if(e&&(e.id===BI||String(e.id||'').startsWith(BI)||gA(e,'data-ag-pulse-bar')==='true'))s.add(e);};
 try{for(const e of qA(d,`#${BI},[id^="${BI}"],[data-ag-pulse-bar="true"]`)||[])a(e);}catch{}
 a(d.getElementById?.(BI));return[...s];
 };
@@ -688,13 +689,14 @@ if(sw)sSR(tC);
 return sw;
 };
 
+const clrH=(f,u)=>{yld=false;if(u||IS.size)uFb(true);if(md==='auto')sEx();else if(md!=='off')hdEx(f);};
 const eSO=()=>{
 const w=gW(),d=gD();if(!w||!d||md==='off')return;
 if(!lHr)lHr=rRK(w);if(!lUC)lUC=eUC(w)||'';
 const rH=()=>{
 hTm=null;lHlAt=N0();if(md==='off')return;
 const dc=gD(),wn=gW();if(!dc||!wn)return;
-if(!isConv(dc,wn)){yld=false;if(IS.size)uFb(true);hdEx(false);return;}
+if(!isConv(dc,wn)){clrH(false,0);return;}
 if(md==='on')hdEx(true);else{sEx();if(hEx(null,true)){yld=true;if(IS.size)uFb(true);eTO();return;}}
 if(IS.size){const r=recB(dc),sw=chkSw(dc,wn,false);if(r.added.length&&!sw)void refresh();else if(IS.size)eTO();}
 else if((md==='on'||wTm===null)&&fAn(dc,true).length)mFb();
@@ -711,7 +713,7 @@ if(!rl)return;
 }
 const inC=isConv(d,w);let bs=null;
 const gB=()=>bs||(bs=fEB(d)),vB=b=>b&&gA(b,HA)!=='1';
-if(!inC){if(IS.size||gB().some(vB))sH(true);return;}
+if(!inC){if(IS.size||gB().some(md==='auto'?b=>b&&gA(b,HA)==='1':vB))sH(true);return;}
 if(IS.size){
 if(md==='auto'&&hEx(gB(),true)){sH(true);return;}
 const nB=hBs(d);
@@ -734,7 +736,7 @@ if(os.length)pOff=()=>{for(const f of os)try{f();}catch{}};
 async function refresh(opts){
 const w=gW(),d=gD();
 if(!envOpts&&w?.__agPrismTelemetry&&w.__agPrismTelemetry!==api){uFb();return null;}
-if(!isConv(d,w)){yld=false;uFb(true);if(md!=='off')hdEx();return null;}
+if(!isConv(d,w)){clrH(false,1);return null;}
 if(md==='on')hdEx(true);else{sEx();if(hEx(null,true)){yld=true;uFb(true);eTO();return null;}}
 if(md!=='off'&&(IS.size||((md==='on'||!hEx(null,true))&&wTm===null&&fAn(d,true).length)))recB(d);
 if(!IS.size)return null;
@@ -769,7 +771,7 @@ const w=gW(),d=gD();
 if(!w||!d||(typeof d.attachShadow==='undefined'&&!isFn(d.createElement)))return false;
 if(!envOpts&&w.__agPrismTelemetry&&w.__agPrismTelemetry!==api){uFb();return false;}
 if(md==='off')return false;
-if(!isConv(d,w)){yld=false;uFb(true);hdEx();eSO();return false;}
+if(!isConv(d,w)){clrH(false,1);eSO();return false;}
 if(md==='on')hdEx(true);else if(hEx(null,true)){yld=true;uFb(true);eSO();return false;}
 const r=recB(d);eSO();if(!r.mounted)return false;
 eHs();eTO();eBl();lHr=rRK(w);lUC=eUC(w)||'';
@@ -816,7 +818,7 @@ if(qm!==pQm&&md!=='off'&&(IS.size||ET.size))reT();
 if(md==='off'){yld=false;uFb();hdEx();return getState();}
 eBr();eSO();
 const d=gD(),w=gW();
-if(!isConv(d,w)){yld=false;uFb(true);hdEx();eHs();return getState();}
+if(!isConv(d,w)){clrH(false,1);eHs();return getState();}
 if(md==='on'){yld=false;cWt();hdEx(true);eHs();mFb();return getState();}
 sEx();
 if(hEx()){
@@ -831,7 +833,7 @@ return getState();
 }
 function wTD(){
 wTm=null;if(md!=='auto')return;
-if(!isConv(gD(),gW())){uFb(true);hdEx();return;}
+if(!isConv(gD(),gW())){clrH(false,1);return;}
 if(hEx()){yld=true;uFb(true);eHs();eTO();return;}
 mFb();
 }

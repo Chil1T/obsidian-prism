@@ -2989,3 +2989,91 @@ test('Usage & Speed Monitor coexistence: container & body-mounted #ag-usage-moni
   const fbSrc = fs.readFileSync(path.join(ROOT_DIR, 'vendor', 'pulse-dashboard', 'inline-fallback.js'), 'utf8');
   assert.ok(fbSrc.includes(',#ag-usage-monitor-capsule,#ag-usage-monitor-portal'), 'inline-fallback IGN_S must exempt usage-monitor capsule/portal');
 });
+
+test('PR #166 zero-reflow: telemetryModule=auto preserves external #ag-pulse-status-bar on .agy-home and handles hidden keep-alive .agy-home without getComputedStyle', async () => {
+  const env = createLightweightDom();
+  let computedStyleCalls = 0;
+  env.win.getComputedStyle = () => {
+    computedStyleCalls += 1;
+    return { display: 'block', visibility: 'visible' };
+  };
+
+  const homeWrap = env.makeEl('div');
+  const home = env.makeEl('div');
+  home.className = 'agy-home';
+  const greeting = env.makeEl('div');
+  greeting.setAttribute('data-testid', 'home-greeting');
+  home.appendChild(greeting);
+  homeWrap.appendChild(home);
+  env.doc.body.appendChild(homeWrap);
+
+  const extBar = env.makeEl('div');
+  extBar.id = 'ag-pulse-status-bar';
+  extBar.setAttribute('data-ag-prism-hidden', '1');
+  extBar.style.setProperty('opacity', '0', 'important');
+  env.composerToolbar.appendChild(extBar);
+
+  const ctl = telemetryMod.createTelemetryController({ window: env.win, document: env.doc });
+  try {
+    // 1) Visible .agy-home in auto mode: clears stale hidden marker, never re-hides external bar, never mounts fallback
+    ctl.sync({ telemetryModule: 'auto', __fallbackDelayMs: 5 });
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(extBar.getAttribute('data-ag-prism-hidden'), null, 'auto mode must clear/avoid data-ag-prism-hidden on external bar in .agy-home');
+    assert.equal(extBar.style.getPropertyValue('opacity'), '');
+    assert.equal(env.doc.getElementById('ag-prism-pulse-bar'), null, 'auto mode must NOT mount fallback on .agy-home');
+
+    await ctl.refresh();
+    assert.equal(extBar.getAttribute('data-ag-prism-hidden'), null, 'refresh() in auto mode must preserve external bar on .agy-home');
+
+    // Explicit mode="on" on visible .agy-home still hides external bar
+    ctl.sync({ telemetryModule: 'on' });
+    assert.equal(extBar.getAttribute('data-ag-prism-hidden'), '1', 'on mode still hides external bar on visible .agy-home');
+    ctl.sync({ telemetryModule: 'auto', __fallbackDelayMs: 5 });
+    assert.equal(extBar.getAttribute('data-ag-prism-hidden'), null, 'switching back to auto restores external bar on .agy-home');
+
+    // 2) Keep-alive hidden .agy-home variants (hidden / inert / aria-hidden / display:none / visibility:hidden / hidden ancestor)
+    const convView = env.makeEl('div');
+    convView.setAttribute('data-testid', 'conversation-view');
+    convView.appendChild(env.composerToolbar);
+    env.doc.body.appendChild(convView);
+
+    const hideCases = [
+      ['hidden prop', () => { home.hidden = true; }, () => { home.hidden = false; }],
+      ['inert attr', () => { home.setAttribute('inert', ''); }, () => { home.removeAttribute('inert'); }],
+      ['aria-hidden', () => { home.setAttribute('aria-hidden', 'true'); }, () => { home.removeAttribute('aria-hidden'); }],
+      ['style.display=none', () => { home.style.display = 'none'; }, () => { home.style.display = ''; }],
+      ['style.visibility=hidden', () => { home.style.visibility = 'hidden'; }, () => { home.style.visibility = ''; }],
+      ['hidden ancestor', () => { homeWrap.hidden = true; }, () => { homeWrap.hidden = false; }],
+    ];
+    for (const [label, applyHide, clearHide] of hideCases) {
+      applyHide();
+      const stConv = ctl.sync({ telemetryModule: 'auto', __fallbackDelayMs: 5 });
+      assert.equal(stConv.yieldedToExternal, true, `keep-alive .agy-home (${label}) must not block active conversation telemetry`);
+      assert.equal(stConv.hasExternal, true, `keep-alive .agy-home (${label}) must detect active external bar`);
+      clearHide();
+    }
+
+    // 3) Keep-alive hidden .agy-home WITHOUT external bar allows built-in fallback to mount
+    home.hidden = true;
+    extBar.remove();
+    ctl.sync({ telemetryModule: 'auto', __fallbackDelayMs: 5 });
+    await new Promise((r) => setTimeout(r, 25));
+    assert.equal(ctl.getState().mountedFallback, true, 'hidden keep-alive .agy-home must allow built-in fallback when no external bar exists');
+    assert.ok(env.doc.getElementById('ag-prism-pulse-bar'));
+
+    assert.equal(computedStyleCalls, 0, 'isVisH must be strictly zero-reflow (0 getComputedStyle calls)');
+  } finally {
+    ctl.destroy();
+  }
+
+  const fbSrc = fs.readFileSync(path.join(ROOT_DIR, 'vendor', 'pulse-dashboard', 'inline-fallback.js'), 'utf8');
+  assert.equal(fbSrc.includes('getComputedStyle'), false, 'inline-fallback.js must never call getComputedStyle');
+
+  const css = fs.readFileSync(path.join(ROOT_DIR, 'style.css'), 'utf8');
+  assert.equal(css.includes(':has('), false, 'style.css must have strictly 0 :has(');
+  assert.equal(
+    css.includes('& .agy-home:not(#_) :is(#ag-prism-pulse-bar,[data-ag-prism-pulse-bar],[data-ag-prism-fallback="1"]),&[data-ag-cs-telemetry="on"] .agy-home:not(#_) :is(#ag-pulse-status-bar,[data-ag-pulse-bar]){display:none!important}'),
+    true,
+    'style.css must only hide external pulse bar on .agy-home when telemetry="on"'
+  );
+});
