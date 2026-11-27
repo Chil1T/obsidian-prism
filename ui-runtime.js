@@ -2029,7 +2029,7 @@ runGuardedMut(() => { syncComposers({ cPlan, caretList }, false); });
 markRim();
 });
 };
-const ROOT_ATTR_FILTER = 'class|hidden|aria-expanded|data-state|data-ag-queued-act|data-selected|data-cascade-id|data-ag-prism|data-ag-cs-theme|data-ag-prism-host-i18n|data-ag-prism-mode|data-ag-pp-open|data-ag-prism-wallpaper|data-has-browser-hole|data-has-drawer-browser-hole'.split('|');
+const ROOT_ATTR_FILTER = 'class|hidden|aria-expanded|data-state|data-ag-queued-act|data-selected|data-cascade-id|data-ag-prism|data-ag-cs-theme|data-ag-cs-corners|data-ag-prism-host-i18n|data-ag-prism-mode|data-ag-pp-open|data-ag-prism-wallpaper|data-has-browser-hole|data-has-drawer-browser-hole'.split('|');
 const onRootMutations = (mutations) => {
 try {
 if (destroyed || internalDomMutating || streamChoreoCtl.isStreamMutating() || !mutations || mutations.length === 0) return;
@@ -2049,7 +2049,7 @@ if (an === 'data-ag-prism-host-i18n') { dirtyFlags.g = anyRelevant = true; conti
 if (tgt === D.body || tgt === de()) {
 if (an === 'data-ag-pp-open') { prismRimCtl.markDirty(); dirtyFlags.c = anyRelevant = true; continue; }
 if (an?.charCodeAt(0) === 100 && /^data-(?:ag-prism-wallpaper|has-(?:drawer-)?browser-hole)$/.test(an)) { dirtyFlags.r = anyRelevant = true; continue; }
-if (an === 'data-ag-prism-mode') dirtyFlags.c = true;
+if (an === 'data-ag-prism-mode' || an === 'data-ag-cs-corners') { invRim(); dirtyFlags.c = true; }
 dirtyFlags.t = anyRelevant = true;
 continue;
 }

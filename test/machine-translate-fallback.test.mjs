@@ -29,10 +29,8 @@ function mkTempDir(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
-function makeMockJwt(expSec) {
-  const hdr = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
-  const pay = Buffer.from(JSON.stringify({ exp: expSec })).toString('base64url');
-  return `${hdr}.${pay}.sig_mock_token`;
+function makeMockBingPageHtml(ttlMs = 600_000, suffix = 'v1') {
+  return `<!doctype html><html><script>IG:"IG_${suffix}";</script><div data-iid="translator.5023"></div><script>var params_AbusePreventionHelper = [1795769054797,"MOCK_TOKEN_${suffix}",${ttlMs}];</script></html>`;
 }
 
 function createMiniClientDomEnv(extraGlobals = {}) {
@@ -249,10 +247,11 @@ function createMiniClientDomEnv(extraGlobals = {}) {
 }
 
 test('1) HTTPS allowlist (anti-SSRF), exact 9-locale Bing/GTX maps & safe Bing batch chunking', () => {
-  assert.equal(ALLOWED_MT_HOSTS.size, 3);
+  assert.equal(ALLOWED_MT_HOSTS.size, 2);
   assert.ok(assertAllowedMtUrl('https://translate.googleapis.com/translate_a/single?client=gtx&q=hi'));
-  assert.ok(assertAllowedMtUrl('https://edge.microsoft.com/translate/auth'));
-  assert.ok(assertAllowedMtUrl('https://api-edge.cognitive.microsofttranslator.com/translate?api-version=3.0&to=zh-Hans'));
+  assert.ok(assertAllowedMtUrl('https://www.bing.com/translator'));
+  assert.ok(assertAllowedMtUrl('https://www.bing.com/ttranslatev3?isVertical=1&IG=ABC&IID=translator.5023.1'));
+  assert.throws(() => assertAllowedMtUrl('https://edge.microsoft.com/translate/auth'), /Blocked/i);
 
   for (const bad of [
     'http://translate.googleapis.com/translate_a/single?q=hi',
@@ -305,12 +304,13 @@ test('1) HTTPS allowlist (anti-SSRF), exact 9-locale Bing/GTX maps & safe Bing b
   assert.equal(rebuilt, longText, 'Reassembled Bing chunks must match source text verbatim');
 });
 
-test('2) google:proxy 429 cools down only google:proxy, seamlessly falls back to bing:proxy, caches JWT & skips cooled route', async () => {
+test('2) google:proxy 429 cools down only google:proxy, seamlessly falls back to bing:proxy, caches Bing token, handles 205 refresh & chunks >900 chars', async () => {
   const tmpDir = mkTempDir('prism-mt-fb-bing-');
   let now = 1_700_000_000_000;
   const routeCalls = [];
   let bingAuthCalls = 0;
-  let jwtExpSec = Math.floor(now / 1000) + 600; // 10 min
+  let tokenTtlMs = 600_000; // 10 min
+  let forceStale205Once = false;
 
   try {
     // Verify production default throttle limits (no custom fetchImpl): concurrency <= 2, minIntervalMs === 120
@@ -327,20 +327,32 @@ test('2) google:proxy 429 cools down only google:proxy, seamlessly falls back to
       machineMinIntervalMs: 0,
       machineCooldownRateLimitMs: 60_000,
       machineTransport: async ({ url, init, channel, routeId }) => {
-        routeCalls.push({ routeId, channel, url });
+        routeCalls.push({ routeId, channel, url, method: init?.method });
         if (routeId === 'google:proxy') {
           return new Response('Too Many Requests', { status: 429 });
         }
-        if (url === 'https://edge.microsoft.com/translate/auth') {
+        if (url === 'https://www.bing.com/translator') {
+          assert.equal(init.method, 'GET');
           bingAuthCalls += 1;
-          return new Response(makeMockJwt(jwtExpSec), { status: 200 });
+          return new Response(makeMockBingPageHtml(tokenTtlMs, `r${bingAuthCalls}`), { status: 200 });
         }
-        if (url.startsWith('https://api-edge.cognitive.microsofttranslator.com/translate')) {
+        if (url.startsWith('https://www.bing.com/ttranslatev3')) {
           assert.equal(channel, 'proxy');
-          const toParam = new URL(url).searchParams.get('to');
-          const body = JSON.parse(String(init.body || '[]'));
-          const resp = body.map((item) => ({ translations: [{ text: `[BING:${toParam}] ${item.Text}` }] }));
-          return new Response(JSON.stringify(resp), { status: 200, headers: { 'Content-Type': 'application/json' } });
+          assert.equal(init.method, 'POST');
+          assert.equal(init.headers['Content-Type'], 'application/x-www-form-urlencoded');
+          if (forceStale205Once) {
+            forceStale205Once = false;
+            return new Response(JSON.stringify({ statusCode: 205, errorMessage: 'token expired' }), { status: 200 });
+          }
+          const form = new URLSearchParams(String(init.body || ''));
+          assert.ok(form.get('token') && form.get('key'), 'Bing ttranslatev3 must pass AbusePreventionHelper key & token');
+          const toParam = form.get('to');
+          const text = form.get('text') || '';
+          assert.ok(text.length <= 900, `Each Bing ttranslatev3 chunk must stay <= 900 chars (got ${text.length})`);
+          return new Response(JSON.stringify([{ translations: [{ text: `[BING:${toParam}] ${text}` }] }]), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
         }
         return new Response('Unexpected route', { status: 500 });
       },
@@ -349,7 +361,7 @@ test('2) google:proxy 429 cools down only google:proxy, seamlessly falls back to
     // Request 1: google:proxy returns 429 -> seamless fallback to bing:proxy
     const out1 = await svc.translateMachine('Check `translateBatch` fallback pipeline carefully.', null, 'zh-CN');
     assert.equal(out1, '[BING:zh-Hans] Check `translateBatch` fallback pipeline carefully.');
-    assert.equal(bingAuthCalls, 1, 'First Bing request must fetch JWT once');
+    assert.equal(bingAuthCalls, 1, 'First Bing request must fetch page token once');
 
     const cooldowns = svc._mtClient.getRouteCooldowns();
     assert.ok(cooldowns['google:proxy'], 'google:proxy must enter cooldown after 429');
@@ -357,7 +369,7 @@ test('2) google:proxy 429 cools down only google:proxy, seamlessly falls back to
     assert.equal(cooldowns['google:direct'], undefined, 'google:direct must not be cooled');
     assert.equal(cooldowns['bing:direct'], undefined, 'bing:direct must not be cooled');
 
-    // Request 2 within 60s cooldown: must skip google:proxy completely AND reuse cached Bing JWT
+    // Request 2 within 60s cooldown: must skip google:proxy completely AND reuse cached Bing token
     now += 15_000;
     const prevGoogleProxyCalls = routeCalls.filter((c) => c.routeId === 'google:proxy').length;
     const out2 = await svc.translateMachine('Verify Traditional Chinese mapping via Bing fallback.', null, 'zh-TW');
@@ -367,19 +379,25 @@ test('2) google:proxy 429 cools down only google:proxy, seamlessly falls back to
       prevGoogleProxyCalls,
       'Subsequent request during cooldown must skip google:proxy'
     );
-    assert.equal(bingAuthCalls, 1, 'Cached Bing JWT must be reused before exp - 60s');
+    assert.equal(bingAuthCalls, 1, 'Cached Bing token must be reused before TTL - 60s');
 
-    // Advance past JWT refresh margin (exp - 60s) & past google:proxy cooldown (60s)
+    // Advance past token refresh margin (TTL - 60s) & past google:proxy cooldown (60s)
     now += 550_000;
-    jwtExpSec = Math.floor(now / 1000) + 600;
-    const out3 = await svc.translateMachine('Confirm cooldown expiry and JWT refresh.', null, 'ja');
-    assert.equal(out3, '[BING:ja] Confirm cooldown expiry and JWT refresh.');
+    const out3 = await svc.translateMachine('Confirm cooldown expiry and Bing token refresh.', null, 'ja');
+    assert.equal(out3, '[BING:ja] Confirm cooldown expiry and Bing token refresh.');
     assert.equal(
       routeCalls.filter((c) => c.routeId === 'google:proxy').length,
       prevGoogleProxyCalls + 1,
       'After 60s cooldown expires, google:proxy should be retried'
     );
-    assert.equal(bingAuthCalls, 2, 'Bing JWT must refresh within 60s before expiry');
+    assert.equal(bingAuthCalls, 2, 'Bing token must refresh within 60s before expiry');
+
+    // Status 205 from ttranslatev3 triggers token refresh & retry, and >900 char payload is safely chunked
+    forceStale205Once = true;
+    const longSample = `${'Sentence alpha. '.repeat(45)}\n\n${'Sentence beta. '.repeat(45)}`;
+    const out4 = await svc.translateMachine(longSample, null, 'ko');
+    assert.ok(out4.includes('[BING:ko] Sentence alpha.') && out4.includes('[BING:ko] Sentence beta.'));
+    assert.equal(bingAuthCalls, 3, 'statusCode 205 must invalidate cache and fetch fresh Bing token');
 
     svc.dispose();
   } finally {
@@ -427,9 +445,9 @@ test('3) proxyMode auto fails over to direct when proxy exits 429; custom never 
         customCalls.push({ routeId, channel, url });
         if (routeId === 'google:proxy') return new Response('Rate limited', { status: 429 });
         if (routeId === 'bing:proxy' && allowBingProxy) {
-          if (url.includes('/translate/auth')) return new Response(makeMockJwt(Math.floor(Date.now() / 1000) + 600), { status: 200 });
-          const body = JSON.parse(String(init.body || '[]'));
-          return new Response(JSON.stringify(body.map((b) => ({ translations: [{ text: `[CUSTOM-BING] ${b.Text}` }] }))), { status: 200 });
+          if (url === 'https://www.bing.com/translator') return new Response(makeMockBingPageHtml(), { status: 200 });
+          const form = new URLSearchParams(String(init.body || ''));
+          return new Response(JSON.stringify([{ translations: [{ text: `[CUSTOM-BING] ${form.get('text') || ''}` }] }]), { status: 200 });
         }
         return new Response('Rate limited', { status: 429 });
       },
@@ -558,7 +576,7 @@ test('5) diagnose({ mode: "machine" }) reports winning route and clear 429 prefi
         if (scenario === 'bing_proxy_ok') {
           if (routeId === 'google:proxy') return new Response('429 via SuperSecretProxy99', { status: 429 });
           if (routeId === 'bing:proxy') {
-            if (url.includes('/translate/auth')) return new Response(makeMockJwt(Math.floor(Date.now() / 1000) + 600), { status: 200 });
+            if (url === 'https://www.bing.com/translator') return new Response(makeMockBingPageHtml(), { status: 200 });
             return new Response('[{"translations":[{"text":"好"}]}]', { status: 200 });
           }
         } else if (scenario === 'google_direct_ok') {

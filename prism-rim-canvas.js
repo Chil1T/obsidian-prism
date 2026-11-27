@@ -260,7 +260,7 @@
       const dpr = mn((typeof window !== 'undefined' && window.devicePixelRatio) || G.devicePixelRatio || 1, dprCap);
       const w = mx(4, Math.round((e.rect.width + ip) * dpr));
       const h = mx(4, Math.round((e.rect.height + ip) * dpr));
-      const cssR = e.br > 0 ? e.br : 10;
+      const cssR = e.br >= 0 ? e.br : 10;
       const effA = mx(0, mn(1, amb * (!isM && toneKey === 'mono' ? 0.58 : 1)));
       const sig = `${w}|${h}|${radius}|${dark ? 1 : 0}|${isM ? 'm' : toneKey}|${isRB ? 'b' : ''}|${effA.toFixed(3)}|${cssR}|${ip}`;
       if (!e.cl && e.cv.width === w && e.cv.height === h && e._s === sig && Math.abs(lx - e._x) < 0.5 && Math.abs(ly - e._y) < 0.5) return true;
@@ -432,7 +432,7 @@
       let nextO = null;
       const pre = bList.map((box) => {
         const prev = prevM.get(box), sk = !!bus?.isSkipped?.(box);
-        return [box, prev, prev && prev.br >= 0 ? prev.br : readRad(box, 10), sk ? null : (sp.rcs.get(box) || (allowRd && box.getBoundingClientRect ? box.getBoundingClientRect() : null))];
+        return [box, prev, readRad(box, 10), sk ? null : (sp.rcs.get(box) || (allowRd && box.getBoundingClientRect ? box.getBoundingClientRect() : null))];
       });
       const oRect = trk && allowRd && !bus?.isSkipped?.(trk) && trk.getBoundingClientRect ? trk.getBoundingClientRect() : null;
       const mkEntry = (box, rect, prev, ip, br, mm = false, rb = false) => {

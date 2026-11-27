@@ -32,6 +32,7 @@ function createMockRimDom() {
       fillStyle: '',
       clearRect(...a) { ops.push(['clearRect', ...a]); },
       beginPath() {},
+      roundRect(...a) { ops.push(['roundRect', ...a]); },
       moveTo() {},
       arcTo() {},
       closePath() {},
@@ -216,5 +217,104 @@ test('surface-composer-card 使用全周 prism rim，interaction-takeover-card �
   assert.ok(
     css.includes('border-color:rgba(15,23,42,.11)!important;box-shadow:var(--_sp),0 1px 3px rgba(15,23,42,.06)'),
     'style.css 必须赋予浅色问答卡清晰的边缘高光与质感'
+  );
+});
+
+test('同一 surface-composer-card 节点圆角从 28px 切换为 10px/14px/6px 时，markDirty 与 invalidateMetrics 均立即同步 roundRect 半径绝不锁死旧值', () => {
+  const { doc, boxes, makeEl } = createMockRimDom();
+  const prevDoc = globalThis.document;
+  const prevRaf = globalThis.requestAnimationFrame;
+  const prevCancel = globalThis.cancelAnimationFrame;
+  const prevPerf = globalThis.performance;
+  const prevGcs = globalThis.getComputedStyle;
+  const prevDpr = globalThis.devicePixelRatio;
+  const rafs = [];
+  let now = 100;
+  let currentCornerPx = '28px';
+
+  globalThis.document = doc;
+  globalThis.requestAnimationFrame = (cb) => { rafs.push(cb); return rafs.length; };
+  globalThis.cancelAnimationFrame = () => {};
+  globalThis.performance = { now: () => now };
+  globalThis.devicePixelRatio = 1;
+  globalThis.getComputedStyle = (el) => ({
+    borderTopLeftRadius: el === composerCard ? currentCornerPx : '10px',
+  });
+
+  const composerCard = makeEl(
+    'div',
+    { class: 'surface-composer-card', 'data-ag-cs-prism-box': '1' },
+    { left: 100, top: 760, width: 420, height: 96, right: 520, bottom: 856 }
+  );
+  boxes.push(composerCard);
+
+  const ctl = createPrismRimCanvasController({
+    isDestroyed: () => false,
+    isDarkTheme: () => true,
+    motionReduced: () => false,
+    getMinFrameGapMs: () => 0,
+    getAmbientIntensity: () => 1,
+    getAccentTone: () => 'default',
+    canMountRealCanvas: () => true,
+    setAttrIfChanged: (el, k, v) => { if (el.getAttribute(k) !== v) el.setAttribute(k, v); },
+    runGuardedMut: (fn) => fn(),
+  });
+
+  try {
+    ctl.mountNewBoxes();
+    ctl.onPointerMove({ clientX: 260, clientY: 770, target: composerCard });
+    while (rafs.length) rafs.shift()(now += 16);
+
+    const readDrawnRoundRect = () => {
+      const tr = compCv._ctx.ops.find((op) => op[0] === 'translate');
+      const rr = compCv._ctx.ops.find((op) => op[0] === 'roundRect');
+      assert.ok(tr && rr, '应包含 translate 与 roundRect 绘制指令');
+      return [tr[1] + rr[1], tr[2] + rr[2], rr[3], rr[4], rr[5]];
+    };
+
+    const compCv = composerCard.querySelector('.ag-cs-prism-rim-cv');
+    assert.ok(compCv, '主输入框应挂载 prism rim canvas');
+    assert.equal(compCv.width, 422, 'w 应为 rect.width + ip(2)');
+    assert.equal(compCv.height, 98, 'h 应为 rect.height + ip(2)');
+    assert.deepEqual(readDrawnRoundRect(), [1, 1, 420, 96, 28], '初始 Chat 复用节点应按 28px 绘制');
+
+    // 切回 Agent 模式：同一 DOM 节点圆角变为 10px，仅触发 markDirty() -> rfBox() 必须重读 readRad(box, 10)
+    currentCornerPx = '10px';
+    compCv._ctx.ops.length = 0;
+    ctl.markDirty();
+    ctl.onPointerMove({ clientX: 264, clientY: 770, target: composerCard });
+    while (rafs.length) rafs.shift()(now += 16);
+    assert.deepEqual(readDrawnRoundRect(), [1, 1, 420, 96, 10], 'markDirty() 重扫描后圆角必须立即同步为 10px，绝不滞留 28px');
+
+    // 切换 cornerStyle=soft (14px) 并调用 invalidateMetrics()，无需移动鼠标也要直接刷新重绘
+    currentCornerPx = '14px';
+    compCv._ctx.ops.length = 0;
+    ctl.invalidateMetrics();
+    while (rafs.length) rafs.shift()(now += 16);
+    assert.deepEqual(readDrawnRoundRect(), [1, 1, 420, 96, 14], 'invalidateMetrics() 应立即以 14px 同心重绘');
+
+    // 切换 cornerStyle=sharp (6px) 并调用 invalidateMetrics()
+    currentCornerPx = '6px';
+    compCv._ctx.ops.length = 0;
+    ctl.invalidateMetrics();
+    while (rafs.length) rafs.shift()(now += 16);
+    assert.deepEqual(readDrawnRoundRect(), [1, 1, 420, 96, 6], 'invalidateMetrics() 应立即以 6px 同心重绘');
+  } finally {
+    ctl.teardown();
+    globalThis.document = prevDoc;
+    globalThis.requestAnimationFrame = prevRaf;
+    globalThis.cancelAnimationFrame = prevCancel;
+    globalThis.performance = prevPerf;
+    globalThis.getComputedStyle = prevGcs;
+    globalThis.devicePixelRatio = prevDpr;
+  }
+
+  // 验证 ui-runtime.js 监听 data-ag-prism-mode 与 data-ag-cs-corners 变更时均调用 invRim()
+  const uiRt = fs.readFileSync(path.join(ROOT, 'ui-runtime.js'), 'utf8');
+  assert.ok(uiRt.includes('data-ag-cs-corners'), 'ui-runtime.js ROOT_ATTR_FILTER 必须包含 data-ag-cs-corners');
+  assert.match(
+    uiRt,
+    /if\s*\(an\s*===\s*'data-ag-prism-mode'\s*\|\|\s*an\s*===\s*'data-ag-cs-corners'\)\s*\{\s*invRim\(\);/,
+    'ui-runtime.js 必须在 data-ag-prism-mode 或 data-ag-cs-corners 变更时立即调用 invRim()'
   );
 });

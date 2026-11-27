@@ -4,15 +4,15 @@
 import crypto from 'node:crypto';
 
 export const ALLOWED_MT_HOSTS = Object.freeze(
-  new Set(['translate.googleapis.com', 'edge.microsoft.com', 'api-edge.cognitive.microsofttranslator.com'])
+  new Set(['translate.googleapis.com', 'www.bing.com'])
 );
 export const GTX_TARGET_LANG_MAP = Object.freeze({ 'zh-CN': 'zh-CN', 'zh-TW': 'zh-TW', en: 'en', ja: 'ja', ko: 'ko', es: 'es', fr: 'fr', de: 'de', tr: 'tr' });
 export const BING_TARGET_LANG_MAP = Object.freeze({ 'zh-CN': 'zh-Hans', 'zh-TW': 'zh-Hant', en: 'en', ja: 'ja', ko: 'ko', es: 'es', fr: 'fr', de: 'de', tr: 'tr' });
 
 const GTX_PROBE = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=zh-CN&dt=t&q=ok';
-const BING_AUTH = 'https://edge.microsoft.com/translate/auth';
-const BING_TR = 'https://api-edge.cognitive.microsofttranslator.com/translate?api-version=3.0&to=';
-const UA = Object.freeze({ 'User-Agent': 'Mozilla/5.0' });
+const BING_PAGE = 'https://www.bing.com/translator';
+const BING_TR = 'https://www.bing.com/ttranslatev3';
+const UA = Object.freeze({ 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0' });
 const REQ_MS = 9000;
 
 function normLang(lang) {
@@ -40,16 +40,14 @@ export function assertAllowedMtUrl(rawUrl) {
   return u.href;
 }
 
-function parseJwtExp(jwt, now) {
-  try {
-    const p = String(jwt || '').split('.')[1];
-    if (p) {
-      const b = p.replace(/-/g, '+').replace(/_/g, '/');
-      const exp = Number(JSON.parse(Buffer.from(b + '='.repeat((4 - (b.length % 4)) % 4), 'base64').toString('utf8'))?.exp);
-      if (Number.isFinite(exp) && exp > 0) return Math.max(now + 5000, exp * 1000 - 60_000);
-    }
-  } catch {}
-  return now + 240_000;
+function parseBingPageTokens(html, now) {
+  const s = String(html || '');
+  const ig = s.match(/IG\s*:\s*"([^"]+)"/)?.[1];
+  const iid = s.match(/data-iid="([^"]+)"/)?.[1] || 'translator.5023';
+  const h = s.match(/params_AbusePreventionHelper\s*=\s*\[(\d+)\s*,\s*"([^"]+)"\s*,\s*(\d+)\]/);
+  if (!ig || !h?.[1] || !h?.[2]) return null;
+  const ttlMs = Math.max(30_000, Math.min(Number(h[3]) || 3_600_000, 3_600_000));
+  return { ig, iid, key: h[1], token: h[2], count: 0, expiresAt: now + Math.max(5000, ttlMs - 60_000) };
 }
 
 function splitLong(piece, max) {
@@ -67,7 +65,7 @@ function splitLong(piece, max) {
   return out;
 }
 
-export function buildBingRequestGroups(text, maxChars = 3600, maxItems = 25) {
+export function buildBingRequestGroups(text, maxChars = 900, maxItems = 1) {
   const raw = String(text || '');
   if (!raw) return [];
   if (raw.length <= maxChars) return [{ items: [raw], seps: [], trailingSep: '' }];
@@ -215,7 +213,7 @@ export class MachineTranslateClient {
     const mode = this._getProxyMode(override) || 'auto';
     const directs = [{ id: 'google:direct', engine: 'google', channel: 'direct', proxy: null }, { id: 'bing:direct', engine: 'bing', channel: 'direct', proxy: null }];
     if (mode === 'direct') return directs;
-    const [gP, bP] = await Promise.all([this._resolveProxy(GTX_PROBE, override), this._resolveProxy(`${BING_TR}zh-Hans`, override)]);
+    const [gP, bP] = await Promise.all([this._resolveProxy(GTX_PROBE, override), this._resolveProxy(BING_PAGE, override)]);
     const proxied = [];
     if (gP) proxied.push({ id: 'google:proxy', engine: 'google', channel: 'proxy', proxy: gP });
     if (bP) proxied.push({ id: 'bing:proxy', engine: 'bing', channel: 'proxy', proxy: bP });
@@ -240,28 +238,40 @@ export class MachineTranslateClient {
     } finally { ab.cleanup(); }
   }
 
-  async _getBingJwt(route, sig, ms = REQ_MS, force = false) {
-    if (!force && this._bingTokenCache && this._now() < this._bingTokenCache.expiresAt) return this._bingTokenCache.token;
+  async _getBingToken(route, sig, ms = REQ_MS, force = false) {
+    if (!force && this._bingTokenCache && this._now() < this._bingTokenCache.expiresAt) return this._bingTokenCache;
     const key = route.channel;
     if (!force && this._bingTokenInflight.has(key)) return this._bingTokenInflight.get(key);
     const task = (async () => {
-      const res = await this._fetchMt(BING_AUTH, { method: 'GET', headers: UA }, route, ms, sig);
+      const res = await this._fetchMt(BING_PAGE, { method: 'GET', headers: UA }, route, ms, sig);
       if (!res.ok) { await cancelBody(res); throw httpErr(route.id, res.status, 'Bing auth failed'); }
-      const token = String(await this._readText(res, 16384)).trim();
-      if (!token || token.length < 4) throw new Error(`${route.id} invalid Bing auth token`);
-      this._bingTokenCache = { token, expiresAt: parseJwtExp(token, this._now()) };
-      return token;
+      const html = await this._readText(res, 4 * 1024 * 1024);
+      const parsed = parseBingPageTokens(html, this._now());
+      if (!parsed) throw new Error(`${route.id} invalid Bing auth token`);
+      this._bingTokenCache = parsed;
+      return parsed;
     })();
     this._bingTokenInflight.set(key, task);
     try { return await task; } finally { if (this._bingTokenInflight.get(key) === task) this._bingTokenInflight.delete(key); }
   }
 
-  async _postBing(url, body, route, ms, sig) {
+  async _postBingTranslate(text, toLang, route, ms, sig) {
     for (let retried = false; ; retried = true) {
-      const token = await this._getBingJwt(route, sig, ms, retried);
-      const res = await this._fetchMt(url, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', Accept: 'application/json', ...UA }, body }, route, ms, sig);
-      if (res.status === 401 && !retried) { await cancelBody(res); this._bingTokenCache = null; continue; }
-      return res;
+      const tok = await this._getBingToken(route, sig, ms, retried);
+      tok.count = (tok.count || 0) + 1;
+      const url = `${BING_TR}?isVertical=1&IG=${encodeURIComponent(tok.ig)}&IID=${encodeURIComponent(`${tok.iid}.${tok.count}`)}`;
+      const body = new URLSearchParams({ fromLang: 'auto-detect', text: String(text || ''), to: toLang, token: tok.token, key: tok.key }).toString();
+      const res = await this._fetchMt(url, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json', Referer: BING_PAGE, ...UA }, body }, route, ms, sig);
+      if ((res.status === 401 || res.status === 403) && !retried) { await cancelBody(res); this._bingTokenCache = null; continue; }
+      if (!res.ok) { await cancelBody(res); throw httpErr(route.id, res.status); }
+      const arr = JSON.parse(await this._readText(res, 4 * 1024 * 1024));
+      if (!Array.isArray(arr)) {
+        const sc = Number(arr?.statusCode) || 0;
+        if ((sc === 205 || sc === 401 || sc === 403) && !retried) { this._bingTokenCache = null; continue; }
+        if (arr?.showCaptcha || sc === 429) throw httpErr(route.id, 429, 'Bing rate-limited');
+        throw httpErr(route.id, sc || 502, String(arr?.errorMessage || 'unexpected Bing response shape'));
+      }
+      return arr;
     }
   }
 
@@ -274,15 +284,12 @@ export class MachineTranslateClient {
   }
 
   async _viaBing(masked, tl, route, sig) {
-    const url = `${BING_TR}${encodeURIComponent(mapBingTargetLang(tl))}`;
+    const to = mapBingTargetLang(tl);
     let out = '';
-    for (const g of buildBingRequestGroups(masked)) {
-      const res = await this._postBing(url, JSON.stringify(g.items.map((t) => ({ Text: t }))), route, REQ_MS, sig);
-      if (!res.ok) { await cancelBody(res); throw httpErr(route.id, res.status); }
-      const arr = JSON.parse(await this._readText(res, 4 * 1024 * 1024));
-      if (!Array.isArray(arr) || arr.length !== g.items.length) throw new Error(`${route.id} unexpected Bing response shape`);
-      for (let i = 0; i < arr.length; i++) {
-        out += typeof arr[i]?.translations?.[0]?.text === 'string' ? arr[i].translations[0].text : g.items[i];
+    for (const g of buildBingRequestGroups(masked, 900, 1)) {
+      for (let i = 0; i < g.items.length; i++) {
+        const arr = await this._postBingTranslate(g.items[i], to, route, REQ_MS, sig);
+        out += typeof arr?.[0]?.translations?.[0]?.text === 'string' ? arr[0].translations[0].text : g.items[i];
         if (i < g.seps.length) out += g.seps[i];
       }
       out += g.trailingSep || '';
@@ -344,14 +351,20 @@ export class MachineTranslateClient {
       if (rem <= 30) { attempted.push({ route: r.id, ok: false, reason: 'timeout' }); break; }
       const s0 = this._now();
       try {
-        const res = r.engine === 'bing'
-          ? await this._postBing(`${BING_TR}zh-Hans`, '[{"Text":"ok"}]', r, rem, null)
-          : await this._fetchMt(GTX_PROBE, { method: 'GET', headers: UA }, r, rem, null);
+        if (r.engine === 'bing') {
+          const arr = await this._postBingTranslate('ok', 'zh-Hans', r, rem, null);
+          if (typeof arr?.[0]?.translations?.[0]?.text !== 'string') throw new Error(`${r.id} unexpected Bing probe response`);
+          const stepMs = this._now() - s0;
+          this._routeCooldowns.delete(r.id);
+          attempted.push({ route: r.id, ok: true, status: 200, latencyMs: stepMs });
+          return { ok: true, target: 'bing', route: r.id, engine: r.engine, channel: r.channel, status: 200, latencyMs: this._now() - t0, reason: 'ok', attemptedRoutes: attempted };
+        }
+        const res = await this._fetchMt(GTX_PROBE, { method: 'GET', headers: UA }, r, rem, null);
         const stepMs = this._now() - s0;
         if (res.ok) {
           await cancelBody(res); this._routeCooldowns.delete(r.id);
           attempted.push({ route: r.id, ok: true, status: res.status, latencyMs: stepMs });
-          return { ok: true, target: r.engine === 'bing' ? 'bing' : 'gtx', route: r.id, engine: r.engine, channel: r.channel, status: res.status, latencyMs: this._now() - t0, reason: 'ok', attemptedRoutes: attempted };
+          return { ok: true, target: 'gtx', route: r.id, engine: r.engine, channel: r.channel, status: res.status, latencyMs: this._now() - t0, reason: 'ok', attemptedRoutes: attempted };
         }
         const snip = await this._readText(res, 16384).catch(() => '');
         this._recordRouteFailure(r.id, httpErr(r.id, res.status, redact(snip.slice(0, 120))));
