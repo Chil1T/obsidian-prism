@@ -1,4 +1,4 @@
-// prism-rim-canvas 模块域单测：问答卡全周棱镜边缘光 vs 排队卡底边反射
+// prism-rim-canvas 模块域单测：主输入框全周棱镜光 vs 问答卡/排队卡底边环境棱镜反射
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -116,7 +116,7 @@ function createMockRimDom() {
   return { doc, html, boxes, makeEl };
 }
 
-test('interaction-takeover-card 与 .agy-takeover-frame 使用全周 prism rim（非底边裁切），queued-messages-card 保持底边反射', () => {
+test('surface-composer-card 使用全周 prism rim，interaction-takeover-card 与 queued-messages-card 统一底边环境反射', () => {
   const { doc, boxes, makeEl } = createMockRimDom();
   const prevDoc = globalThis.document;
   const prevRaf = globalThis.requestAnimationFrame;
@@ -130,9 +130,14 @@ test('interaction-takeover-card 与 .agy-takeover-frame 使用全周 prism rim�
   globalThis.cancelAnimationFrame = () => {};
   globalThis.performance = { now: () => now };
 
+  const composerCard = makeEl(
+    'div',
+    { class: 'surface-composer-card', 'data-ag-cs-prism-box': '1' },
+    { left: 100, top: 760, width: 420, height: 96, right: 520, bottom: 856 }
+  );
   const tkCard = makeEl(
     'div',
-    { 'data-testid': 'interaction-takeover-card', class: 'agy-takeover-frame', 'data-ag-cs-prism-box': '1' },
+    { 'data-testid': 'interaction-takeover-card', class: 'agy-takeover-frame', 'data-ag-cs-prism-box': '1', 'data-ag-cs-prism-reflect': 'bottom' },
     { left: 100, top: 100, width: 420, height: 140, right: 520, bottom: 240 }
   );
   const queuedCard = makeEl(
@@ -140,7 +145,7 @@ test('interaction-takeover-card 与 .agy-takeover-frame 使用全周 prism rim�
     { 'data-testid': 'queued-messages-card', 'data-ag-cs-prism-box': '1', 'data-ag-cs-prism-reflect': 'bottom' },
     { left: 100, top: 300, width: 420, height: 60, right: 520, bottom: 360 }
   );
-  boxes.push(tkCard, queuedCard);
+  boxes.push(composerCard, tkCard, queuedCard);
 
   const ctl = createPrismRimCanvasController({
     isDestroyed: () => false,
@@ -156,22 +161,22 @@ test('interaction-takeover-card 与 .agy-takeover-frame 使用全周 prism rim�
 
   try {
     ctl.mountNewBoxes();
-    // 鼠标停留在问答卡顶部边缘（y=106）-> 全周光框应全强度绘制，且不触发 destination-in 裁切
-    ctl.onPointerMove({ clientX: 260, clientY: 106, target: tkCard });
+    // 1) 鼠标停留在问答卡底边附近（y=210，不命中下方 queued/composer）-> 问答卡走底边环境棱镜反射（lineWidth 1.15 + 0.46x 衰减 + destination-in 线性渐变裁切）
+    ctl.onPointerMove({ clientX: 260, clientY: 210, target: tkCard });
     while (rafs.length) rafs.shift()(now += 16);
 
+    const compCv = composerCard.querySelector('.ag-cs-prism-rim-cv');
     const tkCv = tkCard.querySelector('.ag-cs-prism-rim-cv');
     const qCv = queuedCard.querySelector('.ag-cs-prism-rim-cv');
-    assert.ok(tkCv && qCv, '问答卡与排队卡均应挂载 prism rim canvas');
+    assert.ok(compCv && tkCv && qCv, '主输入框、问答卡与排队卡均应挂载 prism rim canvas');
 
-    const tkOps = tkCv._ctx.ops;
-    const tkStroke = tkOps.find((op) => op[0] === 'stroke');
-    assert.ok(tkStroke, '鼠标在问答卡顶边时必须绘制全周棱镜边框 stroke');
-    assert.equal(tkStroke[1], 1.45, '全周棱镜边框线宽应为 1.45');
-    assert.equal(tkStroke[2], 1, '全周棱镜边框不应被底边反射 0.46x 衰减');
-    assert.equal(tkOps.some((op) => op[0] === 'linear'), false, '问答卡全周光框不得套用 destination-in 底边渐变裁切');
+    const tkStroke = tkCv._ctx.ops.find((op) => op[0] === 'stroke');
+    assert.ok(tkStroke, '问答卡应绘制底边环境棱镜反射 stroke');
+    assert.equal(tkStroke[1], 1.15, '问答卡底边反射线宽应保持 1.15');
+    assert.ok(tkStroke[2] < 0.5, '问答卡底边反射应经 0.46x 克制衰减');
+    assert.equal(tkCv._ctx.ops.some((op) => op[0] === 'linear'), true, '问答卡应启用底边反射 destination-in 线性裁切');
 
-    // 鼠标移动到排队卡底边 -> 排队卡仍走底边反射（lineWidth 1.15 + destination-in 线性渐变裁切）
+    // 2) 鼠标移动到排队卡底边（y=358）-> 排队卡保持一致底边反射（lineWidth 1.15 + destination-in 线性渐变裁切）
     qCv._ctx.ops.length = 0;
     ctl.onPointerMove({ clientX: 260, clientY: 358, target: queuedCard });
     while (rafs.length) rafs.shift()(now += 16);
@@ -179,6 +184,17 @@ test('interaction-takeover-card 与 .agy-takeover-frame 使用全周 prism rim�
     assert.ok(qStroke, '排队卡应正常绘制底边反射 stroke');
     assert.equal(qStroke[1], 1.15, '排队卡底边反射线宽应保持 1.15');
     assert.equal(qCv._ctx.ops.some((op) => op[0] === 'linear'), true, '排队卡应保留底边反射 destination-in 线性裁切');
+
+    // 3) 鼠标停留在主输入框边缘（y=770）-> 主输入框全周光框应全强度绘制，且不触发 destination-in 裁切
+    compCv._ctx.ops.length = 0;
+    ctl.onPointerMove({ clientX: 260, clientY: 770, target: composerCard });
+    while (rafs.length) rafs.shift()(now += 16);
+    const compOps = compCv._ctx.ops;
+    const compStroke = compOps.find((op) => op[0] === 'stroke');
+    assert.ok(compStroke, '鼠标在主输入框边缘时必须绘制全周棱镜边框 stroke');
+    assert.equal(compStroke[1], 1.45, '主输入框全周棱镜边框线宽应为 1.45');
+    assert.equal(compStroke[2], 1, '主输入框全周棱镜边框不应被底边反射 0.46x 衰减');
+    assert.equal(compOps.some((op) => op[0] === 'linear'), false, '主输入框全周光框不得套用 destination-in 底边渐变裁切');
   } finally {
     ctl.teardown();
     globalThis.document = prevDoc;
@@ -187,11 +203,11 @@ test('interaction-takeover-card 与 .agy-takeover-frame 使用全周 prism rim�
     globalThis.performance = prevPerf;
   }
 
-  // style.css 问答卡全周 canvas 样式与暗/浅双主题边缘质感契约
+  // style.css 共享底边反射 canvas 样式与暗/浅双主题边缘质感契约
   const css = fs.readFileSync(path.join(ROOT, 'style.css'), 'utf8');
   assert.ok(
-    css.includes('& :is([data-testid="interaction-takeover-card"],.agy-takeover-frame)>.ag-cs-prism-rim-cv,'),
-    'style.css 必须为问答卡挂载全周 .ag-cs-prism-rim-cv 定位样式'
+    css.includes('& .surface-composer-card>.ag-cs-prism-rim-cv,& [data-ag-cs-prism-reflect="bottom"]>.ag-cs-prism-rim-cv{'),
+    'style.css 必须为 [data-ag-cs-prism-reflect="bottom"] 卡片（含问答卡与排队卡）挂载共享 .ag-cs-prism-rim-cv 定位样式'
   );
   assert.ok(
     css.includes('& :is([data-testid="interaction-takeover-card"],.agy-takeover-frame){border-color:var(--border,var(--ag-cs-border-2))!important}'),

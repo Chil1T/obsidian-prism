@@ -1096,11 +1096,9 @@ const allow = cfg.composerRestyle !== false && ga(de(), 'data-ag-prism-mode') !=
 let anyNew = false, anyOff = false;
 for (const q of qCards) {
 if (q[K_PE] && cl(q[K_PE], `${_ts(T_TK)},.agy-takeover-frame`)) continue;
-const isTk = tidOf(q) === T_TK || clHas(q, 'agy-takeover-frame');
 if (allow && !cl(q, S_SUB)) {
-if (ga(q, A_PB) !== '1' || (isTk ? ha(q, AR) : ga(q, AR) !== 'bottom')) anyNew = true;
-setAttrIfChanged(q, A_PB, '1');
-isTk ? ha(q, AR) && ra(q, AR) : setAttrIfChanged(q, AR, 'bottom');
+if (ga(q, A_PB) !== '1' || ga(q, AR) !== 'bottom') anyNew = true;
+setAttrIfChanged(q, A_PB, '1'); setAttrIfChanged(q, AR, 'bottom');
 } else if (ha(q, A_PB) || ha(q, AR)) { clrPb(q); ra(q, AR); anyOff = true; }
 }
 if (anyNew) prismRimCtl.mountNewBoxes ? prismRimCtl.mountNewBoxes() : invRim();

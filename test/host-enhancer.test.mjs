@@ -1966,7 +1966,7 @@ test('Wave D20: ui-runtime mounts bottom prism-reflect on interaction-takeover-c
     flushRaf();
 
     assert.equal(takeoverCard.getAttribute('data-ag-cs-prism-box'), '1', 'Takeover card popup must mount data-ag-cs-prism-box="1"');
-    assert.equal(takeoverCard.hasAttribute('data-ag-cs-prism-reflect'), false, 'Takeover card popup must use full-perimeter prism rim without bottom-only reflect');
+    assert.equal(takeoverCard.getAttribute('data-ag-cs-prism-reflect'), 'bottom', 'Takeover card popup must mount data-ag-cs-prism-reflect="bottom"');
     assert.equal(subTakeover.hasAttribute('data-ag-cs-prism-box'), false, 'Subagent takeover card must still be excluded');
 
     // Switching to chat mode (data-ag-prism-mode="chat") symmetrically strips prism-box/reflect and cleans --ag-px/--ag-py
@@ -1980,12 +1980,12 @@ test('Wave D20: ui-runtime mounts bottom prism-reflect on interaction-takeover-c
     assert.equal(takeoverCard.style.getPropertyValue('--ag-px'), '', 'Chat mode teardown must clear --ag-px');
     assert.equal(takeoverCard.style.getPropertyValue('--ag-py'), '', 'Chat mode teardown must clear --ag-py');
 
-    // Returning to code mode restores full-perimeter prism rim; disabling composerRestyle cleans it up again
+    // Returning to code mode restores bottom prism reflection; disabling composerRestyle cleans it up again
     env.html.setAttribute('data-ag-prism-mode', 'code');
     mainMo.cb([{ type: 'attributes', target: env.html, attributeName: 'data-ag-prism-mode' }]);
     flushRaf();
     assert.equal(takeoverCard.getAttribute('data-ag-cs-prism-box'), '1', 'Code mode must restore data-ag-cs-prism-box="1"');
-    assert.equal(takeoverCard.hasAttribute('data-ag-cs-prism-reflect'), false, 'Code mode must keep takeover card on full-perimeter rim');
+    assert.equal(takeoverCard.getAttribute('data-ag-cs-prism-reflect'), 'bottom', 'Code mode must restore data-ag-cs-prism-reflect="bottom"');
 
     takeoverCard.style.setProperty('--ag-px', '64px');
     takeoverCard.style.setProperty('--ag-py', '8px');
