@@ -193,7 +193,18 @@ function createQaDomEnv({ reducedMatches = false } = {}) {
         return out;
       },
       querySelector(sel) { return this.querySelectorAll(sel)[0] || null; },
-      getElementById(id) { return this.querySelector('#' + id.replace(/\./g, '\\.')); },
+      getElementById(id) {
+        const target = String(id);
+        const find = (n) => {
+          for (const c of n.children) {
+            if (c.id === target) return c;
+            const hit = find(c);
+            if (hit) return hit;
+          }
+          return null;
+        };
+        return find(this);
+      },
       getBoundingClientRect() { return this._rect; },
       get ownerDocument() { return doc; },
       getContext: tag.toLowerCase() === 'canvas'
