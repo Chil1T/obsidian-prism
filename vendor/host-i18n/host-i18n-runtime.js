@@ -129,38 +129,32 @@
  }
  return false;
  }
- function isPrismOwnedElement(el) {
+ function hasMatchingAncestor(el, pred, maxDepth) {
  var cur = el && el.nodeType === 3 ? el.parentElement || el.parentNode : el;
- var depth = 0;
- while (cur && depth < MAX_SAFE_BOUNDARY_DEPTH) {
- if (cur.nodeType === 1 && isPrismOwnedSelf(cur)) return true;
+ var limit = maxDepth || MAX_SAFE_BOUNDARY_DEPTH;
+ for (var depth = 0; cur && depth < limit; depth++) {
+ if (cur.nodeType === 1 && pred(cur)) return true;
  cur = cur.parentElement || cur.parentNode;
- depth++;
  }
  return false;
+ }
+ function isPrismOwnedElement(el) {
+ return hasMatchingAncestor(el, isPrismOwnedSelf);
  }
  function isModelSelectorSelf(el, preTid) {
  if (!el || el.nodeType !== 1) return false;
  var tid = preTid !== undefined ? preTid : getAttr(el, 'data-testid');
  if (tid && hasOwn.call(MODEL_SELECTOR_TESTIDS, tid)) return true;
- if (
+ return (
  hasAttr(el, 'data-effort') ||
  hasAttr(el, 'data-ag-cs-model-submenu') ||
  hasAttr(el, 'data-ag-cs-orch-l2') ||
  hasAttr(el, 'data-ag-cs-orch-l3') ||
  hasAttr(el, 'data-ces-orch-row')
- ) return true;
- return false;
+ );
  }
  function isModelSelectorElement(el) {
- var cur = el && el.nodeType === 3 ? el.parentElement || el.parentNode : el;
- var depth = 0;
- while (cur && depth < MAX_SAFE_BOUNDARY_DEPTH) {
- if (cur.nodeType === 1 && isModelSelectorSelf(cur)) return true;
- cur = cur.parentElement || cur.parentNode;
- depth++;
- }
- return false;
+ return hasMatchingAncestor(el, isModelSelectorSelf);
  }
  function isOnlyIgnoredElemChildren(el) {
  var ch = firstElemChild(el);
@@ -280,14 +274,7 @@
  return false;
  }
  function isUserContentBoundary(el) {
- var cur = el && el.nodeType === 3 ? el.parentElement || el.parentNode : el;
- var depth = 0;
- while (cur && depth < MAX_SAFE_BOUNDARY_DEPTH) {
- if (cur.nodeType === 1 && isUserContentBoundarySelf(cur)) return true;
- cur = cur.parentElement || cur.parentNode;
- depth++;
- }
- return false;
+ return hasMatchingAncestor(el, isUserContentBoundarySelf);
  }
  function isConversationStreamSelf(el) {
  if (!el || el.nodeType !== 1) return false;
@@ -401,14 +388,7 @@
  return false;
  }
  function isExternalOwnedElement(el) {
- var cur = el && el.nodeType === 3 ? el.parentElement || el.parentNode : el;
- var depth = 0;
- while (cur && depth < MAX_SAFE_BOUNDARY_DEPTH) {
- if (cur.nodeType === 1 && isExternalPluginOwnedSelf(cur)) return true;
- cur = cur.parentElement || cur.parentNode;
- depth++;
- }
- return false;
+ return hasMatchingAncestor(el, isExternalPluginOwnedSelf);
  }
  function isCodeDiffContainerSelf(el, tokens, tid) {
  if (hasAttr(el, 'data-ag-cs-inline-diff')) return true;
@@ -421,11 +401,15 @@
  }
  return false;
  }
+ function isFocusGuardSelf(el) {
+ return Boolean(el && el.nodeType === 1 && (hasAttr(el, 'data-floating-ui-focus-guard') || hasAttr(el, 'data-base-ui-focus-guard')));
+ }
  function isDirectIgnoredSelf(el) {
  if (!el || el.nodeType !== 1) return false;
  var tag = el.tagName ? String(el.tagName).toUpperCase() : '';
  if (IGNORED_TAGS[tag]) return true;
  if (el.isContentEditable === true || getAttr(el, 'contenteditable') === 'true') return true;
+ if (isFocusGuardSelf(el)) return true;
  var tokens = getClassTokens(el);
  var tid = getAttr(el, 'data-testid');
  if (isThinkingPanelSelf(el, tag, tid)) return true;
@@ -494,14 +478,9 @@
  return measureSafeBoundaryDepth(el).blocked;
  }
  function isInsideConversationStream(el) {
- var cur = el && el.nodeType === 3 ? el.parentElement || el.parentNode : el;
- var depth = 0;
- while (cur && depth < 128) {
- if (cur.nodeType === 1 && (isConversationStreamSelf(cur) || isChatProseSelf(cur))) return true;
- cur = cur.parentElement || cur.parentNode;
- depth++;
- }
- return false;
+ return hasMatchingAncestor(el, function (cur) {
+ return isConversationStreamSelf(cur) || isChatProseSelf(cur);
+ });
  }
  function isChromeControlElement(el) {
  if (!el || el.nodeType !== 1) return false;
@@ -797,12 +776,7 @@
  delete cold[key];
  coldSize--;
  }
- if (hotSize >= genCap && hotSize + coldSize >= cap) {
- cold = hot;
- coldSize = hotSize;
- hot = Object.create(null);
- hotSize = 0;
- } else if (hotSize >= cap) {
+ if ((hotSize >= genCap && hotSize + coldSize >= cap) || hotSize >= cap) {
  cold = hot;
  coldSize = hotSize;
  hot = Object.create(null);
@@ -1601,11 +1575,14 @@
  normalizeWhitespace: normalizeWhitespace,
  };
  }
+ function isPortalAttr(el) {
+ return hasAttr(el, 'data-floating-ui-portal') || hasAttr(el, 'data-base-ui-portal');
+ }
  function isDialogOrPortalWrappingDialog(el) {
  if (!el || el.nodeType !== 1) return false;
  var role = getAttr(el, 'role');
  if (role === 'dialog') return true;
- if (hasAttr(el, 'data-floating-ui-portal') && typeof el.querySelector === 'function') {
+ if (isPortalAttr(el) && typeof el.querySelector === 'function') {
  if (el.querySelector('[role="dialog"]')) return true;
  }
  return false;
@@ -1619,7 +1596,7 @@
  var role = getAttr(el, 'role') || '';
  if (role === 'dialog') return false;
  if (role === 'tooltip' || role === 'menu' || role === 'listbox') return true;
- if (hasAttr(el, 'data-floating-ui-portal')) {
+ if (isPortalAttr(el)) {
  return !isDialogOrPortalWrappingDialog(el);
  }
  if (hasAttr(el, 'data-radix-popper-content-wrapper')) return true;
@@ -1741,14 +1718,9 @@
  };
  }
  function isInsideDialog(el) {
- var cur = el && el.nodeType === 3 ? el.parentElement || el.parentNode : el;
- var depth = 0;
- while (cur && depth < 48) {
- if (cur.nodeType === 1 && getAttr(cur, 'role') === 'dialog') return true;
- cur = cur.parentElement || cur.parentNode;
- depth++;
- }
- return false;
+ return hasMatchingAncestor(el, function (cur) {
+ return getAttr(cur, 'role') === 'dialog';
+ }, 48);
  }
  function isSmallHoverControlSelf(el) {
  if (!el || el.nodeType !== 1) return false;
@@ -1936,6 +1908,8 @@
  var dirtyProbeActive = false;
  var winBlurObserver = null;
  var pendingFullFloatScan = false;
+ var pendingSidebarRescan = false;
+ var pendingConvViewRescan = false;
  var pendingNodes = [];
  var pendingNodeSet = new Set();
  var rafId = null;
@@ -2265,6 +2239,8 @@
  disconnectDirtyObserver();
  dirtyObserver = null;
  pendingFullFloatScan = false;
+ pendingSidebarRescan = false;
+ pendingConvViewRescan = false;
  clearOffRetryTimers();
  if (rafId === 'bus') {
  try { var _b = getHostDomBus(); if (_b && typeof _b.cancelTask === 'function') _b.cancelTask('conv:host-i18n-flush'); } catch (e) {}
@@ -2311,6 +2287,7 @@
  if (hoverHandler) {
  doc.removeEventListener('pointerenter', hoverHandler, { capture: true });
  doc.removeEventListener('contextmenu', hoverHandler, { capture: true });
+ doc.removeEventListener('click', hoverHandler, { capture: true });
  }
  if (visibilityHandler) doc.removeEventListener('visibilitychange', visibilityHandler);
  if (cvRevealHandler) doc.removeEventListener('contentvisibilityautostatechange', cvRevealHandler, { capture: true });
@@ -2494,6 +2471,15 @@
  globalConflictRecords = nextList;
  return globalConflictRecords.length;
  }
+ function exemptDirectTextChildren(el) {
+ for (var ch = el.firstChild; ch; ch = ch.nextSibling) {
+ if (ch.nodeType === 3) {
+ exemptNodes.add(ch);
+ modifiedTextNodes.delete(ch);
+ textSnapshots.delete(ch);
+ }
+ }
+ }
  function recordElementConflict(el, currentText, expectedText, origText, translatedAt) {
  if (!el || el.nodeType !== 1) return false;
  if (exemptElements.has(el)) return 'blocked';
@@ -2529,15 +2515,7 @@
  cancelOffRetryForElement(el);
  exemptElements.add(el);
  blockedElementsTracker.add(el);
- var offCh = el.firstChild;
- while (offCh) {
- if (offCh.nodeType === 3) {
- exemptNodes.add(offCh);
- modifiedTextNodes.delete(offCh);
- textSnapshots.delete(offCh);
- }
- offCh = offCh.nextSibling;
- }
+ exemptDirectTextChildren(el);
  if (state.status !== 'off-blocked') {
  state.status = 'off-blocked';
  state.reason = 'external-override-blocked';
@@ -2565,15 +2543,7 @@
  }
  if (recent.length >= NODE_CONFLICT_THRESHOLD) {
  exemptElements.add(el);
- var ch = el.firstChild;
- while (ch) {
- if (ch.nodeType === 3) {
- exemptNodes.add(ch);
- modifiedTextNodes.delete(ch);
- textSnapshots.delete(ch);
- }
- ch = ch.nextSibling;
- }
+ exemptDirectTextChildren(el);
  return 'blocked';
  }
  return false;
@@ -2686,17 +2656,7 @@
  st.entries[baseOrig] = true;
  }
  }
- function sliceEdgeWhitespace(str) {
- var len = str.length;
- var start = 0;
- while (start < len && /\s/.test(str.charAt(start))) start++;
- var end = len;
- while (end > start && /\s/.test(str.charAt(end - 1))) end--;
- return {
- leading: str.slice(0, start),
- trailing: str.slice(end),
- };
- }
+ var sliceEdgeWhitespace = splitOuterWhitespace;
  function enqueueNode(node) {
  if (!node || !state.active || state.destroyed) return;
  if (node.isConnected === false) return;
@@ -3011,49 +2971,74 @@
  }
  }
  }
- // 在 off（强制还原原生英文）模式下，定点还原侧栏固定 UI 壳子（置顶会话/项目列表/收起/查看全部），同时绝对跳过会话标题行与项目名
- function scanOffSidebarChrome() {
- if (state.mode !== 'off' || !state.active || state.destroyed || !doc || typeof doc.querySelectorAll !== 'function') return;
- var safeWalkSubtree = function (rootEl) {
- if (!rootEl || rootEl.nodeType !== 1 || rootEl.isConnected === false) return;
- if (isPrismOwnedElement(rootEl) || isExternalOwnedElement(rootEl) || exemptElements.has(rootEl)) return;
- var tid = getAttr(rootEl, 'data-testid');
- if (tid === 'conversation-row-sidebar' || tid === 'project-header' || tid === 'workspace-switcher') return;
- translateAttributes(rootEl);
- var ch = rootEl.firstChild;
- while (ch) {
- if (!state.active || state.destroyed) return;
- if (ch.nodeType === 3) {
- translateTextNode(ch, true);
- } else if (ch.nodeType === 1) {
- safeWalkSubtree(ch);
+ // 侧栏固定 UI 骨架选择器（on/auto 正向汉化 + off 反向还原共享，严格豁免会话标题行、项目名与工作区切换器）
+ var SIDEBAR_LIST_SEL = '[data-testid="conversation-list-sidebar"]';
+ var SIDEBAR_CTRL_SEL = 'button, [role="button"], h1, h2, h3';
+ var SIDEBAR_HEADER_SEL = '[data-testid="pinned-section-header"], [data-testid="section-header"], [data-testid="coordinator-section-header"]';
+ var SIDEBAR_USER_SEL = '[data-testid="conversation-row-sidebar"], [data-testid="project-header"], [data-testid="workspace-switcher"]';
+ function isSidebarUserTestId(tid) {
+ return tid === 'conversation-row-sidebar' || tid === 'project-header' || tid === 'workspace-switcher';
  }
- ch = ch.nextSibling;
+ function isSidebarHeaderTestId(tid) {
+ return tid === 'pinned-section-header' || tid === 'section-header' || tid === 'coordinator-section-header';
+ }
+ function isSidebarProtectedAttrSelf(el) {
+ return hasAttr(el, 'data-resource-name') || hasAttr(el, 'data-uri') || hasAttr(el, 'data-file-path') || hasAttr(el, 'data-file-href') || hasAttr(el, 'data-omni-path');
+ }
+ function scanSidebarChrome(scope) {
+ if (!state.active || state.destroyed || !doc || typeof doc.querySelectorAll !== 'function') return;
+ var rootScope = scope && scope.nodeType === 1 ? scope : doc;
+ if (rootScope !== doc) {
+ if (rootScope.isConnected === false || exemptElements.has(rootScope)) return;
+ if (isPrismOwnedElement(rootScope) || isExternalOwnedElement(rootScope)) return;
+ if (typeof rootScope.closest === 'function' && rootScope.closest(SIDEBAR_USER_SEL)) return;
+ }
+ var walkSubtree = function (el, checkAncestors) {
+ if (!el || el.nodeType !== 1 || el.isConnected === false || exemptElements.has(el)) return;
+ if (el.isContentEditable === true || getAttr(el, 'contenteditable') === 'true') return;
+ if (IGNORED_TAGS[String(el.tagName || '').toUpperCase()]) return;
+ if (checkAncestors ? isPrismOwnedElement(el) || isExternalOwnedElement(el) : isPrismOwnedSelf(el) || isExternalPluginOwnedSelf(el)) return;
+ var tid = getAttr(el, 'data-testid');
+ if (isSidebarUserTestId(tid) || isModelSelectorSelf(el, tid) || isSidebarProtectedAttrSelf(el)) return;
+ translateAttributes(el);
+ for (var ch = el.firstChild; ch; ch = ch.nextSibling) {
+ if (!state.active || state.destroyed) return;
+ if (ch.nodeType === 3) translateTextNode(ch, true);
+ else if (ch.nodeType === 1) walkSubtree(ch, false);
  }
  };
+ var scanListRoot = function (listRoot) {
+ if (!listRoot || typeof listRoot.querySelectorAll !== 'function') return;
+ var items = listRoot.querySelectorAll(SIDEBAR_CTRL_SEL);
+ for (var b = 0; b < items.length; b++) {
+ var item = items[b];
+ if (!item || item.isConnected === false) continue;
+ var insideUserRow = false;
+ for (var cur = item; cur && cur !== listRoot; cur = cur.parentElement) {
+ if (isSidebarUserTestId(getAttr(cur, 'data-testid'))) { insideUserRow = true; break; }
+ }
+ if (!insideUserRow) walkSubtree(item, true);
+ }
+ };
+ var rootTid = rootScope !== doc ? getAttr(rootScope, 'data-testid') : '';
  try {
- var headers = doc.querySelectorAll('[data-testid="pinned-section-header"], [data-testid="section-header"]');
- for (var i = 0; i < headers.length; i++) safeWalkSubtree(headers[i]);
+ if (isSidebarHeaderTestId(rootTid)) walkSubtree(rootScope, false);
+ var headers = rootScope.querySelectorAll(SIDEBAR_HEADER_SEL);
+ for (var i = 0; i < headers.length; i++) walkSubtree(headers[i], true);
  } catch (e) {}
  try {
- var listRoots = doc.querySelectorAll('[data-testid="conversation-list-sidebar"]');
- for (var l = 0; l < listRoots.length; l++) {
- var btns = listRoots[l] && typeof listRoots[l].querySelectorAll === 'function' ? listRoots[l].querySelectorAll('button') : [];
- for (var b = 0; b < btns.length; b++) {
- var btn = btns[b];
- if (!btn || btn.isConnected === false) continue;
- var insideUserRow = false;
- var cur = btn;
- while (cur && cur !== listRoots[l]) {
- var cTid = getAttr(cur, 'data-testid');
- if (cTid === 'conversation-row-sidebar' || cTid === 'project-header' || cTid === 'workspace-switcher') {
- insideUserRow = true;
- break;
+ if (rootScope !== doc) {
+ var inSidebarList = rootTid === 'conversation-list-sidebar' || Boolean(typeof rootScope.closest === 'function' && rootScope.closest(SIDEBAR_LIST_SEL));
+ if (inSidebarList) {
+ var rootTag = String(rootScope.tagName || '').toUpperCase();
+ if (rootTag === 'BUTTON' || rootTag === 'H1' || rootTag === 'H2' || rootTag === 'H3' || getAttr(rootScope, 'role') === 'button') {
+ walkSubtree(rootScope, false);
  }
- cur = cur.parentElement;
+ scanListRoot(rootScope);
  }
- if (!insideUserRow) safeWalkSubtree(btn);
- }
+ } else {
+ var listRoots = doc.querySelectorAll(SIDEBAR_LIST_SEL);
+ for (var l = 0; l < listRoots.length; l++) scanListRoot(listRoots[l]);
  }
  } catch (e) {}
  }
@@ -3063,7 +3048,7 @@
  disconnectObserver();
  try {
  translateElement(doc.documentElement, visitedSet, null, null);
- if (state.mode === 'off') scanOffSidebarChrome();
+ scanSidebarChrome();
  } catch (e) {}
  reconnectObserver();
  }
@@ -3080,7 +3065,7 @@ if (isPaused()) disconnectObserver();
  disconnectObserver();
  try {
  translateElement(doc.documentElement, visitedSet, null, budget);
- if (state.mode === 'off') scanOffSidebarChrome();
+ scanSidebarChrome();
  } catch (e) {}
 if (!isPaused() || (state.mode === 'auto' && nowFn() - bootAt <= LAYER2B_WINDOW_MS)) {
  reconnectObserver();
@@ -3224,12 +3209,13 @@ yieldAndRollback('external-ui-zh');
  return false;
  }
 var FLOATING_CONTAINER_SEL =
-'[role="tooltip"], [role="menu"], [role="listbox"], [data-floating-ui-portal], [data-radix-popper-content-wrapper], .popover, .tooltip, .context-view, .monaco-hover';
+'[role="tooltip"], [role="menu"], [role="listbox"], [data-floating-ui-portal], [data-base-ui-portal], [data-radix-popper-content-wrapper], .popover, .tooltip, .context-view, .monaco-hover';
 function hasFloatingShellHint(el) {
  if (!el || el.nodeType !== 1) return false;
+if (isFocusGuardSelf(el)) return true;
 if (isDialogOrPortalWrappingDialog(el) || isDirectIgnoredSelf(el)) return false;
 if (isFloatingElement(el, doc)) return true;
-if (hasAttr(el, 'data-radix-portal') || hasAttr(el, 'data-floating-ui-focus-guard')) return true;
+if (hasAttr(el, 'data-radix-portal')) return true;
 var idStr = typeof el.id === 'string' ? el.id.toLowerCase() : '';
 return Boolean(idStr && (idStr.indexOf('portal') !== -1 || idStr.indexOf('tooltip') !== -1 || idStr.indexOf('popover') !== -1));
  }
@@ -3268,7 +3254,7 @@ function addCandidate(el) {
 if (!el || el.nodeType !== 1 || el.isConnected === false) return;
 if (candidateSet.has(el) || exemptElements.has(el)) return;
 if (isDialogOrPortalWrappingDialog(el) || isDirectIgnoredSelf(el)) return;
-if (hasAttr(el, 'data-hover-card-popup') || (typeof el.querySelector === 'function' && (hasAttr(el, 'data-base-ui-portal') || hasAttr(el, 'data-floating-ui-portal')) && el.querySelector('[data-hover-card-popup]'))) return;
+if (hasAttr(el, 'data-hover-card-popup') || (typeof el.querySelector === 'function' && isPortalAttr(el) && el.querySelector('[data-hover-card-popup]'))) return;
 candidateSet.add(el);
 candidates.push(el);
  }
@@ -3395,6 +3381,8 @@ initialScanDraining = false;
 var wasCovered = observing || dirtyProbeActive;
 hibernating = true;
  pendingFullFloatScan = false;
+ pendingSidebarRescan = false;
+ pendingConvViewRescan = false;
  if (rafId === 'bus') {
 try { var _hb = getHostDomBus(); if (_hb && typeof _hb.cancelTask === 'function') _hb.cancelTask('conv:host-i18n-flush'); } catch (e) {}
  rafId = null;
@@ -3469,9 +3457,7 @@ var MutationObserverClass =
  customMutationObserver ||
  (win && win.MutationObserver) ||
  (typeof MutationObserver !== 'undefined' ? MutationObserver : null);
-var isFocusGuard = function (n) {
-return Boolean(n && n.nodeType === 1 && (hasAttr(n, 'data-floating-ui-focus-guard') || hasAttr(n, 'data-base-ui-focus-guard')));
- };
+var isFocusGuard = isFocusGuardSelf;
 var isHoverCardPortalOrSelf = function (n) {
 if (!n || n.nodeType !== 1 || n === doc.body || n === doc.documentElement) return false;
 if (hasAttr(n, 'data-hover-card-popup')) return true;
@@ -3505,12 +3491,43 @@ else missedWhilePaused = true;
 if (!inLayer2b) return;
  }
 var batchBoundaryCache = new WeakMap();
+var immediateFloatNodes = [];
+var sidebarNodes = [];
 function getCachedBoundary(el) {
 var hit = batchBoundaryCache.get(el);
 if (hit !== undefined) return hit;
 var res = measureSafeBoundaryDepth(el);
 batchBoundaryCache.set(el, res);
 return res;
+ }
+function isImmediateFloatingMenu(el, parentEl) {
+if (isDialogOrPortalWrappingDialog(el)) return false;
+if (isFloatingElement(el, doc) || hasAttr(el, 'data-radix-portal')) return true;
+if (
+(parentEl === doc.body || hasFloatingShellHint(el)) &&
+typeof el.querySelector === 'function' &&
+el.querySelector('[role="menu"], [role="listbox"]')
+) {
+return true;
+}
+return false;
+ }
+function collectDynamicSidebarChromeNodes(targetEl, added, isDirectSidebarList) {
+if (pausedNow || !added || added.length === 0) return;
+if (!isDirectSidebarList) {
+if (isPrismOwnedSelf(targetEl) || isExternalPluginOwnedSelf(targetEl)) return;
+var tTid = getAttr(targetEl, 'data-testid');
+if (isSidebarUserTestId(tTid)) return;
+if (typeof targetEl.closest !== 'function' || !targetEl.closest(SIDEBAR_LIST_SEL)) return;
+if (targetEl.closest(SIDEBAR_USER_SEL)) return;
+}
+for (var sj = 0; sj < added.length; sj++) {
+var sn = added[sj];
+if (!sn || sn.nodeType !== 1 || sn.isConnected === false) continue;
+if (exemptElements.has(sn) || isSidebarUserTestId(getAttr(sn, 'data-testid'))) continue;
+if (isPrismOwnedSelf(sn) || isExternalPluginOwnedSelf(sn)) continue;
+sidebarNodes.push(sn);
+}
  }
 for (var i = 0; i < mutations.length; i++) {
  if (!state.active || state.destroyed) return;
@@ -3525,9 +3542,18 @@ if (targetIsHoverCard) {
 if (!pausedNow && added && added.length > 0) scheduleHoverCardNode(targetEl);
  continue;
  }
-if (isChatProseSelf(targetEl) || isDirectIgnoredSelf(targetEl)) continue;
+if (isChatProseSelf(targetEl)) continue;
+if (isDirectIgnoredSelf(targetEl)) {
+if (getAttr(targetEl, 'data-testid') === 'conversation-list-sidebar') {
+collectDynamicSidebarChromeNodes(targetEl, added, true);
+}
+continue;
+}
 var targetBound = getCachedBoundary(targetEl);
-if (targetBound.blocked && !targetBound.canDescendConv) continue;
+if (targetBound.blocked && !targetBound.canDescendConv) {
+collectDynamicSidebarChromeNodes(targetEl, added, false);
+continue;
+}
 if (!pausedNow && !targetBound.blocked && checkChildListConflict(targetEl)) {
  continue;
  }
@@ -3551,6 +3577,11 @@ isOnlyIgnoredElemChildren(addedNode)
  ) {
  continue;
  }
+if (!pausedNow && !targetBound.blocked && isImmediateFloatingMenu(addedNode, targetEl)) {
+if (inLayer2b && inspectExternalDelayedMutation(addedNode)) return;
+immediateFloatNodes.push(addedNode);
+continue;
+}
  } else {
  continue;
  }
@@ -3588,6 +3619,21 @@ if (checkNodeConflict(target)) continue;
 enqueueNode(target);
  }
  }
+if (!pausedNow && (immediateFloatNodes.length > 0 || sidebarNodes.length > 0)) {
+var immediateVisited = new WeakSet();
+disconnectObserver();
+try {
+for (var fi = 0; fi < immediateFloatNodes.length; fi++) {
+if (!state.active || state.destroyed) break;
+translateElement(immediateFloatNodes[fi], immediateVisited, null, null);
+}
+for (var si = 0; si < sidebarNodes.length; si++) {
+if (!state.active || state.destroyed) break;
+scanSidebarChrome(sidebarNodes[si]);
+}
+} catch (e) {}
+reconnectObserver();
+}
 if (!pausedNow && pendingNodes.length > 0) scheduleFlush();
  };
 if (domBusInst && typeof domBusInst.subscribe === 'function') {
@@ -3694,9 +3740,37 @@ layer2bTimers.push(tid);
 })(checkDelays[d]);
  }
  }
-// Hover & ContextMenu targeted floating scan (leading + trailing 120ms throttle)
+// 单趟 O(1) 判定侧栏点击目标（off 模式或非侧栏区域秒退，避免 300Hz 点击卡顿）
+function classifySidebarClickTarget(target) {
+var inRow = false;
+var inSidebar = false;
+var cur = target;
+for (var depth = 0; cur && cur.nodeType === 1 && depth < 16; depth++) {
+if (cur === doc.body || cur === doc.documentElement) break;
+if (isPrismOwnedSelf(cur) || isExternalPluginOwnedSelf(cur)) {
+return { inRow: false, inSidebar: false };
+}
+var tid = getAttr(cur, 'data-testid');
+if (tid === 'conversation-view' || tid === 'agent-input-box') {
+return { inRow: false, inSidebar: false };
+}
+if (tid === 'conversation-row-sidebar') {
+inRow = true;
+inSidebar = true;
+} else if (tid === 'conversation-list-sidebar') {
+inSidebar = true;
+break;
+}
+cur = cur.parentElement;
+}
+return { inRow: inRow, inSidebar: inSidebar };
+}
+// Hover, ContextMenu & Sidebar Click targeted floating/conversation rescan
 hoverHandler = function (e) {
  if (!state.active || state.destroyed) return;
+var evType = e && e.type;
+var isClick = evType === 'click';
+if (isClick && state.mode === 'off') return;
  if (isPaused()) {
 if (!hibernating) enterHibernation();
  return;
@@ -3705,35 +3779,68 @@ if (hibernating) wakeFromHibernation();
 var rawTarget = e && e.target;
 var target = rawTarget && rawTarget.nodeType === 3 ? rawTarget.parentElement || rawTarget.parentNode : rawTarget;
 if (!target || target.nodeType !== 1 || target.isConnected === false) return;
-var now = nowFn(), isContextMenu = Boolean(e && e.type === 'contextmenu'), hoverBound = null;
+var now = nowFn();
+var isContextMenu = evType === 'contextmenu';
+var hoverBound = null;
 if (isContextMenu) {
 if (e.defaultPrevented || exemptElements.has(target) || target.closest?.('.ag-cs-ctx-menu,.ag-cs-diff-ctx-menu,.ag-omni-menu,#ag-prism-overlay-portal,[data-ag-owned="1"],[data-ag-prism-overlay]')) return;
 pendingFullFloatScan = true;
-} else if (e && e.type === 'pointerenter') {
+} else if (isClick) {
+if (exemptElements.has(target) || hasAttr(target, 'data-ag-owned') || hasAttr(target, 'data-ag-no-i18n')) return;
+var clickInfo = classifySidebarClickTarget(target);
+if (!clickInfo.inSidebar) return;
+pendingSidebarRescan = true;
+if (clickInfo.inRow) pendingConvViewRescan = true;
+pendingFullFloatScan = true;
+} else if (evType === 'pointerenter') {
 var tg = String(target.tagName || '').toUpperCase();
 if (IGNORED_TAGS[tg] || tg === 'PATH' || tg === 'CIRCLE' || tg === 'RECT' || tg === 'LINE' || tg === 'POLYLINE' || tg === 'POLYGON' || tg === 'ELLIPSE' || tg === 'G' || tg === 'DEFS' || tg === 'USE' || tg === 'STOP') return;
 if (exemptElements.has(target) || hasAttr(target, 'data-ag-owned') || hasAttr(target, 'data-ag-no-i18n') || isDialogOrPortalWrappingDialog(target)) return;
-if (target.closest?.('[data-testid="conversation-row-sidebar"],[data-testid="project-header"],[data-testid="conversation-list-sidebar"],[data-testid="sidebar-split"]>div:first-child,[data-hover-card-popup]')) return;
+if (target.closest?.(SIDEBAR_USER_SEL + ',' + SIDEBAR_LIST_SEL + ',[data-testid="sidebar-split"]>div:first-child,[data-hover-card-popup]')) return;
 hoverBound = getHoverBoundary(target, now);
 if (hoverBound.blocked) return;
 if (isInsideDialog(target) && !isSmallHoverControl(target)) return;
  }
-var elapsed = now - lastHoverTime, ranImmediate = false;
-if (elapsed >= 120) { lastHoverTime = now; ranImmediate = true; runHoverTargetScan(target, hoverBound); }
+var elapsed = now - lastHoverTime;
+var ranImmediate = false;
+if (!isClick && elapsed >= 120) {
+lastHoverTime = now;
+ranImmediate = true;
+runHoverTargetScan(target, hoverBound);
+}
 if (hoverScanTimer !== null) clearTimeoutFn(hoverScanTimer);
-var delay = ranImmediate ? 50 : Math.max(50, 120 - elapsed + 20);
+var delay = isClick ? 30 : ranImmediate ? 50 : Math.max(50, 120 - elapsed + 20);
 hoverScanTimer = setTimeoutFn(function () {
  hoverScanTimer = null;
 lastHoverTime = nowFn();
-if (!ranImmediate) runHoverTargetScan(target, hoverBound);
+if (!isClick && !ranImmediate) runHoverTargetScan(target, hoverBound);
 var doFull = pendingFullFloatScan;
+var doSidebar = pendingSidebarRescan;
+var doConvView = pendingConvViewRescan;
  pendingFullFloatScan = false;
+pendingSidebarRescan = false;
+pendingConvViewRescan = false;
 scanFloatingContainers(doFull, target);
+if (doSidebar && state.active && !state.destroyed && !isPaused()) {
+disconnectObserver();
+try {
+scanSidebarChrome();
+} catch (err) {}
+reconnectObserver();
+}
+if (doConvView && state.active && !state.destroyed && !isPaused() && typeof doc.querySelectorAll === 'function') {
+var convViews = doc.querySelectorAll('[data-testid="conversation-view"]');
+for (var ci = 0; ci < convViews.length; ci++) {
+enqueueNode(convViews[ci]);
+}
+if (convViews.length > 0) scheduleFlush();
+}
 }, delay);
  };
 if (typeof doc.addEventListener === 'function') {
 doc.addEventListener('pointerenter', hoverHandler, { capture: true, passive: true });
 doc.addEventListener('contextmenu', hoverHandler, { capture: true, passive: true });
+doc.addEventListener('click', hoverHandler, { capture: true, passive: true });
 visibilityHandler = function () {
  if (!state.active || state.destroyed) return;
  if (isPaused()) {
@@ -3781,6 +3888,8 @@ hibernating = Boolean(isDocHidden() || ((isWinBlurAttrSet() || isPeriodicPickerO
 missedWhilePaused = false;
  dirtyProbeActive = false;
  pendingFullFloatScan = false;
+ pendingSidebarRescan = false;
+ pendingConvViewRescan = false;
  inOffRetryPass = false;
  delayedExternalNodes.clear();
  globalConflictRecords.length = 0;

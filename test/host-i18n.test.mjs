@@ -3817,3 +3817,161 @@ test('ReDoS regression: isStepPlainTextAllowed and looksLikeStepPathOrCmd handle
 
   inst.destroy();
 });
+
+test('Sidebar chrome (Projects/Conversations/Pinned/Coordinator) translates in on/auto modes, Base UI portals translate synchronously without flash, and sidebar click rescans conversation-view with O(1) non-sidebar/off bailout', () => {
+  const dict = {
+    exact: {
+      Projects: '项目列表',
+      Conversations: '会话列表',
+      Pinned: '已置顶',
+      Coordinator: '协调器',
+      Collapse: '收起',
+      Rename: '重命名',
+      Delete: '删除',
+      Review: '审查',
+      Save: '保存',
+      Settings: '设置',
+    },
+    patterns: [],
+  };
+
+  for (const activeMode of ['on', 'auto']) {
+    const env = createTestEnv(1000);
+    const sidebarList = env.makeEl('div', { attrs: { 'data-testid': 'conversation-list-sidebar' } });
+    const projHdr = env.makeEl('div', { attrs: { 'data-testid': 'section-header' } });
+    const projBtn = env.makeEl('button', { text: 'Projects' });
+    projHdr.append(projBtn);
+    const convHdr = env.makeEl('div', { attrs: { 'data-testid': 'section-header' } });
+    const convH2 = env.makeEl('h2', { text: 'Conversations' });
+    convHdr.append(convH2);
+    const pinnedHdr = env.makeEl('div', { attrs: { 'data-testid': 'pinned-section-header' }, text: 'Pinned' });
+    const coordHdr = env.makeEl('div', { attrs: { 'data-testid': 'coordinator-section-header' }, text: 'Coordinator' });
+    const projNameBtn = env.makeEl('button', { attrs: { 'data-testid': 'project-header' }, text: 'Projects' });
+    const wsSwitcher = env.makeEl('button', { attrs: { 'data-testid': 'workspace-switcher' }, text: 'Settings' });
+    const convRow = env.makeEl('button', { attrs: { 'data-testid': 'conversation-row-sidebar' }, text: 'Save' });
+    const collapseBtn = env.makeEl('button', { text: 'Collapse' });
+    const prismBtn = env.makeEl('button', { attrs: { 'data-ag-owned': '1' }, text: 'Settings' });
+    sidebarList.append(projHdr, convHdr, pinnedHdr, coordHdr, projNameBtn, wsSwitcher, convRow, collapseBtn, prismBtn);
+
+    const convView = env.makeEl('div', { attrs: { 'data-testid': 'conversation-view' } });
+    const reviewBtn = env.makeEl('button', { text: 'Review' });
+    convView.append(reviewBtn);
+
+    const outsideBtn = env.makeEl('button', { text: 'Settings' });
+    env.doc.body.append(sidebarList, convView, outsideBtn);
+
+    const inst = runtime.mountHostI18n({
+      root: env.win,
+      doc: env.doc,
+      dict,
+      mode: activeMode,
+      nowFn: env.nowFn,
+      setTimeoutFn: env.setTimeoutFn,
+      clearTimeoutFn: env.clearTimeoutFn,
+      rafFn: env.rafFn,
+      cancelRafFn: env.cancelRafFn,
+    });
+
+    // Advance past auto-mode Layer 2b timers so timer assertions are deterministic
+    if (activeMode === 'auto') env.advanceTime(1300);
+
+    // 1) Sidebar chrome translates cleanly while user rows/headers/Prism controls remain protected
+    assert.equal(projBtn.textContent, '项目列表');
+    assert.equal(convH2.textContent, '会话列表');
+    assert.equal(pinnedHdr.textContent, '已置顶');
+    assert.equal(coordHdr.textContent, '协调器');
+    assert.equal(collapseBtn.textContent, '收起');
+    assert.equal(projNameBtn.textContent, 'Projects', 'User project-header must remain protected');
+    assert.equal(wsSwitcher.textContent, 'Settings', 'User workspace-switcher must remain protected');
+    assert.equal(convRow.textContent, 'Save', 'User conversation-row-sidebar title must remain protected');
+    assert.equal(prismBtn.textContent, 'Settings', 'Prism-owned sidebar button must remain protected');
+
+    // 2) Dynamically mounted Base UI floating menu portal translates synchronously in MO microtask (0-frame flash, no rAF needed)
+    const basePortal = env.makeEl('div', { attrs: { 'data-base-ui-portal': '' } });
+    const focusGuard = env.makeEl('span', { attrs: { 'data-base-ui-focus-guard': '' }, text: 'Save' });
+    const menu = env.makeEl('div', { attrs: { role: 'menu' } });
+    const renameItem = env.makeEl('div', { attrs: { role: 'menuitem' }, text: 'Rename' });
+    const deleteItem = env.makeEl('div', { attrs: { role: 'menuitem' }, text: 'Delete' });
+    menu.append(renameItem, deleteItem);
+    basePortal.append(focusGuard, menu);
+    env.doc.body.append(basePortal);
+    env.flushObservers();
+    // Assert BEFORE advancing timers / rAF — proves synchronous zero-flash translation inside MO callback
+    assert.equal(renameItem.textContent, '重命名');
+    assert.equal(deleteItem.textContent, '删除');
+    assert.equal(focusGuard.textContent, 'Save', 'Base UI focus guard must stay untouched');
+
+    // 2b) Dynamically appended sidebar section-header (both direct and nested wrapper) translates while user rows stay untouched
+    const dynHdr = env.makeEl('div', { attrs: { 'data-testid': 'section-header' }, text: 'Conversations' });
+    const dynUserRow = env.makeEl('button', { attrs: { 'data-testid': 'conversation-row-sidebar' }, text: 'Projects' });
+    const nestedWrap = env.makeEl('div');
+    sidebarList.append(dynHdr, dynUserRow, nestedWrap);
+    env.flushObservers();
+    assert.equal(dynHdr.textContent, '会话列表');
+    assert.equal(dynUserRow.textContent, 'Projects');
+
+    const nestedBtn = env.makeEl('button', { text: 'Collapse' });
+    nestedWrap.append(nestedBtn);
+    env.flushObservers();
+    assert.equal(nestedBtn.textContent, '收起');
+
+    // 3) Clicking non-sidebar buttons must O(1) bail out without scheduling any timer
+    env.advanceTime(50);
+    assert.equal(env.timers.size, 0);
+    env.doc.dispatchEvent({ type: 'click', target: outsideBtn });
+    env.doc.dispatchEvent({ type: 'click', target: reviewBtn });
+    env.doc.dispatchEvent({ type: 'click', target: prismBtn });
+    assert.equal(env.timers.size, 0, 'Non-sidebar / Prism clicks must O(1) bail out with 0 timers');
+
+    // 4) Left-clicking a conversation row rescans conversation-view even if pointerenter fires immediately after
+    reviewBtn.firstChild._nodeValue = 'Review';
+    env.doc.dispatchEvent({ type: 'click', target: convRow });
+    assert.ok(env.timers.size >= 1, 'Sidebar conversation row click schedules rescan');
+    env.advanceTime(5);
+    env.doc.dispatchEvent({ type: 'pointerenter', target: outsideBtn });
+    env.advanceTime(120);
+    assert.equal(reviewBtn.textContent, '审查');
+
+    // 5) Capture click listener is registered and cleanly removed on destroy() (0 leaks + lossless restore)
+    assert.ok((env.docListeners.get('click:true')?.size || 0) >= 1, 'capture click listener must be registered');
+    inst.destroy();
+    assert.equal(env.docListeners.get('click:true')?.size || 0, 0, 'capture click listener must be removed on destroy()');
+    assert.equal(env.timers.size, 0);
+    assert.equal(projBtn.textContent, 'Projects');
+    assert.equal(convH2.textContent, 'Conversations');
+    assert.equal(pinnedHdr.textContent, 'Pinned');
+    assert.equal(coordHdr.textContent, 'Coordinator');
+    assert.equal(collapseBtn.textContent, 'Collapse');
+    assert.equal(dynHdr.textContent, 'Conversations');
+    assert.equal(nestedBtn.textContent, 'Collapse');
+    assert.equal(renameItem.textContent, 'Rename');
+    assert.equal(deleteItem.textContent, 'Delete');
+  }
+
+  // 6) In off mode, clicking sidebar conversation row must O(1) bail out with 0 timers while sidebar chrome restoration works
+  const offEnv = createTestEnv(1000);
+  const offSidebar = offEnv.makeEl('div', { attrs: { 'data-testid': 'conversation-list-sidebar' } });
+  const offHdr = offEnv.makeEl('div', { attrs: { 'data-testid': 'section-header' }, text: '项目列表' });
+  const offRow = offEnv.makeEl('button', { attrs: { 'data-testid': 'conversation-row-sidebar' }, text: '项目列表' });
+  offSidebar.append(offHdr, offRow);
+  offEnv.doc.body.append(offSidebar);
+
+  const offInst = runtime.mountHostI18n({
+    root: offEnv.win,
+    doc: offEnv.doc,
+    dict,
+    mode: 'off',
+    nowFn: offEnv.nowFn,
+    setTimeoutFn: offEnv.setTimeoutFn,
+    clearTimeoutFn: offEnv.clearTimeoutFn,
+    rafFn: offEnv.rafFn,
+    cancelRafFn: offEnv.cancelRafFn,
+  });
+  assert.equal(offHdr.textContent, 'Projects');
+  assert.equal(offRow.textContent, '项目列表', 'off mode must still protect user conversation row');
+  assert.equal(offEnv.timers.size, 0);
+  offEnv.doc.dispatchEvent({ type: 'click', target: offRow });
+  assert.equal(offEnv.timers.size, 0, 'off mode click must O(1) bail out with 0 timers');
+  offInst.destroy();
+  assert.equal(offEnv.docListeners.get('click:true')?.size || 0, 0);
+});
