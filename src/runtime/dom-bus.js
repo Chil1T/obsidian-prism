@@ -167,15 +167,16 @@
         else { s.at = now; T(() => s.h(hit)); }
       }
     }
-    const takeAll = (disp) => {
+    const takeAll = (disp, max = 3) => {
       let out = [];
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < max; i++) {
         const m = slots[i].m, r = isF(m?.takeRecords) ? T(() => m.takeRecords()) : null;
         if (r?.length) { if (disp) dispatchMo(r, i > 0); out = out.length ? out.concat(r) : r; }
       }
       return out;
     };
-    const drainM = () => takeAll(1), discardM = () => takeAll(0);
+    // 仅丢弃全子树 rootMo (slots[0])，保留 <html>/<body> 根属性通知通道
+    const drainM = () => takeAll(1), discardM = () => takeAll(0, 1);
     const dropSl = (sl) => { if (sl.m) { T(() => sl.m.disconnect()); sl.m = null; } sl.t = null; sl.k = ''; };
     function syncSl(sl, tg, opts, MO) {
       if (!opts || !tg) return dropSl(sl);

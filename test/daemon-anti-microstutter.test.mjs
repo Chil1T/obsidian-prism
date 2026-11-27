@@ -682,6 +682,44 @@ test('4. Window-level single-flight (__agPrismMetricsInflight) deduplicates conc
     pendingResolvers.shift()();
     await Promise.all([pFallback, pBridge]);
     assert.equal(env.win.__agPrismMetricsInflight.size, 0, 'Single-flight entry must clean up after resolve');
+
+    // 4a. Synchronous throw in __agPrismMetricsCall from pulse-vial-bridge must clean __agPrismMetricsInflight and unblock inline-fallback
+    const origResolve = env.win.__agPrismMetricsResolve;
+    env.win.__agPrismMetricsCall = () => { throw new Error('sync bridge failure'); };
+    const pBridgeThrow = bridge.sync();
+    const pFbAfterThrow = ctl.refresh();
+    await Promise.all([pBridgeThrow, pFbAfterThrow]);
+    assert.equal(env.win.__agPrismMetricsInflight.size, 0, 'Sync throw in __agPrismMetricsCall must clean __agPrismMetricsInflight');
+    assert.equal(env.win.__agPrismMetricsResolve, origResolve, 'Sync throw must restore __agPrismMetricsResolve');
+
+    // 4b. Unanswered __agPrismMetricsCall timeout (2s) must settle bridge + concurrent inline-fallback and delete inflight key
+    env.win.__agPrismMetricsCall = () => {};
+    const pBridgeTimeout = bridge.sync();
+    const pFbSharedTimeout = ctl.refresh();
+    assert.equal(env.win.__agPrismMetricsInflight.size, 1, 'Pending bridge call should register in __agPrismMetricsInflight');
+    const [bRes, fbRes] = await Promise.all([pBridgeTimeout, pFbSharedTimeout]);
+    assert.ok(bRes && typeof bRes === 'object', 'Timed-out bridge.sync() must settle cleanly');
+    assert.ok(fbRes && fbRes.speed, 'Shared inline-fallback.refresh() must resolve to fallback snapshot on bridge timeout');
+    assert.equal(env.win.__agPrismMetricsInflight.size, 0, 'Timed-out inflight Promise must auto-delete from __agPrismMetricsInflight');
+
+    // 4c. Rejected external promise in __agPrismMetricsInflight must be cleaned and not hang/reject inline-fallback
+    env.win.__agPrismMetricsInflight.set(`${CID_1}:1`, Promise.reject(new Error('stale rejected inflight')));
+    const fbAfterRej = await ctl.refresh();
+    assert.ok(fbAfterRej && fbAfterRej.speed, 'inline-fallback must recover cleanly from rejected shared inflight');
+    assert.equal(env.win.__agPrismMetricsInflight.size, 0, 'Rejected shared inflight entry must be evicted');
+
+    // 4d. Subsequent normal request works without permanent deadlock
+    env.win.__agPrismMetricsCall = (raw) => {
+      const req = JSON.parse(raw);
+      env.win.__agPrismMetricsResolve?.(req.id, {
+        connection: 'live',
+        groups: [{ id: 'gemini', name: 'Gemini', windows: { '5h': { remainingFraction: 0.77, available: true } } }],
+        speed: { model: 'Gemini 4', tps: 61.2, context: { usedTokens: 70000, maxTokens: 512000, usedFraction: 0.14 } },
+      });
+    };
+    const recovered = await ctl.refresh();
+    assert.equal(recovered.connection, 'live');
+    assert.equal(env.win.__agPrismMetricsInflight.size, 0);
   } finally {
     bridge.destroy();
     ctl.destroy();

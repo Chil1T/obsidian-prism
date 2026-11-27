@@ -6,7 +6,7 @@ const api=factory(root);root.__agPrismTelemetry=api;if(typeof window!=='undefine
 }
 })(typeof globalThis!=='undefined'?globalThis:typeof window!=='undefined'?window:this,function(globalRoot){
 'use strict';
-const isFn=v=>typeof v==='function',isFin=v=>typeof v==='number'&&Number.isFinite(v);
+const isFn=v=>typeof v==='function',isStr=v=>typeof v==='string',isFin=v=>typeof v==='number'&&Number.isFinite(v);
 const gA=(e,k)=>e?.getAttribute?.(k),sA=(e,k,v)=>e?.setAttribute?.(k,v),rA=(e,k)=>e?.removeAttribute?.(k);
 const qS=(e,s)=>e?.querySelector?.(s),qA=(e,s)=>e?.querySelectorAll?.(s);
 const emitB=(w,p)=>{try{w?.__agPulseExternalBridge?.(p);}catch{}};
@@ -89,7 +89,7 @@ let rec=histHooks.get(h);
 if(!rec){
 const oP=isFn(h.pushState)?h.pushState:null,oR=isFn(h.replaceState)?h.replaceState:null;
 rec={oP,oR,wP:null,wR:null,cbs:new Set()};
-const emit=()=>{for(const cb of Array.from(rec.cbs))try{cb();}catch{}};
+const emit=()=>{for(const cb of [...rec.cbs])try{cb();}catch{}};
 try{
 if(oP){rec.wP=function(){const r=oP.apply(this,arguments);emit();return r;};h.pushState=rec.wP;}
 if(oR){rec.wR=function(){const r=oR.apply(this,arguments);emit();return r;};h.replaceState=rec.wR;}
@@ -137,7 +137,7 @@ let expLang='',activeHost=null,winBlur=false,pollSusp=false,blurOff=null,blurObs
 const pend=new Map(),inFlight=new Map(),insts=new Map(),instByHost=new WeakMap(),extTiers=new Map(),snapByCid=new Map(),locSnaps=new WeakMap();
 
 const readRouteKey=w=>{const l=w?.location;return l?`${l.href||''}|${l.pathname||''}|${l.hash||''}`:'';};
-const extractUrlCid=w=>{const l=w?.location,m=(typeof l?.pathname==='string'&&l.pathname.match(URL_CID_RE))||(typeof l?.href==='string'&&l.href.match(URL_CID_RE));return m?m[1]:null;};
+const extractUrlCid=w=>{const l=w?.location,m=(isStr(l?.pathname)&&l.pathname.match(URL_CID_RE))||(isStr(l?.href)&&l.href.match(URL_CID_RE));return m?m[1]:null;};
 const ctxTs=s=>{const v=s?.speed?.context?.sampledAt;if(isFin(v))return v;const t=Date.parse(v||'');return isFin(t)?t:NaN;};
 const putCidSnap=(cid,snap)=>{
 if(!cid||!snap||typeof snap!=='object')return;
@@ -257,7 +257,7 @@ const w=gW();if(!w)return;
 if(!mRes){
 mRes=(id,pl)=>{
 const it=pend.get(id);if(!it)return;
-clearTimeout(it.timer);pend.delete(id);
+cT(it.timer);pend.delete(id);
 let synced=pl;
 if(pl&&pl.connection!==LE&&pl.groups?.length>0){
 const prev=(it.cid&&snapByCid.get(it.cid))||(!it.cid?lastSnap:null);
@@ -370,8 +370,8 @@ instByHost.delete(it.host);insts.delete(it.anc);
 const unmountFb=(keepBridge=false)=>{
 clrWait();clrSw();clrBurst();clrPoll();clrCompactWatch();clrBlur();
 if(docOff){try{docOff();}catch{}docOff=null;}
-if(!keepBridge){clrSeat();for(const it of pend.values()){clearTimeout(it.timer);it.onSettle?.();it.resolve(null);}pend.clear();inFlight.clear();rmHost();}
-const list=Array.from(insts.values());for(let i=0;i<list.length;i++)disposeInst(list[i],false);
+if(!keepBridge){clrSeat();for(const it of pend.values()){cT(it.timer);it.onSettle?.();it.resolve(null);}pend.clear();inFlight.clear();rmHost();}
+const list=[...insts.values()];for(let i=0;i<list.length;i++)disposeInst(list[i],false);
 if(list.length>0)emitB(gW(),{event:'dispose'});
 purgeOrphans(gD());activeHost=null;
 };
@@ -392,34 +392,41 @@ try{
 const tr=qS(sc,MS_S)||qS(doc,MS_S),lb=gA(tr,'aria-label')||tr?.textContent?.trim();if(lb)model=lb;
 const vw=sc&&sc!==doc?sc:qS(doc,CV_S),ts=qA(vw,'[data-testid="planner-response-text"],[data-testid="agent-response"],[data-testid="user-message-bubble"]');
 if(ts?.length>0){const n=Math.min(4,ts.length);let s=0;for(let i=ts.length-n;i<ts.length;i++)s+=(ts[i].textContent||'').length;chars=Math.round((s/n)*ts.length);}
-else if(typeof vw?.textContent==='string')chars=vw.textContent.length;
+else if(isStr(vw?.textContent))chars=vw.textContent.length;
 }catch{}
 const maxTokens=512000,usedTokens=Math.max(4200,Math.min(maxTokens,Math.round(chars/3.2)+8400));
 const snap={connection:LE,speed:{model,tps:null,latestTps:null,ttftSeconds:null,rounds:0,cacheHitRate:null,totalTokens:usedTokens,context:{model,usedTokens,maxTokens,usedFraction:Math.min(.98,usedTokens/maxTokens),sampledAt:now}},groups:[]};
 if(sc)locSnaps.set(sc,{at:now,snap});
 return snap;
 };
+const getFbSnap=(cid,sc)=>(cid&&snapByCid.get(cid))||(!cid&&lastSnap)||estSnap(sc);
 const reqSnap=(inp,scopeNode=null,onSettle=null,syncUi=false)=>{
 const w=gW();bindHook();
 const si=inp&&typeof inp==='object'?{...inp}:{};if(si.usageSync)delete si.usageSync;
-const cid=typeof si[CK]==='string'?si[CK]:null;
-const fb=()=>(cid&&snapByCid.get(cid))||(!cid&&lastSnap)||estSnap(scopeNode);
+const cid=isStr(si[CK])?si[CK]:null,fb=()=>getFbSnap(cid,scopeNode);
 if(w&&isFn(w[METRICS_BINDING])){
 return new Promise(resolve=>{
 if(pend.size>=Math.max(8,insts.size*3)){onSettle?.();resolve(fb());return;}
 const id=++reqSeq,timer=setTimeout(()=>{pend.delete(id);onSettle?.();resolve(fb());},si.force||si.quotaRefresh?10000:4500);
 pend.set(id,{resolve,timer,cid,onSettle,syncUi});
 try{w[METRICS_BINDING](JSON.stringify({id,input:si}));}
-catch{clearTimeout(timer);pend.delete(id);onSettle?.();resolve(fb());}
+catch{cT(timer);pend.delete(id);onSettle?.();resolve(fb());}
 });
 }
 onSettle?.();return Promise.resolve(estSnap(scopeNode));
 };
 const getSfMap=()=>{const w=gW();return w?(w.__agPrismMetricsInflight||=new Map()):inFlight;};
 const reqSnapSF=(key,inp,scopeNode,syncUi=false)=>{
-const bypass=!!(inp?.force||inp?.freshContext||inp?.quotaRefresh),sf=getSfMap(),cid=typeof inp?.[CK]==='string'?inp[CK]:'',inc=inp?.[IK]!==false;
+const bypass=!!(inp?.force||inp?.freshContext||inp?.quotaRefresh),sf=getSfMap(),cid=isStr(inp?.[CK])?inp[CK]:'',inc=inp?.[IK]!==false;
 const k0=cid+':0',k1=cid+':1',rk=cid?(inc?k1:k0):`${key}:${inc?1:0}`;
-if(!bypass){const h=sf.get(k1)||(!inc&&sf.get(k0))||sf.get(rk);if(h)return h;}
+if(!bypass){
+const hk=sf.has(k1)?k1:(!inc&&sf.has(k0))?k0:sf.has(rk)?rk:'',h=hk&&sf.get(hk);
+if(h)return new Promise(r=>{
+let d=0,tm=null,fin=(v,del)=>{if(d)return;d=1;cT(tm);if(del&&sf.get(hk)===h)sf.delete(hk);r(v||getFbSnap(cid,scopeNode));};
+tm=stTm(()=>fin(0,1),4600);
+Promise.resolve(h).then(v=>fin(v,!v),()=>fin(0,1));
+});
+}
 let settled=false,p=null;
 const done=()=>{if(settled)return;settled=true;if(p&&sf.get(rk)===p)sf.delete(rk);};
 p=reqSnap(inp,scopeNode,done,syncUi);
@@ -431,7 +438,7 @@ const resolveCurLang=()=>{const a=gA(gD()?.documentElement,AG+'lang');return nor
 const gStr=()=>FB_I18N[resolveCurLang()]||FB_I18N.en;
 const syncLblsFor=sr=>{
 if(!sr)return;const t=gStr(),ns=qA(sr,'[data-fb-i18n]')||[];
-for(let i=0;i<ns.length;i++){const k=gA(ns[i],'data-fb-i18n');if(k&&typeof t[k]==='string'&&ns[i].textContent!==t[k])ns[i].textContent=t[k];}
+for(let i=0;i<ns.length;i++){const k=gA(ns[i],'data-fb-i18n');if(k&&isStr(t[k])&&ns[i].textContent!==t[k])ns[i].textContent=t[k];}
 };
 const applySnapToInst=(it,snap)=>{
 if(!it?.sr||!it.host)return;
@@ -447,8 +454,8 @@ const t=gStr();syncLblsFor(sr);
 sT('rounds',sp.rounds>0?`${sp.rounds}r`:'—');sT('tps',isFin(sp.tps)&&sp.tps>0?sp.tps.toFixed(1):'—');
 sT('cache-total',`${fmtTok(tot>0?tot:uT)} tok`);sT('cache-rate',isFin(hit)?`${(hit*100).toFixed(1)}%`:'—');
 const sb=gE('subagent-badge');if(sb){if(subs>0){sb.hidden=false;const bt=t.agents(subs);if(sb.textContent!==bt)sb.textContent=bt;}else sb.hidden=true;}
-sT('context-percent',`${pct}%`);sT('ttft',typeof sp.ttftSeconds==='number'?`${sp.ttftSeconds.toFixed(2)}s`:'—');
-sT('latest-rate',typeof sp.latestTps==='number'?`${sp.latestTps.toFixed(1)} tok/s`:'—');
+sT('context-percent',`${pct}%`);sT('ttft',isFin(sp.ttftSeconds)?`${sp.ttftSeconds.toFixed(2)}s`:'—');
+sT('latest-rate',isFin(sp.latestTps)?`${sp.latestTps.toFixed(1)} tok/s`:'—');
 sT('context-summary',t.summary(pct,Math.max(0,100-pct)));sT('context-tokens',`${fmtTok(uT)} / ${fmtTok(mT)} tok`);sT('context-model',model);
 const nE=gE('context-note');if(nE){nE.hidden=true;if(nE.textContent)nE.textContent='';}
 const fl=gE('context-fill');if(fl?.style)fl.style.width=`${pct}%`;
@@ -471,7 +478,7 @@ if(!w0){if(el.textContent!=='—')el.textContent='—';rA(el,DW);continue;}
 const p=Math.round(w0.r*100),e=qEta(w0.t),txt=`${p}%${e?` · ${e}`:''}`;
 if(el.textContent!==txt)el.textContent=txt;wLvl(el,w0.r);
 }
-const sR=isFin(sp.tps)&&sp.tps>0?`${sp.tps.toFixed(1)} tok/s`:isFin(sp.latestTps)&&sp.latestTps>0?`${sp.latestTps.toFixed(1)} tok/s`:'',sF=typeof sp.ttftSeconds==='number'?`TTFT ${sp.ttftSeconds.toFixed(2)}s`:'';
+const sR=isFin(sp.tps)&&sp.tps>0?`${sp.tps.toFixed(1)} tok/s`:isFin(sp.latestTps)&&sp.latestTps>0?`${sp.latestTps.toFixed(1)} tok/s`:'',sF=isFin(sp.ttftSeconds)?`TTFT ${sp.ttftSeconds.toFixed(2)}s`:'';
 sT('context-speed',sR&&sF?`${sR} · ${sF}`:sR||sF||'—');
 const cH=isFin(hit)?`${(hit*100).toFixed(1)}%`:'',cS=subs>0?t.agents(subs):'';
 sT('context-cache',cH&&cS?`${cH} · ${cS}`:cH||cS||'—');
@@ -543,13 +550,13 @@ const E=(t,a,k)=>mk(doc,t,a,k),host=E('div',HOST_ATTRS);
 if(!isFn(host.attachShadow))return null;
 const sr=host.attachShadow({mode:'open'});sr.appendChild(E('style',{text:SHADOW_CSS}));
 const t0=gStr(),btn=(c,k,ex)=>E('button',{type:'button',cls:'chip','data-card':c,...ex},k),dl=rows=>E('dl',null,rows.flatMap(([k,id])=>[E('dt',{'data-fb-i18n':k,text:t0[k]}),E('dd',{id,text:'—'})]));
-const fChip=btn('five',[E('span',{'data-i18n':'five','data-fb-i18n':'fiveShort',text:t0.fiveShort}),E('strong',{id:'five-balance',text:'—'})],{[AE_A]:'false',hidden:true});
-const wChip=btn('week',[E('span',{'data-i18n':'week','data-fb-i18n':'weekShort',text:t0.weekShort}),E('strong',{id:'week-balance',text:'—'})],{[AE_A]:'false',hidden:true});
-const sChip=btn('speed',[E('span',{cls:'rounds dim',id:'rounds',text:'—'}),E('strong',{id:'tps',text:'—'}),E('span',{cls:'dim',text:'tok/s'})]);
-const cChip=btn('cache',[E('span',{cls:'cache-total',id:'cache-total',text:'—'}),E('span',{cls:'sub-badge',id:'subagent-badge',hidden:true,text:''}),E('span',{cls:'dim',text:'·'}),E('span',{'data-i18n':'cache','data-fb-i18n':'cache',text:t0.cache}),E('strong',{id:'cache-rate',text:'—'})],{[AE_A]:'false'});
-const xChip=btn('context',[E('span',{cls:'context-ring',id:'context-ring'}),E('span',{cls:'context-label dim','data-i18n':'contextShort',text:'Ctx'}),E('strong',{id:'context-percent',text:'0%'})],{[AE_A]:'false'});
-const sCard=E('section',{cls:'card',id:'speed-card',hidden:true},[E('div',{cls:'heading'},[E('span',{'data-fb-i18n':'speedHeading',text:t0.speedHeading})]),dl([['ttft','ttft'],['latestRate','latest-rate']])]);
-const xCard=E('section',{cls:'card context-card',id:'context-card',hidden:true},[E('div',{cls:'heading'},[E('span',{'data-fb-i18n':'ctxHeading',text:t0.ctxHeading})]),E('strong',{id:'context-summary',text:t0.summary(0,100)}),E('p',{id:'context-tokens',text:'— / 512K tok'}),E('div',{cls:'track',id:'context-track'},[E('i',{id:'context-fill'})]),dl([['curModel','context-model'],['fiveQuota','context-five-quota'],['weekQuota','context-week-quota'],['speedHeading','context-speed'],['cache','context-cache']]),E('p',{cls:'footnote',id:'context-note',hidden:true,text:''})]);
+const qChip=(k,k2,id)=>btn(k,[E('span',{'data-i18n':k,'data-fb-i18n':k2,text:t0[k2]}),E('strong',{id,text:'—'})],{[AE_A]:'false',hidden:true});
+const fChip=qChip('five','fiveShort','five-balance'),wChip=qChip('week','weekShort','week-balance'),
+sChip=btn('speed',[E('span',{cls:'rounds dim',id:'rounds',text:'—'}),E('strong',{id:'tps',text:'—'}),E('span',{cls:'dim',text:'tok/s'})]),
+cChip=btn('cache',[E('span',{cls:'cache-total',id:'cache-total',text:'—'}),E('span',{cls:'sub-badge',id:'subagent-badge',hidden:true,text:''}),E('span',{cls:'dim',text:'·'}),E('span',{'data-i18n':'cache','data-fb-i18n':'cache',text:t0.cache}),E('strong',{id:'cache-rate',text:'—'})],{[AE_A]:'false'}),
+xChip=btn('context',[E('span',{cls:'context-ring',id:'context-ring'}),E('span',{cls:'context-label dim','data-i18n':'contextShort',text:'Ctx'}),E('strong',{id:'context-percent',text:'0%'})],{[AE_A]:'false'}),
+sCard=E('section',{cls:'card',id:'speed-card',hidden:true},[E('div',{cls:'heading'},[E('span',{'data-fb-i18n':'speedHeading',text:t0.speedHeading})]),dl([['ttft','ttft'],['latestRate','latest-rate']])]),
+xCard=E('section',{cls:'card context-card',id:'context-card',hidden:true},[E('div',{cls:'heading'},[E('span',{'data-fb-i18n':'ctxHeading',text:t0.ctxHeading})]),E('strong',{id:'context-summary',text:t0.summary(0,100)}),E('p',{id:'context-tokens',text:'— / 512K tok'}),E('div',{cls:'track',id:'context-track'},[E('i',{id:'context-fill'})]),dl([['curModel','context-model'],['fiveQuota','context-five-quota'],['weekQuota','context-week-quota'],['speedHeading','context-speed'],['cache','context-cache']]),E('p',{cls:'footnote',id:'context-note',hidden:true,text:''})]);
 sr.appendChild(E('div',{cls:'bar'},[fChip,wChip,sChip,cChip,xChip]));sr.appendChild(sCard);sr.appendChild(xCard);
 
 const it={...mkTier(anc,host),sr,fChip,wChip,sChip,cChip,xChip,sCard,xCard,pinned:null,hoverOpen:false,hOpenTm:null,hCloseTm:null,cid:null,snap:null,lastGroups:null,reqGen:0};
@@ -571,7 +578,7 @@ return it;
 const reconcileBars=doc=>{
 const w=gW();if(!doc||!w)return{mounted:false,added:[],reseated:[]};
 const anchors=findAnchors(doc,true),ancSet=new Set(anchors);
-for(const[anc,it]of Array.from(insts.entries()))if(!ancSet.has(anc)||!isConn(doc,anc))disposeInst(it,true);
+for(const[anc,it]of[...insts.entries()])if(!ancSet.has(anc)||!isConn(doc,anc))disposeInst(it,true);
 const added=[],reseated=[];
 for(const anc of anchors){
 const ex=insts.get(anc);
@@ -607,7 +614,7 @@ return(c&&(!b||!b.c||(u!==null&&b.u!==null&&u<b.u*.85)))||(b&&b.u>0&&u!==null&&u
 const armCompactBurst=(sc=null,cidH=null,ds=null)=>{
 if(mode==='off'||isBlur()||!insts.size)return false;
 const bar=sc?getBarForView(sc):null,ins=(bar&&instByHost.get(bar))||resolveActiveInst();
-const cid=(typeof cidH==='string'&&GUID_RE.test(cidH)?cidH:null)||detCid(sc||ins?.host,insts.size>1)||ins?.cid||null;
+const cid=(isStr(cidH)&&GUID_RE.test(cidH)?cidH:null)||detCid(sc||ins?.host,insts.size>1)||ins?.cid||null;
 const p=ins?.snap?.speed?.context||(cid&&snapByCid.get(cid)?.speed?.context)||lastSnap?.speed?.context,seq=ds?.length?ds:BURST_STEPS;
 clrBurst();const gen=burstGen;burstCid=cid;
 burstBase=p?{u:isFin(p.usedTokens)?p.usedTokens:null,f:isFin(p.usedFraction)?p.usedFraction:null,c:!!(p.compacted||p.estimatedAfterCompaction)}:null;
@@ -702,9 +709,9 @@ if(mode!=='off'&&(insts.size||((mode==='on'||!hasExt(null,true))&&waitTm===null&
 if(!insts.size)return null;
 if(opts?.immediate)clrSw();
 ensTierObs();
-const live=Array.from(insts.values()).filter(it=>isConn(doc,it.host));if(!live.length)return null;
+const live=[...insts.values()].filter(it=>isConn(doc,it.host));if(!live.length)return null;
 wasBusy=hasBusyBtn(doc);
-const multi=live.length>1,force=!!opts?.force,fc=!!opts?.freshContext,hCid=!multi&&typeof opts?.cascadeId==='string'&&GUID_RE.test(opts.cascadeId)?opts.cascadeId:null;
+const multi=live.length>1,force=!!opts?.force,fc=!!opts?.freshContext,hCid=!multi&&isStr(opts?.cascadeId)&&GUID_RE.test(opts.cascadeId)?opts.cascadeId:null;
 const reqByKey=new Map(),plan=[];
 for(let i=0;i<live.length;i++){
 const it=live[i],nCid=hCid||detCid(it.host,multi);
@@ -715,7 +722,7 @@ plan.push({it,reqCid:it.cid,reqGen:it.reqGen,key});
 if(!reqByKey.has(key))reqByKey.set(key,reqSnapSF(key,{[CK]:it.cid,force,[IK]:isCardOpen(it),...(fc?{freshContext:true}:{})},it.host));
 }
 const snaps=new Map();
-await Promise.all(Array.from(reqByKey.entries()).map(async([k,p])=>{snaps.set(k,await p);}));
+await Promise.all([...reqByKey.entries()].map(async([k,p])=>{snaps.set(k,await p);}));
 let actSnap=null;const act=resolveActiveInst();
 for(let i=0;i<plan.length;i++){
 const{it,reqCid,reqGen,key}=plan[i],snap=snaps.get(key)||null;
@@ -756,7 +763,7 @@ activeHost=h;emitB(gW(),{event:'focus',host:h,data:instByHost.get(h)?.snap||last
 };
 const getSnapshotForBar=x=>{
 if(!x)return resolveActiveInst()?.snap||lastSnap;
-if(typeof x==='string')return snapByCid.get(x)||lastSnap;
+if(isStr(x))return snapByCid.get(x)||lastSnap;
 const it=instByHost.get(x)||instByHost.get(getBarForView(x));
 return it?.snap||(it?.cid&&snapByCid.get(it.cid))||lastSnap;
 };
@@ -767,8 +774,8 @@ return{mode,quotaMode,mountedFallback:m,mountedCount:n,waitingForExternal:waitTm
 };
 
 function sync(cfg){
-if(cfg&&typeof cfg.language==='string'&&cfg.language)expLang=cfg.language.trim().toLowerCase()==='auto'?'':normFbLang(cfg.language,gW());
-if(cfg&&Object.prototype.hasOwnProperty.call(cfg,'telemetryQuotaMode'))quotaMode=cfg.telemetryQuotaMode==='both'?'both':'compact';
+if(cfg&&isStr(cfg.language)&&cfg.language)expLang=cfg.language.trim().toLowerCase()==='auto'?'':normFbLang(cfg.language,gW());
+if(cfg&&Object.hasOwn(cfg,'telemetryQuotaMode'))quotaMode=cfg.telemetryQuotaMode==='both'?'both':'compact';
 else{const aQm=readAttrQuotaMode();if(aQm)quotaMode=aQm;}
 const raw=cfg?.telemetryModule;mode=raw==='on'||raw==='off'?raw:'auto';
 if(insts.size&&mode!=='off')for(const it of insts.values()){syncLblsFor(it.sr);if(it.snap||lastSnap)applySnapToInst(it,it.snap||lastSnap);}

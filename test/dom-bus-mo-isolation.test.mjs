@@ -348,18 +348,30 @@ test('dom-bus: silent discardMutations() drops records with 0 broadcast, rootAtt
   assert.ok(rootAttrMo && rootAttrMo.opts.childList === false && rootAttrMo.opts.attributes === true, 'rootAttrMo must observe <html> with subtree:false');
   assert.ok(bodyAttrMo && bodyAttrMo.opts.childList === false && bodyAttrMo.opts.attributes === true, 'bodyAttrMo must observe <body> with subtree:false');
 
-  // 1) Silent discardMutations() consumes queued records from all MOs with ZERO dispatch to any subscriber
+  // 1) Silent discardMutations() consumes ONLY slots[0] (rootMo) with ZERO dispatch,
+  //    while preserving slots[1] (rootAttrMo <html>) and slots[2] (bodyAttrMo <body>) records
   rootMo.pending.push({ type: 'childList', target: body });
+  html.setAttribute('data-ag-cs-win-blur', '1');
   rootAttrMo.pending.push({ type: 'attributes', target: html, attributeName: 'data-ag-cs-win-blur' });
+  body.setAttribute('data-has-browser-hole', '1');
   bodyAttrMo.pending.push({ type: 'attributes', target: body, attributeName: 'data-has-browser-hole' });
   const discarded = bus.discardMutations();
-  assert.equal(discarded.length, 3, 'discardMutations() must drain pending records from rootMo/rootAttrMo/bodyAttrMo');
+  assert.equal(discarded.length, 1, 'discardMutations() must ONLY drain slots[0] (rootMo)');
   assert.equal(subTreeHits.length, 0, 'discardMutations() must NEVER broadcast to subtree subscribers');
-  assert.equal(rootAttrHits.length, 0, 'discardMutations() must NEVER broadcast to root-attr subscribers');
-  assert.equal(bodyAttrHits.length, 0, 'discardMutations() must NEVER broadcast to body-attr subscribers');
+  assert.equal(rootAttrMo.pending.length, 1, 'discardMutations() must preserve slots[1] (<html> rootAttrMo) pending records');
+  assert.equal(bodyAttrMo.pending.length, 1, 'discardMutations() must preserve slots[2] (<body> bodyAttrMo) pending records');
   assert.equal(bus.discardMutations().length, 0);
 
+  // Preserved rootAttrMo & bodyAttrMo records deliver normally to external root-attr subscribers
+  rootAttrMo.emit(rootAttrMo.takeRecords());
+  bodyAttrMo.emit(bodyAttrMo.takeRecords());
+  assert.equal(subTreeHits.length, 0, 'rootMo must stay silent after root-attr delivery');
+  assert.equal(rootAttrHits.length, 1, '<html> root-attr subscriber must receive preserved data-ag-cs-win-blur="1" record');
+  assert.equal(rootAttrHits[0][0].target.getAttribute('data-ag-cs-win-blur'), '1');
+  assert.equal(bodyAttrHits.length, 2, 'observeBody subscriber must receive preserved <html> and <body> attr records');
+
   // 2) Legacy drainMutations() continues dispatching records per channel
+  subTreeHits.length = 0; rootAttrHits.length = 0; bodyAttrHits.length = 0;
   rootMo.pending.push({ type: 'childList', target: body });
   rootAttrMo.pending.push({ type: 'attributes', target: html, attributeName: 'data-ag-cs-win-blur' });
   bodyAttrMo.pending.push({ type: 'attributes', target: body, attributeName: 'data-has-browser-hole' });
