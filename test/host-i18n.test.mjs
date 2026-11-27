@@ -399,7 +399,7 @@ function createTestEnv(initialTime = 1000) {
   };
 }
 
-test('dictionary hygiene: vendor/host-i18n/zh-CN.json has 4789 exact + 457 patterns, zero private terms, compact JSON, and safe regexes', () => {
+test('dictionary hygiene: vendor/host-i18n/zh-CN.json has 4789 exact + 459 patterns, zero private terms, compact JSON, and safe regexes', () => {
   const dictPath = path.join(ROOT, 'vendor', 'host-i18n', 'zh-CN.json');
   const raw = fs.readFileSync(dictPath, 'utf8');
   assert.equal(raw.includes('\n  '), false, 'zh-CN.json must be compact JSON without pretty-print indentation');
@@ -407,7 +407,7 @@ test('dictionary hygiene: vendor/host-i18n/zh-CN.json has 4789 exact + 457 patte
   const dict = JSON.parse(raw);
   const exactKeys = Object.keys(dict.exact || {});
   assert.equal(exactKeys.length, 4789);
-  assert.equal((dict.patterns || []).length, 457);
+  assert.equal((dict.patterns || []).length, 459);
   assert.equal(dict.exact['Unlock the power of agent swarms.'], '解锁智能体 Swarm 协作的强大能力。');
   assert.ok(
     dict.exact["Live view of the native swarm board, roster and @mention graph for the current conversation's swarm."]?.includes('Swarm'),
@@ -1700,7 +1700,8 @@ test('[P2-2 & P2-4] ReDoS patterns complete in linear time, English sentences ar
 
   // Ordinary English sentences must not be partially corrupted by anchored patterns #52-#56, #79, #142, #143
   assert.equal(engine.translate('Build takes 5 minutes to finish'), null);
-  assert.equal(engine.translate('My task finished'), null);
+  assert.equal(engine.translate('My task finished yesterday'), null);
+  assert.equal(engine.translate('Run MOSS server finished'), 'Run MOSS server 已完成');
   assert.equal(engine.translate('When ready, It requires Docker to be installed.'), null);
   assert.equal(engine.translate('5 minutes'), '5 分钟');
   assert.equal(engine.translate('Timer has expired'), '定时器已到期');
@@ -1712,9 +1713,12 @@ test('[P2-2 & P2-4] ReDoS patterns complete in linear time, English sentences ar
   assert.equal(engine.translate('It requires ' + 'a '.repeat(5000) + 'X'), null);
   assert.equal(engine.translate('Save ' + 'a '.repeat(5000) + 'Ctrl+S'), null);
   assert.equal(engine.translate('Settings' + ' '.repeat(600)), null);
-  for (const idx of [52, 53, 54, 55, 56, 79, 83, 142, 143]) {
+  for (const idx of [52, 53, 54, 55, 56, 79, 83, 142, 143, 195, 196, 197, 198]) {
     const re = new RegExp(dict.patterns[idx].regex);
     re.test(' '.repeat(30000) + 'finished');
+    re.test(' '.repeat(30000) + 'X');
+    re.test('a' + ' '.repeat(30000) + 'X');
+    re.test('a '.repeat(5000) + 'X');
     re.test('It requires ' + 'a '.repeat(2000) + '!');
   }
   const elapsed = performance.now() - t0;
@@ -3151,4 +3155,314 @@ test('content-visibility: auto offscreen reveal (domBus.isSkipped + contentvisib
   for (const p of trDict.patterns || []) {
     assert.equal(cjkRe.test(String(p.replacement)), false, `tr.json pattern replacement must contain 0 CJK: ${p.regex} => ${p.replacement}`);
   }
+});
+
+test('N1 hardening: nested/testid thinking panels stay blocked, step arg chips (Search/Output/Settings/font-mono/title/right-of-verb) stay uncorrupted, Task Log data-uri whitelist works without leaking file URIs, live residual patterns & tr.json parity pass, and cvUnsubs avoids descendant slot waste', () => {
+  const zhDict = JSON.parse(fs.readFileSync(path.join(ROOT, 'vendor', 'host-i18n', 'zh-CN.json'), 'utf8'));
+  const trDict = JSON.parse(fs.readFileSync(path.join(ROOT, 'vendor', 'host-i18n', 'tr.json'), 'utf8'));
+  const domBusMod = require(path.join(ROOT, 'src', 'runtime', 'dom-bus.js'));
+
+  // 1) tr.json full parity with zh-CN.json (exact keys + pattern regexes) + 0 CJK + zero half-TR/EN combos
+  const trExactKeys = new Set(Object.keys(trDict.exact || {}));
+  for (const k of Object.keys(zhDict.exact || {})) {
+    assert.equal(trExactKeys.has(k), true, `tr.json missing exact key: ${k}`);
+  }
+  const trPatternRegexes = new Set((trDict.patterns || []).map((p) => p.regex));
+  for (const p of zhDict.patterns || []) {
+    assert.equal(trPatternRegexes.has(p.regex), true, `tr.json missing pattern: ${p.regex}`);
+  }
+  const zhEng = runtime.createHostI18nEngine(zhDict);
+  const trEng = runtime.createHostI18nEngine(trDict);
+
+  // Live residual patterns (4 categories) in both zh-CN and tr
+  assert.equal(zhEng.translate('Run MOSS server finished'), 'Run MOSS server 已完成');
+  assert.equal(zhEng.translate('Agent finished'), '智能体已完成');
+  assert.equal(zhEng.translate('finished'), '已完成');
+  assert.equal(zhEng.translate('npm test · Exited with code 1'), 'npm test · 退出码 1');
+  assert.equal(zhEng.translate('Ran npm test · Exited with code 1'), '已运行 npm test · 退出码 1');
+  assert.equal(zhEng.translate('Exited with code 0'), '退出码 0');
+  assert.equal(zhEng.translate('BuildTask: Notification timeout reached'), 'BuildTask：通知已超时');
+
+  assert.equal(trEng.translate('Run MOSS server finished'), 'Run MOSS server tamamlandı');
+  assert.equal(trEng.translate('Agent finished'), 'Ajan tamamlandı');
+  assert.equal(trEng.translate('npm test · Exited with code 1'), 'npm test · Çıkış kodu 1');
+  assert.equal(trEng.translate('Ran npm test · Exited with code 1'), 'Çalıştırıldı: npm test · Çıkış kodu 1');
+  assert.equal(trEng.translate('Exited with code 1'), 'Çıkış kodu 1');
+  assert.equal(trEng.translate('BuildTask: Notification timeout reached'), 'BuildTask: Bildirim zaman aşımına ulaştı');
+  assert.equal(trEng.translate('Explored 3 files, ran 2 commands, edited 1 file'), '3 dosya incelendi, 2 komut çalıştırıldı, 1 dosya düzenlendi');
+  assert.equal(trEng.translate('Explored, ran commands, edited files'), 'Dosyalar incelendi, komutlar çalıştırıldı, dosyalar düzenlendi');
+  assert.equal(trEng.translate('Ran 2 commands'), '2 komut çalıştırıldı');
+  assert.equal(trEng.translate('Read 1 message from board'), 'Panodan 1 mesaj okundu');
+  assert.equal(trEng.translate('4/4 steps'), '4 / 4 adım');
+  assert.equal(trEng.translate('Thought for <1s'), '<1 sn düşündü');
+  assert.equal(trEng.translate('Thought for less than a second'), '1 saniyeden az düşündü');
+  assert.equal(trEng.translate('Worked for <1s'), '<1 sn çalıştı');
+
+  // 2) DOM hardening: nested/testid/aria-controls thinking panels, step arg protection, and Task Log data-uri exact exception
+  const env = createTestEnv(1000);
+  const conv = env.makeEl('div', { attrs: { 'data-testid': 'conversation-view' } });
+  const agentResp = env.makeEl('div', { attrs: { 'data-testid': 'agent-response' } });
+  const stepRows = env.makeEl('div', { attrs: { 'data-step-rows': 'true' } });
+
+  // 2a) Multi-layer wrapped thinking panel with custom data-testid (no data-markdown-root/.prose)
+  const thinkStep = env.makeEl('div', { attrs: { 'data-step-index': '0' } });
+  const thinkCard1 = env.makeEl('div');
+  const thinkHdr1 = env.makeEl('div', { className: 'hdr-wrap' });
+  const thinkTrig1 = env.makeEl('button', { attrs: { 'data-testid': 'thinking-collapsible-trigger', 'aria-controls': 'think-body-ctrl' }, text: 'Thought for 12s' });
+  thinkHdr1.append(thinkTrig1);
+  const thinkBodyOuter1 = env.makeEl('div', { attrs: { 'data-testid': 'thinking-custom-body' } });
+  const thinkBodyInner1 = env.makeEl('div');
+  const thinkBodyPara1 = env.makeEl('p', { text: 'Settings' });
+  const thinkBodyBtn1 = env.makeEl('button', { text: 'Cancel' });
+  thinkBodyInner1.append(thinkBodyPara1, thinkBodyBtn1);
+  thinkBodyOuter1.append(thinkBodyInner1);
+  thinkCard1.append(thinkHdr1, thinkBodyOuter1);
+
+  // Sibling second thinking card must still translate its own trigger while blocking its aria-controls body
+  const thinkCard2 = env.makeEl('div');
+  const thinkTrig2 = env.makeEl('button', { attrs: { 'data-testid': 'thinking-collapsible-trigger', 'aria-controls': 'think-panel-2' }, text: 'Thought for <1s' });
+  const spacer = env.makeEl('div', { className: 'divider' });
+  const thinkPanelByCtrl = env.makeEl('div', { id: 'think-panel-2' });
+  const thinkCtrlSpan = env.makeEl('span', { text: 'Waiting for user input' });
+  thinkPanelByCtrl.append(thinkCtrlSpan);
+  thinkCard2.append(thinkTrig2, spacer, thinkPanelByCtrl);
+  thinkStep.append(thinkCard1, thinkCard2);
+
+  // 2b) Step row argument protection vs legitimate step headers & buttons
+  const argStep = env.makeEl('div', { attrs: { 'data-step-index': '1' } });
+  const monoSearch = env.makeEl('span', { className: 'font-mono text-xs', text: 'Search' });
+  const monoRead = env.makeEl('span', { className: 'font-mono', text: 'Read' });
+  const titlePathArg = env.makeEl('span', { attrs: { title: 'src/components/Settings.ts' }, text: 'Settings' });
+  const titleCmdArg = env.makeEl('span', { attrs: { title: 'npm test --watch' }, text: 'Output' });
+  const bareSearch = env.makeEl('span', { text: 'Search' });
+  const bareOutput = env.makeEl('span', { text: 'Output' });
+  const bareCancel = env.makeEl('span', { text: 'Cancel' });
+  const bareBranch = env.makeEl('span', { text: 'Branch main' });
+  const bareError = env.makeEl('span', { text: 'Error' });
+  const bareDone = env.makeEl('span', { text: 'Done' });
+  const bareStatus = env.makeEl('span', { text: 'Status' });
+  const bareFiles = env.makeEl('span', { text: 'Files' });
+  const bareRun = env.makeEl('span', { text: 'Run' });
+  const realStepCancelBtn = env.makeEl('button', { text: 'Cancel' });
+  argStep.append(monoSearch, monoRead, titlePathArg, titleCmdArg, bareSearch, bareOutput, bareCancel, bareBranch, bareError, bareDone, bareStatus, bareFiles, bareRun, realStepCancelBtn);
+
+  // 2c) Split verb + right-hand bare filename chips (including filename literally named "Read" / "Settings" / "Output")
+  const verbArgRow1 = env.makeEl('div', { attrs: { 'data-step-index': '2' } });
+  const vEdited = env.makeEl('span', { text: 'Edited' });
+  const argNamedRead = env.makeEl('span', { text: 'Read' });
+  verbArgRow1.append(vEdited, argNamedRead);
+
+  const verbArgRow2 = env.makeEl('div', { attrs: { 'data-step-index': '3' } });
+  const vRead = env.makeEl('span', { text: 'Read' });
+  const argNamedSettings = env.makeEl('button', { text: 'Settings' });
+  verbArgRow2.append(vRead, argNamedSettings);
+
+  // 2d) Task Log exact data-uri button exception + Analyzed prefix vs protected file data-uri buttons/links
+  const uriRow = env.makeEl('div', { attrs: { 'data-step-index': '4' } });
+  const vAnalyzed = env.makeEl('span', { text: 'Analyzed' });
+  const taskLogBtn = env.makeEl('button', {
+    attrs: { 'data-uri': 'file:///tmp/.system_generated/tasks/task-910.log#L0-231', title: 'file:///tmp/.system_generated/tasks/task-910.log' },
+    text: 'Task Log',
+  });
+  const fileUriSettingsBtn = env.makeEl('button', { attrs: { 'data-uri': 'file:///repo/src/Settings.ts' }, text: 'Settings' });
+  const fileUriLogBtn = env.makeEl('button', { attrs: { 'data-uri': 'file:///tmp/task-910.log' }, text: 'task-910.log' });
+  const fileUriAnchor = env.makeEl('a', { attrs: { 'data-uri': 'file:///tmp/task-910.log' }, text: 'Task Log' });
+  const fileUriBothAttrs = env.makeEl('button', { attrs: { 'data-uri': 'file:///tmp/task-910.log', 'data-file-path': 'task-910.log' }, text: 'Task Log' });
+  uriRow.append(vAnalyzed, taskLogBtn, fileUriSettingsBtn, fileUriLogBtn, fileUriAnchor, fileUriBothAttrs);
+
+  // 2e) Live residual step status suffixes inside [data-step-index]
+  const liveRow = env.makeEl('div', { attrs: { 'data-step-index': '5' } });
+  const liveFin = env.makeEl('span', { text: 'Run MOSS server finished' });
+  const liveExit = env.makeEl('span', { text: 'npm test · Exited with code 1' });
+  const liveTimeout = env.makeEl('span', { text: 'BuildTask: Notification timeout reached' });
+  liveRow.append(liveFin, liveExit, liveTimeout);
+
+  stepRows.append(thinkStep, argStep, verbArgRow1, verbArgRow2, uriRow, liveRow);
+  agentResp.append(stepRows);
+  conv.append(agentResp);
+  env.doc.body.append(conv);
+
+  const inst = runtime.mountHostI18n({
+    root: env.win,
+    doc: env.doc,
+    dict: zhDict,
+    mode: 'on',
+    nowFn: env.nowFn,
+    setTimeoutFn: env.setTimeoutFn,
+    clearTimeoutFn: env.clearTimeoutFn,
+    rafFn: env.rafFn,
+    cancelRafFn: env.cancelRafFn,
+  });
+
+  // Thinking trigger titles translate while nested/testid/aria-controls bodies remain 100% untouched
+  assert.equal(thinkTrig1.textContent, '已思考 12 秒');
+  assert.equal(thinkBodyPara1.textContent, 'Settings', 'Nested thinking body with data-testid must stay untouched');
+  assert.equal(thinkBodyBtn1.textContent, 'Cancel', 'Button inside nested thinking body must stay untouched');
+  assert.equal(thinkTrig2.textContent, '已思考 <1 秒', 'Second sibling thinking card trigger must still translate');
+  assert.equal(thinkCtrlSpan.textContent, 'Waiting for user input', 'aria-controls thinking body must stay untouched');
+
+  // Step arguments stay uncorrupted while true controls & step verbs translate
+  assert.equal(monoSearch.textContent, 'Search');
+  assert.equal(monoRead.textContent, 'Read');
+  assert.equal(titlePathArg.textContent, 'Settings');
+  assert.equal(titlePathArg.getAttribute('title'), 'src/components/Settings.ts');
+  assert.equal(titleCmdArg.textContent, 'Output');
+  assert.equal(bareSearch.textContent, 'Search');
+  assert.equal(bareOutput.textContent, 'Output');
+  assert.equal(bareCancel.textContent, 'Cancel');
+  assert.equal(bareBranch.textContent, 'Branch main');
+  assert.equal(bareError.textContent, 'Error');
+  assert.equal(bareDone.textContent, 'Done');
+  assert.equal(bareStatus.textContent, 'Status');
+  assert.equal(bareFiles.textContent, 'Files');
+  assert.equal(bareRun.textContent, 'Run');
+  assert.equal(realStepCancelBtn.textContent, '取消', 'Genuine <button> control inside step still translates');
+  assert.equal(vEdited.textContent, '已编辑');
+  assert.equal(argNamedRead.textContent, 'Read', 'Filename chip right of Edited must not be translated');
+  assert.equal(vRead.textContent, '已读取');
+  assert.equal(argNamedSettings.textContent, 'Settings', 'File chip button right of Read must not be translated');
+
+  // Task Log with data-uri translates cleanly; all other data-uri nodes stay strictly protected
+  assert.equal(vAnalyzed.textContent, '已分析');
+  assert.equal(taskLogBtn.textContent, '任务日志');
+  assert.equal(taskLogBtn.getAttribute('title'), 'file:///tmp/.system_generated/tasks/task-910.log', 'Path title on data-uri Task Log must stay untouched');
+  assert.equal(fileUriSettingsBtn.textContent, 'Settings');
+  assert.equal(fileUriLogBtn.textContent, 'task-910.log');
+  assert.equal(fileUriAnchor.textContent, 'Task Log');
+  assert.equal(fileUriBothAttrs.textContent, 'Task Log');
+
+  // Live residual step suffixes translate cleanly
+  assert.equal(liveFin.textContent, 'Run MOSS server 已完成');
+  assert.equal(liveExit.textContent, 'npm test · 退出码 1');
+  assert.equal(liveTimeout.textContent, 'BuildTask：通知已超时');
+
+  inst.destroy();
+  assert.equal(taskLogBtn.textContent, 'Task Log', 'destroy() must restore Task Log losslessly');
+  assert.equal(liveFin.textContent, 'Run MOSS server finished');
+  assert.equal(liveExit.textContent, 'npm test · Exited with code 1');
+  assert.equal(liveTimeout.textContent, 'BuildTask: Notification timeout reached');
+
+  // 2f) Turkish locale also translates Task Log button with data-uri and restores cleanly
+  const trInst = runtime.mountHostI18n({
+    root: env.win,
+    doc: env.doc,
+    dict: trDict,
+    locale: 'tr',
+    mode: 'on',
+    nowFn: env.nowFn,
+    setTimeoutFn: env.setTimeoutFn,
+    clearTimeoutFn: env.clearTimeoutFn,
+    rafFn: env.rafFn,
+    cancelRafFn: env.cancelRafFn,
+  });
+  assert.equal(taskLogBtn.textContent, 'Görev günlüğü');
+  assert.equal(fileUriSettingsBtn.textContent, 'Settings');
+  assert.equal(liveFin.textContent, 'Run MOSS server tamamlandı');
+  assert.equal(liveExit.textContent, 'npm test · Çıkış kodu 1');
+  assert.equal(liveTimeout.textContent, 'BuildTask: Bildirim zaman aşımına ulaştı');
+  trInst.destroy();
+  assert.equal(taskLogBtn.textContent, 'Task Log');
+
+  // 3) P2-1: cvUnsubs must NOT register redundant strong refs on skipped non-cv descendants
+  const cvEnv = createTestEnv(1000);
+  const elListeners = new WeakMap();
+  const patchEl = (el) => {
+    el.addEventListener = (ev, fn) => {
+      let m = elListeners.get(el);
+      if (!m) { m = new Map(); elListeners.set(el, m); }
+      if (!m.has(ev)) m.set(ev, new Set());
+      m.get(ev).add(fn);
+    };
+    el.removeEventListener = (ev, fn) => { elListeners.get(el)?.get(ev)?.delete(fn); };
+    el.dispatchEvent = (e) => {
+      for (const fn of [...(elListeners.get(el)?.get(e.type) || [])]) fn(e);
+      cvEnv.doc.dispatchEvent(e);
+    };
+    return el;
+  };
+  const bus = domBusMod.createInstance(cvEnv.doc, cvEnv.win);
+  cvEnv.win.__agDomBus = bus;
+  cvEnv.win.__agPrismDomBus = bus;
+
+  const cvConv = cvEnv.makeEl('div', { attrs: { 'data-testid': 'conversation-view' } });
+  const skippedTurn = patchEl(cvEnv.makeEl('div', { attrs: { 'data-step-rows': 'true' } }));
+  const descendants = [];
+  for (let i = 0; i < 30; i++) {
+    const row = cvEnv.makeEl('div', { attrs: { 'data-step-index': String(i) } });
+    const sp = cvEnv.makeEl('span', { text: 'Asking 4 questions' });
+    row.append(sp);
+    skippedTurn.append(row);
+    descendants.push(sp);
+  }
+  cvConv.append(skippedTurn);
+  cvEnv.doc.body.append(cvConv);
+
+  const unsubSeed = bus.observeVisibility(skippedTurn, () => {}, { doc: cvEnv.doc, io: false });
+  skippedTurn.dispatchEvent({ type: 'contentvisibilityautostatechange', skipped: true, target: skippedTurn });
+  assert.equal(bus.isSkipped(descendants[0]), true);
+
+  const cvInst = runtime.mountHostI18n({
+    root: cvEnv.win,
+    doc: cvEnv.doc,
+    dict: zhDict,
+    mode: 'on',
+    nowFn: cvEnv.nowFn,
+    setTimeoutFn: cvEnv.setTimeoutFn,
+    clearTimeoutFn: cvEnv.clearTimeoutFn,
+    rafFn: cvEnv.rafFn,
+    cancelRafFn: cvEnv.cancelRafFn,
+  });
+  // Trigger mutations directly on 15 descendants while ancestor turn is still skipped
+  for (let i = 0; i < 15; i++) {
+    const extra = cvEnv.makeEl('span', { text: 'Waiting for user input' });
+    skippedTurn.children[i].append(extra);
+  }
+  cvEnv.advanceTime(50);
+  assert.equal(bus.getDebugState().visibilityObservedCount, 1, 'Document capture handler is active; 0 redundant descendant visibility observers may be registered');
+
+  // Reveal ancestor -> translates all descendants incrementally
+  skippedTurn.dispatchEvent({ type: 'contentvisibilityautostatechange', skipped: false, target: skippedTurn });
+  cvEnv.advanceTime(50);
+  assert.equal(descendants[0].textContent, '正在询问 4 个问题');
+  assert.equal(descendants[29].textContent, '正在询问 4 个问题');
+
+  cvInst.destroy();
+  unsubSeed();
+  assert.equal(bus.getDebugState().visibilityObservedCount, 0);
+
+  // Fallback path (no doc.addEventListener): deduplicates all descendants onto the single skipped ancestor cvRoot
+  const fbEnv = createTestEnv(1000);
+  const fbBus = domBusMod.createInstance(fbEnv.doc, fbEnv.win);
+  fbEnv.win.__agDomBus = fbBus;
+  const fbTurn = patchEl(fbEnv.makeEl('div', { attrs: { 'data-step-rows': 'true' } }));
+  for (let i = 0; i < 10; i++) {
+    const r = fbEnv.makeEl('div', { attrs: { 'data-step-index': String(i) } });
+    r.append(fbEnv.makeEl('span', { text: 'Asking 4 questions' }));
+    fbTurn.append(r);
+  }
+  fbEnv.doc.body.append(fbTurn);
+  const fbSeed = fbBus.observeVisibility(fbTurn, () => {}, { doc: fbEnv.doc, io: false });
+  fbTurn.dispatchEvent({ type: 'contentvisibilityautostatechange', skipped: true, target: fbTurn });
+  const savedAdd = fbEnv.doc.addEventListener;
+  fbEnv.doc.addEventListener = undefined;
+  const fbInst = runtime.mountHostI18n({
+    root: fbEnv.win,
+    doc: fbEnv.doc,
+    dict: zhDict,
+    mode: 'on',
+    nowFn: fbEnv.nowFn,
+    setTimeoutFn: fbEnv.setTimeoutFn,
+    clearTimeoutFn: fbEnv.clearTimeoutFn,
+    rafFn: fbEnv.rafFn,
+    cancelRafFn: fbEnv.cancelRafFn,
+  });
+  for (let i = 0; i < 10; i++) fbTurn.children[i].append(fbEnv.makeEl('span', { text: 'Waiting for user input' }));
+  fbEnv.advanceTime(50);
+  assert.equal(fbBus.getDebugState().visibilityObservedCount, 1, 'Fallback observeVisibility must deduplicate onto skipped ancestor cvRoot, not register 10 descendants');
+  fbEnv.doc.addEventListener = savedAdd;
+  fbInst.destroy();
+  fbSeed();
+  assert.equal(fbBus.getDebugState().visibilityObservedCount, 0);
+  fbBus.destroy(fbEnv.doc, fbEnv.win);
+  bus.destroy(cvEnv.doc, cvEnv.win);
 });
