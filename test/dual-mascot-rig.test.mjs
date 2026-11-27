@@ -3399,3 +3399,59 @@ test('Issue #162: flush mini-crab stacking on large mascots, symmetric stage bou
     hSleep.stage.dispose();
   }
 });
+
+test('PR #152: continuous write animation on user typing extends smoothly across camps without breaking rAF zero-redraw cache', async () => {
+  // 1) Gemini camp (working actor = cat): Clawd plays & extends write animation on typing while non-clawd worker nods
+  const h = createInteractiveStageHarness({ mascot: 'dual', camp: 'gemini', miniPileEnabled: false, reducedMotion: false });
+  try {
+    h.stage.onUserType('hello');
+    h.stage.stepTick(1);
+    const snap1 = h.stage.getLayoutSnapshot();
+    const clawd1 = snap1.actors.find((a) => a.id === 'clawd');
+    assert.equal(clawd1.pose, 'write', 'Clawd must enter write pose on typing even under gemini camp');
+    assert.equal(clawd1.sym, 'note', 'Clawd typing write clip must display note symbol');
+
+    // Extend continuously before 1200ms expires: after 800ms type again, at ~1450ms total Clawd must still be writing
+    await new Promise((r) => setTimeout(r, 750));
+    const drawsBeforeExtend = h.stage.getLayoutSnapshot().perf.canvasDraws;
+    h.stage.onUserType(' world');
+    assert.equal(
+      h.stage.getLayoutSnapshot().perf.canvasDraws,
+      drawsBeforeExtend,
+      'Extending active write clip on typing must not force synchronous canvas redraw'
+    );
+    await new Promise((r) => setTimeout(r, 650));
+    const clawdExtended = h.stage.getLayoutSnapshot().actors.find((a) => a.id === 'clawd');
+    assert.equal(clawdExtended.pose, 'write', 'Continuous typing must extend write clip past initial 1200ms window');
+    assert.equal(clawdExtended.sym, 'note', 'Continuous typing must also extend note symbol cleanly');
+
+    // Stop typing > 1250ms: Clawd returns to idle cleanly
+    await new Promise((r) => setTimeout(r, 1300));
+    const clawdDone = h.stage.getLayoutSnapshot().actors.find((a) => a.id === 'clawd');
+    assert.equal(clawdDone.pose, 'idle', 'Clawd must return to idle after typing stops');
+
+    // Stacked Clawd does not trigger write on typing
+    assert.equal(h.stage.stackOnto('clawd', 'cat'), true);
+    h.stage.onUserType('stacked');
+    h.stage.stepTick(1);
+    assert.notEqual(h.stage.getLayoutSnapshot().actors.find((a) => a.id === 'clawd').pose, 'write');
+  } finally {
+    h.stage.dispose();
+  }
+
+  // 2) Punctuation ? / ! cancels pending type-write and triggers tilt / wow immediately
+  const hPunct = createInteractiveStageHarness({ miniPileEnabled: false, reducedMotion: false });
+  try {
+    hPunct.stage.onUserType('abc');
+    hPunct.stage.onUserType('abc?');
+    hPunct.stage.stepTick(1);
+    const snapQ = hPunct.stage.getLayoutSnapshot();
+    const catQ = snapQ.actors.find((a) => a.id === 'cat');
+    const clawdQ = snapQ.actors.find((a) => a.id === 'clawd');
+    assert.equal(catQ.pose, 'tilt', 'Question mark must trigger tilt on working actor');
+    assert.equal(catQ.sym, 'q');
+    assert.notEqual(clawdQ.pose, 'write', 'Question mark must cancel pending write on Clawd');
+  } finally {
+    hPunct.stage.dispose();
+  }
+});

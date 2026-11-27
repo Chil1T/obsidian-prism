@@ -1357,9 +1357,9 @@
         walkStepTick: -1,
         lastRender: fillKeys({ cw: 0, ch: 0 }, 'poseKey,frameIdx,flip,tintState,tyPx,sqW,sqH,lastRot,clipBottomY', null),
       };
-      fillKeys(a, 'x,y,vx,vy,rot,overrideUntil,overrideRot,clipStartTick,symUntil,flying,throws,lastThrowAt,pokeCount,lastPokeAt,nodY,nodUntil,eyeScan,seqStartTick,glanceDir,glanceUntil,balRot,passBoostUntil,lastDomRot,awakeUntil', 0);
+      fillKeys(a, 'x,y,vx,vy,rot,overrideUntil,overrideRot,clipStartTick,symUntil,flying,throws,lastThrowAt,pokeCount,lastPokeAt,nodY,nodUntil,eyeScan,seqStartTick,glanceDir,glanceUntil,balRot,passBoostUntil,lastDomRot,awakeUntil,typeWriteUntil', 0);
       fillKeys(a, 'sqx,sqy,patrolDir,twitchLen', 1);
-      fillKeys(a, 'blinkTick,breathTick,twitchTick,snapTick,forceTwitchStart', -99);
+      fillKeys(a, 'blinkTick,breathTick,twitchTick,snapTick,forceTwitchStart,typeWriteTick', -99);
       fillKeys(a, 'overridePose,sym,stackedOn,el,canvas,seq,seqThen,faceDir,clipParam,prevX,lastFx,lastSq,lastDomX,lastDomY,lastDomZ', null);
       fillKeys(a, 'dragging,ballisticActive,mirror,blinkDouble,glanceSecond', false);
       fillKeys(a, 'twitchSide,snapSide,forceTwitchSide', 'R');
@@ -1566,14 +1566,16 @@
       mc._ctx = isFn(cv.getContext) ? (cv._ctx = cv.getContext('2d')) : null;
       mc.lastFrameKey = null;
     };
+    const dropPtrCleanup = (e) => {
+      if (!isFn(e._pointerCleanup)) return;
+      const idx = cleanups.indexOf(e._pointerCleanup);
+      if (idx >= 0) cleanups.splice(idx, 1);
+      try { e._pointerCleanup(); } catch {}
+      e._pointerCleanup = null;
+    };
     const unmountMiniDom = (mc) => {
       if (!mc.canvas && !mc.el) return;
-      if (isFn(mc._pointerCleanup)) {
-        const idx = cleanups.indexOf(mc._pointerCleanup);
-        if (idx >= 0) cleanups.splice(idx, 1);
-        try { mc._pointerCleanup(); } catch {}
-        mc._pointerCleanup = null;
-      }
+      dropPtrCleanup(mc);
       zeroCv(mc.canvas, true); rmNode(mc.canvas || mc.el);
       mc.canvas = mc._ctx = mc.el = mc.lastFrameKey = mc.lastDomX = mc.lastDomY = mc.lastDomZ = null;
       mc.lastDomRot = 0; mc.lastDomDirect = mc.lastDomDrag = undefined;
@@ -2426,19 +2428,18 @@
         if (k0 < act.segs[i].ticks) { segIdx = i; break; }
         k0 -= act.segs[i].ticks;
       }
-      if (segIdx < 0 || (act.abort && act.abort(segIdx))) {
-        if (segIdx >= 0) {
-          const s = act.segs[segIdx], k = (k0 + 1) / s.ticks, cy = round((s.y0 + (s.y1 - s.y0) * k - (s.arc || 0) * sin(PI * k)) / 2) * 2;
-          mc.px = mc.lastX = crabSafeX(s.x0 + (s.x1 - s.x0) * k);
-          mc.y = cy < 0 ? cy : 0;
-        }
+      if (segIdx < 0) { mc.act = null; return null; }
+      const seg = act.segs[segIdx], k = (k0 + 1) / seg.ticks;
+      const x = seg.x0 + (seg.x1 - seg.x0) * k, y = seg.y0 + (seg.y1 - seg.y0) * k - (seg.arc || 0) * sin(PI * k);
+      if (act.abort && act.abort(segIdx)) {
+        mc.px = mc.lastX = crabSafeX(x);
+        const cy = round(y / 2) * 2;
+        mc.y = cy < 0 ? cy : 0;
         mc.act = null;
-        if (segIdx >= 0 && act.onAbort) act.onAbort();
+        if (act.onAbort) act.onAbort();
         if (mc.y < 0) startMiniBallistic(mc, 0, 0, { noSnap: true });
         return null;
       }
-      const seg = act.segs[segIdx], k = (k0 + 1) / seg.ticks;
-      const x = seg.x0 + (seg.x1 - seg.x0) * k, y = seg.y0 + (seg.y1 - seg.y0) * k - (seg.arc || 0) * sin(PI * k);
       if (seg.x1 !== seg.x0) mc.mirror = seg.x1 < seg.x0;
       else if (seg.face) mc.mirror = seg.face < 0;
       const still = MINI_SPRITES[mc.id], blinking = tickIdx - mc.blinkAt >= 0 && tickIdx - mc.blinkAt < 2;
@@ -2621,6 +2622,13 @@
       for (const id of activeMainIds()) {
         const a = actors[id];
         if (!a || !a.canvas) continue;
+        if (a.typeWriteUntil > 0 && tickIdx !== a.typeWriteTick) {
+          const twRem = a.typeWriteUntil - now;
+          a.typeWriteUntil = 0;
+          if (twRem > 0 && !reducedMotion && !dozing && !a.dragging && !a.stackedOn && !(a.overridePose && now < a.overrideUntil)) {
+            startClip(a, 'write', twRem, { face: 'left', sym: 'note' });
+          }
+        }
         let pose = resolvePoseFor(a, now);
         const st = seqStep(a);
 
@@ -2781,32 +2789,25 @@
                 const by = (oyG + 10) * pxS;
                 c2.save();
                 c2.globalCompositeOperation = 'source-atop';
+                const paintG = (gx, gy, r, rx, ry, rw, rh, c0, a0, c1, a1, st1) => {
+                  const g = c2.createRadialGradient(gx, gy, 0, gx, gy, r);
+                  g.addColorStop(0, `rgba(${c0},${a0.toFixed(3)})`);
+                  if (c1) g.addColorStop(st1, `rgba(${c1},${a1.toFixed(3)})`);
+                  g.addColorStop(1, `rgba(${c1 || c0},0)`);
+                  c2.fillStyle = g; c2.fillRect(rx, max(0, ry), rw, rh);
+                };
                 if (bLv > 0) {
                   const p = RIM_PALS[rim.t] || RIM_PALS.default, o = rim.d ? 0 : 2, lv = (bLv / 5) * (rim.d ? 1 : 0.65), gx = (oxG + 8) * pxS + bDir * 9;
-                  const paint = (yy, r, h, s0, s1) => {
-                    const g = c2.createRadialGradient(gx, yy, 0, gx, yy, r);
-                    g.addColorStop(0, s0);
-                    if (s1) g.addColorStop(0.5, s1);
-                    g.addColorStop(1, `rgba(${p[o + (s1 ? 1 : 0)]},0)`);
-                    c2.fillStyle = g; c2.fillRect(0, max(0, by - h), cw, h);
-                  };
-                  paint(by + 2, 34, 30, `rgba(${p[o]},${(0.36 * lv).toFixed(3)})`, `rgba(${p[o + 1]},${(0.16 * lv).toFixed(3)})`);
-                  paint(by, 26, pxS, `rgba(${p[o]},${(0.3 * lv).toFixed(3)})`, '');
+                  paintG(gx, by + 2, 34, 0, by - 30, cw, 30, p[o], 0.36 * lv, p[o + 1], 0.16 * lv, 0.5);
+                  paintG(gx, by, 26, 0, by - pxS, cw, pxS, p[o], 0.3 * lv);
                 }
                 if (hLv > 0) {
                   const p = RIM_PALS[hTone] || RIM_PALS.amber, o = hDark ? 0 : 2, lv = (hLv / 10) * (bLv > 0 ? 0.85 : 1);
                   const gx = (oxG + 8) * pxS + hDir * 12, gy = (oyG + 6) * pxS;
-                  const g = c2.createRadialGradient(gx, gy, 0, gx, gy, 32);
-                  g.addColorStop(0, `rgba(${p[o]},${(0.42 * lv).toFixed(3)})`);
-                  g.addColorStop(0.52, `rgba(${p[o + 1]},${(0.18 * lv).toFixed(3)})`);
-                  g.addColorStop(1, `rgba(${p[o + 1]},0)`);
-                  c2.fillStyle = g; c2.fillRect(0, max(0, (oyG - 2) * pxS), cw, 13 * pxS);
+                  paintG(gx, gy, 32, 0, (oyG - 2) * pxS, cw, 13 * pxS, p[o], 0.42 * lv, p[o + 1], 0.18 * lv, 0.52);
                   if (hDir !== 0) {
                     const ex = (oxG + (hDir > 0 ? 14 : 1)) * pxS;
-                    const eg = c2.createRadialGradient(ex + pxS * 0.5, gy, 0, ex + pxS * 0.5, gy, 20);
-                    eg.addColorStop(0, `rgba(${p[o]},${(0.34 * lv).toFixed(3)})`);
-                    eg.addColorStop(1, `rgba(${p[o]},0)`);
-                    c2.fillStyle = eg; c2.fillRect(ex - pxS, max(0, (oyG - 1) * pxS), pxS * 3, 11 * pxS);
+                    paintG(ex + pxS * 0.5, gy, 20, ex - pxS, (oyG - 1) * pxS, pxS * 3, 11 * pxS, p[o], 0.34 * lv);
                   }
                 }
                 c2.restore();
@@ -2949,6 +2950,7 @@
       ent.rot = 0;
       if (isMiniEnt(ent)) { if (!opts.keepAct) ent.act = null; return; }
       if (!opts.keepPose) { ent.overridePose = null; ent.overrideUntil = 0; }
+      ent.typeWriteUntil = 0;
       ent.overrideRot = ent.balRot = 0;
       if (!opts.keepMirror) ent.mirror = false;
       ent.faceDir = ent.clipParam = null;
@@ -3676,12 +3678,7 @@
       resetActorTransient(actor);
       actor.dragging = false;
       actor.y = 0;
-      if (isFn(actor._pointerCleanup)) {
-        const idx = cleanups.indexOf(actor._pointerCleanup);
-        if (idx >= 0) cleanups.splice(idx, 1);
-        try { actor._pointerCleanup(); } catch {}
-        actor._pointerCleanup = null;
-      }
+      dropPtrCleanup(actor);
       zeroCv(actor.canvas, 1);
       rmNode(actor.el);
       actor._ctx = actor.el = actor.canvas = actor.lastDomX = actor.lastDomY = actor.lastDomZ = null;
@@ -3736,12 +3733,7 @@
       ) || !!reboundTm;
     const syncPwr = () => {
       if (disposed) return;
-      if (isHostDetached() || parked) {
-        syncHeartbeat();
-        reclaimStageVram();
-        return;
-      }
-      if (isDocHidden() || isHostSleeping()) {
+      if (isHostDetached() || parked || isDocHidden() || isHostSleeping()) {
         syncHeartbeat();
         reclaimStageVram();
         return;
@@ -3841,7 +3833,7 @@
     function startDoze(skipYawn) {
       if (dozing) return;
       dozing = true;
-      for (const a of activeMainActors()) { a.awakeUntil = 0; if (a.overridePose && a.overridePose !== 'dangle') a.overrideUntil = 0; a.eyeScan = 0; }
+      for (const a of activeMainActors()) { a.awakeUntil = a.typeWriteUntil = 0; if (a.overridePose && a.overridePose !== 'dangle') a.overrideUntil = 0; a.eyeScan = 0; }
       if (!skipYawn) {
         const prePose = isLateNight() ? 'nightSip' : 'yawn', preMs = isLateNight() ? 1800 : 1200;
         activeMainActors().forEach((a, idx) => {
@@ -4453,17 +4445,22 @@
         return resolveHabitatMode();
       },
       onUserType(text = '') {
-        const now = nowMs();
-        markActivity();
-        const workers = workingActors();
-        if (!workers.length) return;
-        const s = typeof text === 'string' ? text : '';
-        const tail = (s.length > 16 ? s.slice(-16) : s).trimEnd().slice(-4);
-        if (/[?？]$/.test(tail)) {
-          for (const w of workers) { startClip(w, 'tilt', 750, { rot: -9, sym: 'q' }); applyActorTransform(w, now); }
-        } else if (/[!！]$/.test(tail)) {
-          for (const w of workers) { startClip(w, 'wow', 700, { sym: 'bang' }); applyActorTransform(w, now); }
+        const now = nowMs(); markActivity();
+        const workers = workingActors(); if (!workers.length) return;
+        const mains = activeMainActors();
+        const s = typeof text === 'string' ? text : '', tail = (s.length > 16 ? s.slice(-16) : s).trimEnd().slice(-4);
+        const isQ = /[?？]$/.test(tail);
+        if (isQ || /[!！]$/.test(tail)) {
+          for (const a of mains) a.typeWriteUntil = 0;
+          for (const w of workers) { startClip(w, isQ ? 'tilt' : 'wow', isQ ? 750 : 700, isQ ? { rot: -9, sym: 'q' } : { sym: 'bang' }); applyActorTransform(w, now); }
         } else {
+          const sc = mains.find((a) => a.kind === 'clawd') || workers[0];
+          if (sc && !sc.dragging && !sc.stackedOn) {
+            if (sc.overridePose === 'write' && now < sc.overrideUntil) {
+              sc.overrideUntil = now + 1200;
+              if (sc.sym === 'note') sc.symUntil = now + 1200;
+            } else { sc.typeWriteUntil = now + 1200; sc.typeWriteTick = tickIdx; }
+          }
           for (const w of workers) { w.nodY = PX; w.nodUntil = now + 140; w.eyeScan = 0; }
           clearTimeout(pauseTimer);
           pauseTimer = setTimeout(() => {
