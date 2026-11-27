@@ -593,18 +593,19 @@ test('PR #153 安全拆拣：两段切页 GPU 动效、双分屏滑入、发送�
   const scSrc = fs.readFileSync(path.join(ROOT, 'stream-choreography.js'), 'utf8');
   const uiSrc = fs.readFileSync(path.join(ROOT, 'ui-runtime.js'), 'utf8');
 
-  // 1) CSS 帧 0 防闪烁规则存在，且 100% 保留 Wave P3-B overview-shell 静态 ::before 毛玻璃（绝无画质降级）
-  assert.ok(
-    styleCss.includes('[data-ag-cs-conv-seat="1"][data-ag-cs-swapping="1"] [data-testid="autoscroll-viewport"]:not([data-ag-cs-vp-live="1"]){opacity:0!important}'),
-    'style.css 必须包含对话切换帧 0 防闪烁规则'
-  );
+  // 1) 已根治孤儿锁（style.css 不含 data-ag-cs-swapping/vp-live 硬隐藏），且 100% 保留 Wave P3-B overview-shell 静态 ::before 毛玻璃（绝无画质降级）
+  assert.equal(styleCss.includes('data-ag-cs-swapping'), false, 'style.css 不应残留 data-ag-cs-swapping 孤儿锁规则');
+  assert.equal(styleCss.includes('data-ag-cs-vp-live'), false, 'style.css 不应残留 data-ag-cs-vp-live 孤儿锁规则');
   assert.match(styleCss, /:is\(\[data-ag-cs-overview-shell="1"\],\.animate-overview-panel\)\{[^}]*&::before\{[^}]*contain:layout style paint;[^}]*backdrop-filter:blur\(16px\)/, 'Wave P3-B overview-shell 静态 ::before 毛玻璃必须完整保留');
   assert.ok(scSrc.includes("setAttrIfChanged(p, 'data-ag-cs-prism-box', '1')") && scSrc.includes("setAttrIfChanged(p, 'data-ag-cs-prism-mirror', '1')"), 'overview-panel prism 边框与镜面必须保留');
   assert.ok(scSrc.includes('if (idx >= 12) break;'), '弹窗交错入场必须保持 12 条上限');
   assert.ok(uiSrc.includes("ga(ov, 'data-ag-cs-model-overlay') === '1'"), 'syncPopupOverlayMirrors 必须跳过模型面板 overlay 避免双重镜像');
   assert.ok(uiSrc.includes('const maybeBumpAuxResize ='), 'ui-runtime 必须使用 maybeBumpAuxResize 避免单击分屏误触发 resizing 脉冲');
+  const auraSrc = fs.readFileSync(path.join(ROOT, 'conv-aura.js'), 'utf8');
+  assert.equal(auraSrc.includes('!switchedPane'), false, 'conv-aura 切入第 2 分屏必须避免 !switchedPane 同步回流强制阻断');
+  assert.ok(scSrc.includes('const [t, br, s, il, sg] = sparkQueue.pop()') && scSrc.includes("if (s === 'done' && !il) doneSparkCache.set(t, sg)"), 'stepHydration 消费 sparkQueue 必须解构 5 元组并回写 doneSparkCache');
 
-  // 2) 构建轻量 DOM + 可观测 WAAPI + 双 rAF 队列
+  // 2) 构建轻量 DOM + 可观测 WAAPI（含 cancel()） + 单 rAF 队列
   const anims = [];
   const makeEl = (tag = 'DIV', attrs = {}, cls = '', rect = { left: 0, top: 0, width: 300, height: 40 }) => {
     const m = new Map(Object.entries(attrs));
@@ -626,7 +627,12 @@ test('PR #153 安全拆拣：两段切页 GPU 动效、双分屏滑入、发送�
       remove() { if (el.parentElement) { const i = el.parentElement.children.indexOf(el); if (i >= 0) el.parentElement.children.splice(i, 1); el.parentElement = null; } },
       getBoundingClientRect: () => rect,
       animate(kfs, opts) {
-        const rec = { el, kfs, opts, paused: false, played: false, pause() { this.paused = true; }, play() { this.played = true; } };
+        const rec = {
+          el, kfs, opts, paused: false, played: false, canceled: false,
+          pause() { this.paused = true; },
+          play() { this.played = true; },
+          cancel() { this.canceled = true; },
+        };
         anims.push(rec);
         return rec;
       },
@@ -717,58 +723,109 @@ test('PR #153 安全拆拣：两段切页 GPU 动效、双分屏滑入、发送�
   });
 
   try {
-    // 2a) 初始化侧栏基线后测试 press-dip -> 取消 -> exit -> 两段入场
+    // 2a) 初始化侧栏基线后测试单行 90ms press-dip -> 取消(必 cancel forwards) -> exit(无 scale/无孤儿锁) -> React 复用视口切页必 cancel 退场 forwards
     ctl.syncSidebarSelectionGlide(ctl.measureSidebarSelectionSnapshot());
     anims.length = 0;
 
     ctl.prepareConvPressDip(rowB);
-    assert.equal(anims.length, 1, '按下未选中侧栏行应启动预下沉 dip 动画');
-    assert.equal(anims[0].el, vpWrap);
+    assert.equal(anims.length, 1, '按下未选中侧栏行应仅对单个 row 启动 90ms 轻按反馈');
+    assert.equal(anims[0].el, rowB, 'prepareConvPressDip 不得按压整页视口，只能作用于目标侧栏行');
+    assert.equal(anims[0].opts.duration, 90);
+    assert.equal(anims[0].opts.fill, 'forwards');
+    const dipAnim = anims[0];
 
     ctl.prepareConvPressDip(null);
+    assert.equal(dipAnim.canceled, true, '指针取消/抬起时必须显式 cancel() 悬挂的 fill:forwards dip 动画');
     assert.equal(anims.length, 2, '指针取消/抬起时应回弹恢复原位');
+    assert.equal(anims[1].el, rowB);
 
     ctl.prepareConvSwitchExit(rowB);
-    assert.equal(seat.getAttribute('data-ag-cs-swapping'), '1', '切页退场必须标记 data-ag-cs-swapping 遮挡新视口帧 0');
-    assert.equal(vp.getAttribute('data-ag-cs-vp-live'), '1', '旧视口必须标记 data-ag-cs-vp-live 保持可见退场');
-    assert.equal(anims.length, 3, '切页退场应启动 WAAPI exit 动画');
+    assert.equal(seat.getAttribute('data-ag-cs-swapping'), null, '切页退场不再写入 data-ag-cs-swapping 孤儿锁');
+    assert.equal(vp.getAttribute('data-ag-cs-vp-live'), null, '切页退场不再写入 data-ag-cs-vp-live 孤儿锁');
+    assert.equal(anims.length, 3, '切页退场应启动纯 translate3d+opacity WAAPI exit 动画');
+    const exitAnim = anims[2];
+    assert.equal(exitAnim.el, vpWrap);
+    assert.equal(exitAnim.opts.fill, 'forwards');
+    assert.ok(exitAnim.kfs.every((k) => !String(k.transform || '').includes('scale(')), '巨型视口退场严禁使用 scale() 触发重光栅化');
 
-    // 模拟切换完成至 cid-b
+    // 模拟切换完成至 cid-b（React 复用同一 vpWrap/vp DOM）
     rowA.setAttribute('data-selected', 'false');
     rowB.setAttribute('data-selected', 'true');
     conv.setAttribute('data-cascade-id', 'cid-b');
     anims.length = 0;
     ctl.syncSidebarSelectionGlide(ctl.measureSidebarSelectionSnapshot());
 
+    assert.equal(exitAnim.canceled, true, 'P0 回归门禁：切页入场前必须显式 cancel() 退场 fill:forwards 句柄，绝不卡死 opacity: 0.04');
     const portal = body.querySelector('#ag-prism-overlay-portal');
     assert.ok(portal && portal.querySelector('.ag-cs-sidebar-glide-pill'), '侧栏滑轨胶囊必须仍挂载在 #ag-prism-overlay-portal 内');
     assert.equal(vp.getAttribute('data-ag-cs-stage-glide'), 'up', 'Hero B2 data-ag-cs-stage-glide 必须保持完整');
-    assert.equal(anims.length, 2, '新对话入场应创建 translate3d + opacity 两条 WAAPI');
-    assert.ok(anims.every((a) => a.paused && !a.played), '双 rAF 同步点到达前，入场动画必须处于 paused 状态');
-    assert.equal(seat.getAttribute('data-ag-cs-swapping'), '1', '首帧未播前仍应保持 swapping 守卫');
+    assert.equal(oldBubble.getAttribute('data-ag-cs-glide-item'), null, '冗余 data-ag-cs-glide-item 必须已清理');
+    assert.equal(anims.length, 1, '新对话入场应创建单条 Frame 0 backwards translate3d+opacity WAAPI');
+    assert.equal(anims[0].opts.duration, 240);
+    assert.equal(anims[0].opts.fill, 'backwards');
+    assert.equal(anims[0].kfs[0].opacity, 0);
+    assert.ok(anims[0].kfs.every((k) => !String(k.transform || '').includes('scale(')), '巨型视口入场严禁使用 scale()');
+    assert.ok(anims[0].paused && !anims[0].played, '单 rAF 同步点到达前，入场动画必须处于 paused 状态');
 
     flushRafFrame();
-    assert.ok(anims.every((a) => !a.played), '第 1 帧 rAF 尚未播放');
-    flushRafFrame();
-    assert.ok(anims.every((a) => a.played), '第 2 帧 rAF 必须同步 play() 全部入场动画');
-    assert.equal(seat.getAttribute('data-ag-cs-swapping'), null, '同步播放后必须清理 data-ag-cs-swapping');
-    assert.equal(vp.getAttribute('data-ag-cs-vp-live'), null, '同步播放后必须清理 data-ag-cs-vp-live');
+    assert.equal(anims[0].played, true, '单 rAF 后必须立即 play() 入场动画');
 
-    // 2b) 双分屏 GPU 滑入 / 收回
+    // 2a-2) P0 回归：React 复用同一视口切回原对话 cid-a，以及切回 .agy-home / 无 sidebarSnap 的 sw 必清理全部 forwards 句柄
+    anims.length = 0;
+    ctl.prepareConvSwitchExit(rowA);
+    assert.equal(anims.length, 1);
+    const exitBackAnim = anims[0];
+    assert.equal(exitBackAnim.opts.fill, 'forwards');
+    rowB.setAttribute('data-selected', 'false');
+    rowA.setAttribute('data-selected', 'true');
+    conv.setAttribute('data-cascade-id', 'cid-a');
+    anims.length = 0;
+    ctl.syncSidebarSelectionGlide(ctl.measureSidebarSelectionSnapshot());
+    assert.equal(exitBackAnim.canceled, true, 'React 复用同一视口切回原对话后，退场 fill:forwards 必须被 cancel()');
+    const entryBackAnim = anims[0];
+    assert.ok(entryBackAnim && entryBackAnim.paused && !entryBackAnim.played);
+    // 模拟在 rAF 触发前切回 .agy-home：不仅取消退场，也取消尚未播出的入场，且后续 rAF 绝不复活它
+    ctl.syncHeroRouteChoreography({ inHome: true, formalConv: null, checkCaustics: false });
+    assert.equal(entryBackAnim.canceled, true, '切回 .agy-home 必须立即 cancel() 残留 swap 句柄');
+    flushRafFrame();
+    assert.equal(entryBackAnim.played, false, '已 cancel 的 deferred 句柄绝不能被滞后 rAF 复活 play()');
+    assert.equal(seat.getAttribute('data-ag-cs-swapping'), null, '切回 .agy-home 无残留 swapping 锁');
+    assert.equal(vp.getAttribute('data-ag-cs-vp-live'), null, '切回 .agy-home 无残留 vp-live 锁');
+
+    // 再测：exit 启动后立刻切回 .agy-home，或发生无 sidebarSnap 的 sw 路由跳转，均必 cancel 退场 forwards 句柄
+    anims.length = 0;
+    ctl.prepareConvSwitchExit(rowB);
+    const exitToHomeAnim = anims[0];
+    assert.equal(exitToHomeAnim.opts.fill, 'forwards');
+    ctl.syncHeroRouteChoreography({ inHome: true, formalConv: null, checkCaustics: false });
+    assert.equal(exitToHomeAnim.canceled, true, '退场期间切回 .agy-home 必须显式 cancel() 0.04 forwards 句柄');
+
+    anims.length = 0;
+    ctl.prepareConvSwitchExit(rowB);
+    const exitNoSnapAnim = anims[0];
+    ctl.syncHeroRouteChoreography({ inHome: false, formalConv: conv, sw: true, sidebarSnap: null, checkCaustics: false });
+    assert.equal(exitNoSnapAnim.canceled, true, '无 sidebarSnap 的 sw 路由跳转必须显式 cancel() 0.04 forwards 句柄');
+
+    // 2b) 双分屏 GPU 滑入 / 收回（零 paneL 重光栅化 + 单 rAF + splitAnims 追踪取消）
     anims.length = 0;
     ctl.triggerSplitTransition(split, true);
-    assert.equal(anims.length, 4, '开启双分屏应创建左栏位、右栏位(位移+淡入)与分隔线共 4 条 GPU WAAPI');
+    assert.equal(anims.length, 2, '开启双分屏应仅创建右栏位(240ms 纯位移淡入)与分隔线(180ms 淡入)共 2 条 GPU WAAPI，不碰 3000-el 左主栏');
+    assert.equal(anims[0].el, paneR);
+    assert.equal(anims[0].opts.duration, 240);
+    assert.equal(anims[0].opts.delay, 0);
+    assert.ok(anims[0].kfs.every((k) => !String(k.transform || '').includes('scale(')), '分屏右栏位严禁使用 scale()');
+    assert.equal(anims[1].el, paneSep);
+    assert.equal(anims[1].opts.duration, 180);
+    assert.ok(anims.every((a) => a.el !== paneL), '严禁对左主栏 paneL 执行动画');
     assert.ok(anims.every((a) => a.paused && !a.played));
     flushRafFrame();
-    flushRafFrame();
-    assert.ok(anims.every((a) => a.played), '双 rAF 后必须统一 play() 分屏动画');
+    assert.ok(anims.every((a) => a.played), '单 rAF 后必须统一 play() 分屏动画');
+    const prevSplitAnims = [...anims];
 
     anims.length = 0;
     ctl.triggerSplitTransition(split, false);
-    assert.equal(anims.length, 1, '关闭双分屏应仅创建主栏单条 GPU 动画');
-    flushRafFrame();
-    flushRafFrame();
-    assert.equal(anims[0].played, true);
+    assert.equal(anims.length, 0, '关闭双分屏不动画 3000-el 左主栏 paneL，0 WAAPI 创建');
+    assert.ok(prevSplitAnims.every((a) => a.canceled), '关闭双分屏必须取消并清空 splitAnims');
 
     // 2c) 发送发射动效 + 新发送气泡浮入
     anims.length = 0;
@@ -783,21 +840,51 @@ test('PR #153 安全拆拣：两段切页 GPU 动效、双分屏滑入、发送�
     ctl.syncHeroRouteChoreography({ inHome: false, formalConv: conv, checkCaustics: false });
     assert.equal(anims.length, 3, '同一已播气泡绝不重复触发发射动画');
 
-    // 2d) performance 模式与 motion="off" 优雅降级：0 WAAPI、0 swapping 遗留
+    // 2d) performance 模式与 motion="off" 优雅降级：0 WAAPI、0 残留锁
     for (const [attr, val] of [['data-ag-cs-perf-mode', 'performance'], ['data-ag-cs-motion', 'off']]) {
       html.setAttribute('data-ag-cs-perf-mode', 'balanced');
       html.setAttribute('data-ag-cs-motion', 'ultra');
       html.setAttribute(attr, val);
       anims.length = 0;
-      ctl.prepareConvPressDip(rowA);
-      ctl.prepareConvSwitchExit(rowA);
+      ctl.prepareConvPressDip(rowB);
+      ctl.prepareConvSwitchExit(rowB);
       ctl.triggerSplitTransition(split, true);
       ctl.triggerSendLaunch(sendBtn, sendBtn);
       assert.equal(anims.length, 0, `${attr}="${val}" 下必须完全降级：0 WAAPI 创建`);
       assert.equal(seat.getAttribute('data-ag-cs-swapping'), null, `${attr}="${val}" 下严禁残留 data-ag-cs-swapping`);
     }
 
+    // 2e) 380ms 兜底定时触发时必先 cancel() 退场 fill:forwards 句柄再恢复，且 clearTransientTimers / destroy 必清空全部悬挂动画
+    html.setAttribute('data-ag-cs-perf-mode', 'balanced');
+    html.setAttribute('data-ag-cs-motion', 'ultra');
+    const prevSetTimeout = globalThis.setTimeout;
+    const prevClearTimeout = globalThis.clearTimeout;
+    const capturedTimers = [];
+    try {
+      globalThis.setTimeout = (fn, ms) => { const id = capturedTimers.length + 1; capturedTimers.push({ id, fn, ms, cleared: false }); return id; };
+      globalThis.clearTimeout = (id) => { const t = capturedTimers.find((x) => x.id === id); if (t) t.cleared = true; };
+      anims.length = 0;
+      ctl.prepareConvSwitchExit(rowB);
+      assert.equal(anims.length, 1);
+      const fallbackExitAnim = anims[0];
+      assert.equal(fallbackExitAnim.opts.fill, 'forwards');
+      const fallbackTimer = capturedTimers.find((t) => !t.cleared && t.ms === 380);
+      assert.ok(fallbackTimer, 'prepareConvSwitchExit 必须设置 380ms 兜底恢复定时器');
+      fallbackTimer.fn();
+      assert.equal(fallbackExitAnim.canceled, true, '380ms 兜底触发前必须显式 cancel() 0.04 forwards 退场句柄');
+      assert.equal(anims.length, 2, '380ms 兜底取消退场句柄后应播恢复动画回到 opacity:1');
+      assert.equal(anims[1].el, vpWrap);
+    } finally {
+      globalThis.setTimeout = prevSetTimeout;
+      globalThis.clearTimeout = prevClearTimeout;
+    }
+
+    anims.length = 0;
+    ctl.prepareConvSwitchExit(rowB);
+    ctl.triggerSplitTransition(split, true);
+    assert.equal(anims.length, 3);
     ctl.clearTransientTimers();
+    assert.ok(anims.every((a) => a.canceled), 'clearTransientTimers 必须显式 cancel() 全部悬挂 swapAnims 与 splitAnims');
     ctl.flushAllStreamArtifacts(true);
   } finally {
     if (prevDoc === undefined) delete globalThis.document;

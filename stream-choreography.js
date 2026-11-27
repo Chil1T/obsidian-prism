@@ -105,7 +105,7 @@
     let sentBubbleUntil = 0;
     const seenSentBubbles = new WeakSet();
     let suppressEntryMotionUntil = 0;
-    let convDipEl = null, convSwapSeq = 0, convSwapExitTm = 0;
+    let convDipEl = null, convSwapSeq = 0, convSwapExitTm = 0, swapAnims = [], splitAnims = [];
     let runInit = false;
     let wasRunning = false;
     let runStartAt = 0;
@@ -275,6 +275,7 @@
       convEntryTimer = cT(convEntryTimer); convEntryRaf = cAF(convEntryRaf);
       wfClickTimer = cT(wfClickTimer); sweepTimer = cT(sweepTimer); runHoldTimer = cT(runHoldTimer);
       convSwapExitTm = cT(convSwapExitTm); convDipEl = null; sentBubbleUntil = 0;
+      clrAnims(swapAnims); clrAnims(splitAnims);
       runningCidMap.clear(); expirableClasses.clear();
       for (const id of transientTimers) CT(id);
       transientTimers.clear();
@@ -305,7 +306,7 @@
       if (isDestroyed()) return;
       guardMut(() => {
         let b = 18;
-        for (; b > 0 && sparkQueue.length; b--) { const [t, br, s] = sparkQueue.pop(); applySingleSpark(t, br, s); }
+        for (; b > 0 && sparkQueue.length; b--) { const [t, br, s, il, sg] = sparkQueue.pop(); applySingleSpark(t, br, s); if (s === 'done' && !il) doneSparkCache.set(t, sg); }
         for (; b > 0 && iconQueue.length; b--) { const it = iconQueue.pop(); if (!ga(it.btn, 'data-ag-cs-icon-injected')) applySingleHostIcon(it.btn, it.iconName, it.origSvg, it.size); }
       });
       if (sparkQueue.length || iconQueue.length) hydrateRaf = rAF(stepHydration);
@@ -622,59 +623,77 @@ states.push([r, run]);
       return { e: false, i: selIdx, cid: curCid, r: selRow, rn: selRun, s: snap, l: lr, t: stTop, st: states };
     };
 
-    const SP = 'cubic-bezier(.22,1,.36,1)', SW_A = 'data-ag-cs-swapping', VL_A = 'data-ag-cs-vp-live';
-    const kf = (x, y, s, o) => { const r = { transform: `translate3d(${x}px,${y}px,0) scale(${s})` }; if (o != null) r.opacity = o; return r; };
+    const SP = 'cubic-bezier(.22,1,.36,1)';
+    const kf = (x, y, s, o) => {
+      const r = { transform: s === 1 || s == null ? `translate3d(${x}px,${y}px,0)` : `translate3d(${x}px,${y}px,0) scale(${s})` };
+      if (o != null) r.opacity = o;
+      return r;
+    };
     const K0 = kf(0, 0, 1), K1 = kf(0, 0, 1, 1);
     const wa = (el, k, d, e = SP, f = 'none', dl = 0) => (isF(el?.animate) ? T(() => el.animate(k, { duration: d, easing: e, fill: f, delay: dl })) : null);
     const wO = (el, d, dl = 0) => wa(el, [{ opacity: 0 }, { opacity: 1 }], d, 'ease-out', 'backwards', dl);
-    const deferPlay = (hs, onPlay) => {
+    const clrAnims = (list = swapAnims) => {
+      for (const a of list) T(() => a?.cancel?.());
+      list.length = 0;
+    };
+    const trackA = (a, list = swapAnims) => {
+      if (a) list.push(a);
+      return a;
+    };
+    const deferPlay = (hs, trackList) => {
       const list = hs.filter(Boolean);
-      if (!list.length) return onPlay?.();
+      if (!list.length) return;
       for (const a of list) T(() => a.pause());
       let done = false;
       const go = () => {
         if (done) return;
-        done = true; onPlay?.();
-        if (!isDestroyed()) for (const a of list) T(() => a.play());
+        done = true;
+        if (!isDestroyed()) for (const a of list) if (!trackList || trackList.includes(a)) T(() => a.play());
       };
-      if (!rAF(() => rAF(go))) go(); else scheduleTransient(go, 360);
+      if (!rAF(go)) go(); else scheduleTransient(go, 120);
     };
-    const clearSwapGuards = (d) => { raAll(d, SW_A); raAll(d, VL_A); };
+    const clearSwapGuards = () => { convDipEl = null; convSwapExitTm = cT(convSwapExitTm); clrAnims(swapAnims); };
     const activeVp = (row) => {
       if (!row || !canGpuMotion() || ga(row, 'data-selected') === 'true') return null;
       const cv = findFormalConvView();
       if (!cv) return null;
       const v = qs(cv, S_VP), p = peOf(v), i = AF(qsa(docOf(), S_SBR)).indexOf(row);
-      return [peOf(cv), v, (v && p !== cv ? p : v) || cv, sbIndex >= 0 && i >= 0 && i < sbIndex ? -1 : 1];
+      return [(v && p !== cv ? p : v) || cv, sbIndex >= 0 && i >= 0 && i < sbIndex ? -1 : 1];
     };
     const prepareConvPressDip = (row) => {
-      if (!row) { const el = convDipEl; convDipEl = null; if (isConn(el)) wa(el, [kf(0, 0, .988, .44), K1], 150); return; }
-      const c = activeVp(row);
-      if (c) wa((convDipEl = c[2]), [K1, kf(0, c[3] * -12, .988, .44)], 120, SP, 'forwards');
+      if (!row) {
+        const el = convDipEl; convDipEl = null;
+        if (!el) return;
+        clrAnims();
+        if (isConn(el)) wa(el, [kf(0, 1, .988, .78), K1], 110);
+        return;
+      }
+      if (!canGpuMotion() || ga(row, 'data-selected') === 'true') return;
+      clrAnims();
+      trackA(wa((convDipEl = row), [K1, kf(0, 1, .988, .78)], 90, SP, 'forwards'));
     };
     const prepareConvSwitchExit = (row) => {
       const c = activeVp(row);
       if (!c) return;
-      const [s, v, w, dr] = c, seq = ++convSwapSeq, y = dr * -22;
-      convDipEl = null; convSwapExitTm = cT(convSwapExitTm);
-      guardMut(() => { if (v) sa(v, VL_A, '1'); if (s && tagOf(s) === 'DIV') sa(s, SW_A, '1'); });
-      wa(w, [kf(0, M.round(y * .45), .99, .55), kf(0, y, .98, .04)], 155, 'cubic-bezier(.4,0,1,1)', 'forwards');
+      const [w, dr] = c, seq = ++convSwapSeq, y = dr * -22;
+      convDipEl = null; convSwapExitTm = cT(convSwapExitTm); clrAnims();
+      trackA(wa(w, [K1, kf(0, y, 1, .04)], 150, 'cubic-bezier(.4,0,1,1)', 'forwards'));
       convSwapExitTm = ST(() => {
         convSwapExitTm = 0;
         if (seq !== convSwapSeq || isDestroyed()) return;
-        guardMut(() => clearSwapGuards(docOf()));
+        clrAnims();
         if (isConn(w)) wa(w, [{ opacity: .04 }, K1], 160, 'ease-out');
-      }, 850);
+      }, 380);
     };
     const triggerSplitTransition = (splitEl, toDual) => {
+      clrAnims(splitAnims);
+      if (!toDual) return;
       const ks = splitEl?.children, n = ks?.length || 0;
       if (n < 2 || !canGpuMotion() || suppressEntryMotionUntil > nowOf()) return;
-      const l = ks[0], r = ks[n - 1], s = n > 2 ? ks[1] : null, hs = [wa(l, [kf(toDual ? 26 : -32, 0, toDual ? .988 : .984), K0], 400)];
-      if (toDual) {
-        if (r && r !== l) hs.push(wa(r, [kf(48, 0, .984), K0], 420, SP, 'backwards', 25), wO(r, 240, 25));
-        if (s) hs.push(wO(s, 240));
-      }
-      deferPlay(hs);
+      const l = ks[0], r = ks[n - 1], s = n > 2 ? ks[1] : null, hs = [];
+      if (r && r !== l) hs.push(trackA(wa(r, [kf(32, 0, 1, 0), K1], 240, SP, 'backwards'), splitAnims));
+      if (s) hs.push(trackA(wO(s, 180), splitAnims));
+      deferPlay(hs, splitAnims);
     };
     const markFreshSentBubble = (conv) => {
       if (!conv || !canGpuMotion()) return false;
@@ -701,17 +720,17 @@ states.push([r, run]);
       if (isSbOff()) {
         rmAll(d, '.ag-cs-sidebar-glide-pill');
         if (snap.st) for (const [row] of snap.st) tAS(row, A_RR, false);
-        runHoldTimer = cT(runHoldTimer); runningCidMap.clear();
+        runHoldTimer = cT(runHoldTimer); runningCidMap.clear(); clearSwapGuards();
         return rstSb();
       }
       if (snap.st) for (const [row, run] of snap.st) tAS(row, A_RR, run);
-      if (snap.e) return rstSb();
+      if (snap.e) { clearSwapGuards(); return rstSb(); }
       const selIdx = snap.i, curCid = snap.cid, selRow = snap.r, cs = snap.s, lr = snap.l, st = snap.t;
       if (!selRow) return;
       const targetRun = !!(snap.rn || ha(selRow, A_RR));
       if (!sbInit) { sbInit = true; sbIndex = selIdx; sbCid = curCid; sbRect = cs; sbRunning = targetRun; return; }
       const sessionChanged = curCid && sbCid ? curCid !== sbCid : selIdx !== sbIndex;
-      if (sessionChanged) { convDipEl = null; convSwapSeq++; convSwapExitTm = cT(convSwapExitTm); }
+      if (sessionChanged) { convSwapSeq++; clearSwapGuards(); }
       if (sbIndex >= 0 && selIdx >= 0 && sessionChanged && sbRect && cs && !(suppressEntryMotionUntil > nowOf())) {
         const fromRect = lr ? { left: lr.left + sbRect.rx, top: lr.top + sbRect.ry - st, width: sbRect.width, height: sbRect.height } : sbRect;
         const dir = selIdx < sbIndex ? 'down' : 'up';
@@ -731,23 +750,18 @@ states.push([r, run]);
             const dy = dir === 'down' ? -28 : 28, hs = [];
             for (const vp of targets) {
               const p = peOf(vp), w = p && ga(p, 'data-ag-cs-vp-wrap') === '1' ? p : vp;
-              hs.push(wa(w, [kf(0, dy, .985), K0], 420, SP, 'backwards'), wO(w, 250));
+              hs.push(trackA(wa(w, [kf(0, dy, 1, 0), K1], 240, SP, 'backwards')));
             }
-            deferPlay(hs, () => guardMut(() => clearSwapGuards(docOf())));
-          } else clearSwapGuards(d);
-        } else clearSwapGuards(d);
+            deferPlay(hs, swapAnims);
+          }
+        }
         if (isMotionUltra()) {
           for (const vp of targets) {
             sa(vp, 'data-ag-cs-stage-glide', dir);
-            const kids = vp.children ? AF(vp.children) : [], glideKids = kids.slice(M.max(0, kids.length - 3));
-            for (const ch of glideKids) sa(ch, 'data-ag-cs-glide-item', dir);
-            scheduleTransient(() => {
-              if (isConn(vp) && ga(vp, 'data-ag-cs-stage-glide') === dir) ra(vp, 'data-ag-cs-stage-glide');
-              for (const ch of glideKids) if (isConn(ch) && ga(ch, 'data-ag-cs-glide-item') === dir) ra(ch, 'data-ag-cs-glide-item');
-            }, 220);
+            scheduleTransient(() => { if (isConn(vp) && ga(vp, 'data-ag-cs-stage-glide') === dir) ra(vp, 'data-ag-cs-stage-glide'); }, 220);
           }
         }
-      } else if (sessionChanged) clearSwapGuards(d);
+      }
       sbIndex = selIdx; sbCid = curCid; sbRect = cs; sbRunning = targetRun;
     };
 
@@ -890,6 +904,7 @@ states.push([r, run]);
         if (liftoffBubbleUntil > 0 && (nowOf() > liftoffBubbleUntil || markLiftoffBubble(formalConv))) liftoffBubbleUntil = 0;
         if (sentBubbleUntil > 0 && (nowOf() > sentBubbleUntil || markFreshSentBubble(formalConv))) sentBubbleUntil = 0;
       }
+      if (inHome || (measured?.sw && !measured?.sidebarSnap)) { convSwapSeq++; clearSwapGuards(); }
       if (measured?.sidebarSnap) syncSidebarSelectionGlide(measured.sidebarSnap);
       if (!measured || measured.checkCaustics !== false) syncHeroCCaustics(measured?.visibleChangedHeaders);
     };
@@ -919,10 +934,10 @@ states.push([r, run]);
         raAll(d, A_TS);
         if (!isMotionUltra()) {
           rmAll(d, '.ag-cs-liftoff-veil');
-          for (const s of 'liftoff-bubble|caustic|fiber-camp|stage-glide|glide-item|sonar'.split('|')) raAll(d, 'data-ag-cs-' + s);
+          for (const s of 'liftoff-bubble|caustic|fiber-camp|stage-glide|sonar'.split('|')) raAll(d, 'data-ag-cs-' + s);
         }
         if (!isMotionStandardOrUltra()) rmAll(d, '.ag-cs-sidebar-glide-pill');
-        if (!canGpuMotion()) clearSwapGuards(d);
+        if (force || !canGpuMotion()) { clearSwapGuards(); clrAnims(splitAnims); }
       });
     };
 
@@ -1187,7 +1202,7 @@ suppressEntryMotion(ms) {
 suppressEntryMotionUntil = M.max(suppressEntryMotionUntil, nowOf() + M.max(120, Number(ms) || 900));
 liftoffBubbleUntil = sentBubbleUntil = 0;
 const d = docOf();
-rmAll(d, '.ag-cs-liftoff-veil,.ag-cs-sidebar-glide-pill'); clearSwapGuards(d);
+rmAll(d, '.ag-cs-liftoff-veil,.ag-cs-sidebar-glide-pill'); convSwapSeq++; clearSwapGuards(); clrAnims(splitAnims);
 },
 isEntryMotionSuppressed: () => suppressEntryMotionUntil > nowOf(),
 isStreamMutating: () => streamMutating,
