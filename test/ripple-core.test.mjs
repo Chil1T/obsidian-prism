@@ -2643,3 +2643,93 @@ test('ripple-worker reports probe-ready/probe-ack timeout phase diagnostics and 
   assert.equal(mounted, null);
   assert.equal(c4.api.getStats().totalFallbacks, 1, 'Permanent probe failure must not double-count fallbacks');
 });
+
+test('PR #167 A-only shader anti-banding: HORIZON_FRAGMENT_SHADER uses linear-light lmix(), highp gradient precision, and 3-channel decorrelated TPDF d3 dither with balanced GLSL', () => {
+  const frag = rippleCore.HORIZON_FRAGMENT_SHADER;
+  assert.equal(typeof frag, 'string');
+  assert.ok(frag.startsWith('#version 300 es\nprecision mediump float;'), 'must preserve WebGL2 GLSL 300 es header & default mediump');
+
+  // 1) Linear-light lmix() helper & highp dark palette loops
+  assert.ok(
+    frag.includes('highp vec3 lmix(highp vec3 a,highp vec3 b,highp float f){return sqrt(max(mix(a*a,b*b,clamp(f,0.,1.)),vec3(0.)));}'),
+    'must define linear-light lmix() with NaN-safe max(..., vec3(0.)) clamp'
+  );
+  for (const fnSig of [
+    'highp vec3 blueLoop(highp float x)',
+    'highp vec3 prismLoop(highp float x)',
+    'highp vec3 neonLoop(highp float x)',
+    'highp vec3 evalBaseDark(highp float ph)',
+    'highp vec3 evalPrismDark(highp float ph)',
+  ]) {
+    assert.ok(frag.includes(fnSig), `must upgrade ${fnSig} to highp`);
+  }
+  assert.ok(frag.includes('lmix(ZENITH_BLUE,i,f)') && frag.includes('lmix(PRISM_COBALT,PRISM_IRIS,f)') && frag.includes('lmix(SKY_BLUE,PRISM_IRIS,f)'), 'palette loops must interpolate in linear light via lmix()');
+
+  // 2) highp gradient chain & preserved PR #103 early-out / halftone guards
+  assert.ok(frag.includes('highp float y=uv.y/reach,yCut=y-.25*stretch;'), 'vertical gradient coords must use highp');
+  assert.ok(frag.includes('highp float glow=exp(-h*h*4.)*(.76+.42*curtain)*xEdge;'), 'glow attenuation must use highp');
+  assert.ok(frag.includes('highp float basePhase=') && frag.includes('highp vec3 base=sm(evalBaseDark(basePhase),basePhase);'), 'base color phase & sample must use highp');
+  assert.ok(frag.includes('glow * topFeather < 0.0008') && frag.includes('dotMsk > 0.001 ? halftone('), 'PR #103 early-out and halftone guard must remain intact');
+
+  // 3) 3-channel decorrelated TPDF d3 dither with smooth low-alpha feather & premultiplied alpha invariant
+  assert.ok(frag.includes('highp float outAlpha=clamp(a+da*(1.-a),0.,1.);'), 'outAlpha must use highp');
+  assert.ok(frag.includes('highp vec3 premulRgb=clamp(c,0.,1.)*a*(1.-da)+clamp(dc,0.,1.)*da;'), 'premulRgb must use highp');
+  assert.ok(frag.includes('if(outAlpha>.0006){') && frag.includes('highp float dF=smoothstep(.0006,.008,outAlpha);'), 'dither must smoothly ramp above 0.0006 alpha');
+  assert.ok(
+    frag.includes('highp vec3 d3=vec3(ign(dp)-ign(dp.yx+vec2(11.3,27.1)),ign(dp+vec2(17.1,31.7))-ign(dp.yx+vec2(43.9,7.3)),ign(dp+vec2(53.3,13.9))-ign(dp.yx+vec2(29.7,61.1)));'),
+    'must compute 3-channel decorrelated TPDF noise via 6 IGN taps'
+  );
+  assert.ok(
+    frag.includes('premulRgb=clamp(premulRgb+d3*(1.15/255.)*dF,vec3(0.),vec3(outAlpha));'),
+    'dithered premulRgb must clamp within [0, outAlpha] to preserve premultiplied alpha invariant'
+  );
+
+  // 4) Balanced GLSL delimiters & verified shader source upload via mock WebGL2 context
+  let braceDepth = 0;
+  let parenDepth = 0;
+  for (const ch of frag) {
+    if (ch === '{') braceDepth++;
+    else if (ch === '}') braceDepth--;
+    else if (ch === '(') parenDepth++;
+    else if (ch === ')') parenDepth--;
+    assert.ok(braceDepth >= 0 && parenDepth >= 0, 'HORIZON_FRAGMENT_SHADER delimiters must never underflow');
+  }
+  assert.equal(braceDepth, 0, 'HORIZON_FRAGMENT_SHADER curly braces must be balanced');
+  assert.equal(parenDepth, 0, 'HORIZON_FRAGMENT_SHADER parentheses must be balanced');
+
+  const capturedShaders = [];
+  const gl = {
+    VERTEX_SHADER: 35633,
+    FRAGMENT_SHADER: 35632,
+    COMPILE_STATUS: 35713,
+    LINK_STATUS: 35714,
+    TRIANGLES: 4,
+    COLOR_BUFFER_BIT: 16384,
+    createShader: (type) => ({ type }),
+    shaderSource: (sh, src) => capturedShaders.push({ type: sh.type, src }),
+    compileShader() {},
+    getShaderParameter: () => true,
+    createProgram: () => ({}),
+    attachShader() {},
+    linkProgram() {},
+    getProgramParameter: () => true,
+    deleteShader() {},
+    deleteProgram() {},
+    getUniformLocation: (_p, name) => ({ name }),
+    useProgram() {},
+    viewport() {},
+    clearColor() {},
+    clear() {},
+    uniform1f() {},
+    uniform2f() {},
+    uniform3f() {},
+    uniform4f() {},
+    drawArrays() {},
+    getExtension: () => ({ loseContext() {} }),
+  };
+  const glow = rippleCore.mountBrandHorizonGlow({ width: 320, height: 120, getContext: (t) => (t === 'webgl2' ? gl : null) });
+  assert.equal(glow.mode, 'webgl2');
+  const uploadedFrag = capturedShaders.find((s) => s.type === gl.FRAGMENT_SHADER);
+  assert.ok(uploadedFrag && uploadedFrag.src.includes('highp vec3 lmix(') && uploadedFrag.src.includes('highp vec3 d3=vec3('));
+  glow.dispose();
+});
