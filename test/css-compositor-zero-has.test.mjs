@@ -596,3 +596,67 @@ test('sidebar conversation rows unify padding-left:30px!important so pinned rows
     );
   }
 });
+
+test('Wave P3-B: overview-panel frosted-glass GPU layer decoupling & Top expensive selector pruning (0 :has, 0 steps, 100% ASCII)', () => {
+  // 1) 100% ASCII, 0 :has(, 0 steps(
+  assert.equal(/[^\x00-\x7f]/.test(styleCss), false, 'style.css must remain 100% ASCII');
+  assert.equal(styleCss.includes(':has('), false, 'style.css must contain 0 :has(');
+  assert.equal(styleCss.includes('steps('), false, 'style.css must contain 0 steps(');
+  assert.equal(flatStyleCss.includes('steps('), false, 'flattened style.css must contain 0 steps(');
+
+  // 2) overview-panel shell decouples backdrop-filter onto static ::before compositor layer while preserving blur(16px) saturate(140%) & ag-ov-br
+  const ovShellLine = styleCss.split('\n').find((l) => l.includes('& [data-ag-cs-overview-shell="1"]{')) || '';
+  assert.ok(ovShellLine.includes('isolation:isolate;contain:layout style;'), 'overview-shell must isolate stacking context and layout/style containment');
+  assert.equal(ovShellLine.includes('position:relative'), false, 'overview-shell must never force position:relative (keeps host fixed positioning)');
+
+  const ovDecoupleLine = styleCss
+    .split('\n')
+    .find((l) => l.includes(':is([data-ag-cs-overview-shell="1"],.animate-overview-panel){background:0 0!important;backdrop-filter:none!important;')) || '';
+  assert.ok(ovDecoupleLine, 'style.css must strip backdrop-filter from overview shell container itself');
+  assert.ok(
+    ovDecoupleLine.includes('&::before{content:"";position:absolute;inset:0;z-index:-1;border-radius:inherit;pointer-events:none;contain:layout style paint;transform:translateZ(0);') &&
+      ovDecoupleLine.includes('backdrop-filter:blur(16px) saturate(140%)!important'),
+    'overview shell must host static blur(16px) saturate(140%) on isolated GPU ::before layer'
+  );
+
+  // Prism mirror ::before must exclude overview shell so it never collides with the decoupled frosted-glass ::before layer
+  const mirrorLine = styleCss.split('\n').find((l) => l.includes('[data-ag-cs-prism-mirror="1"]:not([data-ag-cs-prism-cv="1"])')) || '';
+  assert.ok(
+    mirrorLine.includes(':not([data-ag-cs-overview-shell="1"]):not(.animate-overview-panel)::before'),
+    'prism mirror ::before fallback must exclude overview-shell and .animate-overview-panel'
+  );
+
+  // Light theme & running overview shell must route background-color / background-image onto ::before
+  const ovLightLine = styleCss
+    .split('\n')
+    .find((l) => l.includes(':is([data-ag-cs-overview-shell="1"],.animate-overview-panel){background:0 0!important;&::before{background-color:var(--ag-cs-menu-bg-l')) || '';
+  assert.ok(ovLightLine, 'light theme must route overview shell background onto decoupled ::before layer');
+  assert.ok(
+    styleCss.includes('& [data-ag-cs-overview-shell="1"][data-ag-overview-running="1"]::before,'),
+    'light running overview shell glow must paint onto decoupled ::before layer'
+  );
+
+  // Performance / motion="off" blur degradation must cover decoupled ::before layers
+  const perfDegradeLine = styleCss.split('\n').find((l) => l.includes(':is([data-ag-cs-perf-mode="performance"],[data-ag-cs-motion="off"])')) || '';
+  assert.ok(
+    perfDegradeLine.includes(':is([data-ag-cs-overview-shell="1"],.animate-overview-panel)::before{backdrop-filter:none!important}'),
+    'performance/motion="off" blur suppression must also target decoupled overview ::before layers'
+  );
+
+  // Inner overview panel & running rows isolate layout/style containment and GPU-promote pulse/spinner indicators
+  const ovPanelLine = styleCss.split('\n').find((l) => l.includes('& [data-testid="overview-panel"]{')) || '';
+  const ovRowLine = styleCss.split('\n').find((l) => l.includes('& :is([data-testid^="overview-panel-row-"],[data-testid="subagent-node"],[data-testid="artifact-row"]){')) || '';
+  const ovRunLine = styleCss.split('\n').find((l) => l.includes('& :is([data-testid="subagent-node"],[data-testid="running-row"],[data-testid="background-task-row"])[data-ag-sub-running="1"]{')) || '';
+  assert.ok(ovPanelLine.includes('contain:layout style;'), 'overview-panel must set contain:layout style');
+  assert.ok(ovPanelLine.includes('.divide-y>div:not([hidden])~div:not([hidden])'), 'overview-panel divider must avoid universal rightmost :not([hidden])');
+  assert.ok(ovRowLine.includes('contain:layout style;'), 'overview rows must set contain:layout style');
+  assert.ok(ovRunLine.includes('contain:layout style;') && ovRunLine.includes('contain:paint;transform:translateZ(0);'), 'running rows must isolate layout/style and GPU-promote pulse bar');
+
+  // 3) Top expensive rules pruned cleanly without regressing exemptions
+  const homeChildLine = styleCss.split('\n').find((l) => l.includes('.agy-home>div:not(.ag-cs-ripple-host)')) || '';
+  assert.ok(homeChildLine, 'L200 must narrow .agy-home>* to .agy-home>div:not(...)');
+  const toolGroupLine = styleCss.split('\n').find((l) => l.includes('[data-testid="tool-group-collapsible"],[data-testid="worked-for-collapsible"])+div{')) || '';
+  assert.ok(toolGroupLine.includes('&>:is(span,div){font-size:12.5px!important;line-height:18px!important}'), 'L253 must narrow descendant :is(span,div) to direct child &>:is(span,div)');
+  assert.equal(styleCss.includes(':not([class*="ag-cs-"])'), false, 'L759 must replace expensive [class*="ag-cs-"] substring scan with :not(:where(#ag-cs-settings-sec *))');
+  assert.ok(styleCss.includes(':not(:where(#ag-cs-settings-sec *))'), 'L759 must exempt settings section via zero-specificity :where(#ag-cs-settings-sec *)');
+});

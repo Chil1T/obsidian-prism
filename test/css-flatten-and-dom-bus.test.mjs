@@ -635,3 +635,160 @@ test('Conversation viewport stability: bottom-16 content-visibility exemption & 
     'flattened CSS must recalibrate native 75cqh last-turn min-height to keep total footprint at 75cqh'
   );
 });
+
+test('Wave P3-B (Refs #151): two-tier top-level :is() expansion eliminates runtime universal-via-:is (230+ -> 0) with 0 static Ch1 bloat', () => {
+  const { flattenNestedCss, expandTopLevelIsCss, classifySelectorSubject } = cssFlatten;
+
+  // 1) classifySelectorSubject准确按 Blink RuleSet 桶归类
+  assert.equal(classifySelectorSubject('html[x] #main'), 'id');
+  assert.equal(classifySelectorSubject('html[x] .card:hover'), 'class');
+  assert.equal(classifySelectorSubject('html[x] [data-testid="a"]::before'), 'attr');
+  assert.equal(classifySelectorSubject('html[x] div:not(.a)'), 'tag');
+  assert.equal(classifySelectorSubject('html[x] :is(.a,.b)'), 'universal-via-:is');
+  assert.equal(classifySelectorSubject('html[x] .divide-y>:not([hidden])'), 'universal-other');
+
+  // 2) css-flatten.cjs 升级能力：根前缀复杂分支、伪元素后置、嵌套 :is()、混合特异性、边界与安全保护
+  assert.equal(
+    flattenNestedCss('html[data-ag-cs-style]{& :is(.a .b,.c>.d){color:red}}', { expandTopLevelIs: true }),
+    'html[data-ag-cs-style] .a .b,html[data-ag-cs-style] .c>.d{color:red;}'
+  );
+  assert.equal(
+    flattenNestedCss('html[x]{& :is(.a,.b)::before{content:""}}', { expandTopLevelIs: true }),
+    'html[x] .a::before,html[x] .b::before{content:"";}'
+  );
+  // 同权重保护（默认 expandMixedSpecificity=false 时不拆混杂权重，显式开启或 expandTopLevelIs:'all' 时展开）
+  assert.equal(
+    flattenNestedCss('html[x]{& :is(.a,div){color:red}}', { expandTopLevelIs: true }),
+    'html[x] :is(.a,div){color:red;}'
+  );
+  assert.equal(
+    flattenNestedCss('html[x]{& :is(.a,div){color:red}}', { expandTopLevelIs: true, expandMixedSpecificity: true }),
+    'html[x] .a,html[x] div{color:red;}'
+  );
+  // 严格保护 :not(:is(...))、:where(...)、vendor 伪元素、祖先语义反转、引号/url/@keyframes 及上限 fail-open
+  const guardedCss =
+    'html[x] :not(:is(.a,.b)){opacity:1}' +
+    'html[x] :where(.a,.b){opacity:1}' +
+    'html[x] :is(.ok,::-moz-bad){opacity:.5}' +
+    '.wrap :is(html[x] .inner,.plain){color:blue}' +
+    'html[x] :is(.a::before,.b) span{display:block}' +
+    'html[x] [data-v=":is(.a,.b)"]{content:":is(.x,.y)";background:url(https://ex.test/:is(a,b).png)}' +
+    '@keyframes k{0%{opacity:0}to{opacity:1}}' +
+    '@media (prefers-reduced-motion:reduce){html[x] :is(.p,.q){animation:none}}';
+  const expandedGuarded = expandTopLevelIsCss(guardedCss);
+  assert.ok(expandedGuarded.includes('html[x] :not(:is(.a,.b)){opacity:1}'), ':not(:is(...)) must stay intact');
+  assert.ok(expandedGuarded.includes('html[x] :where(.a,.b){opacity:1}'), ':where(...) must stay intact');
+  assert.ok(expandedGuarded.includes('html[x] :is(.ok,::-moz-bad){opacity:.5}'), 'vendor forgiving :is() must stay intact');
+  assert.ok(expandedGuarded.includes('.wrap :is(html[x] .inner,.plain){color:blue}'), 'root-prefix ancestor inversion must never expand');
+  assert.ok(expandedGuarded.includes('html[x] :is(.a::before,.b) span{display:block}'), 'pseudo-element followed by descendant must never expand');
+  assert.ok(expandedGuarded.includes('[data-v=":is(.a,.b)"]{content:":is(.x,.y)";background:url(https://ex.test/:is(a,b).png)}'), 'attrs/strings/url must survive verbatim');
+  assert.ok(expandedGuarded.includes('@keyframes k{0%{opacity:0}to{opacity:1}}'), '@keyframes must survive verbatim');
+  assert.ok(expandedGuarded.includes('@media (prefers-reduced-motion:reduce){html[x] .p,html[x] .q{animation:none}}'), '@media nested subject :is() must expand');
+
+  // 上限保护：超过 maxPerRule 安全回退原选择器，且 subjectOnly 下二次展开若已归入 class 桶则自动止步
+  const overLimitRule = 'html[x] :is(.a,.b,.c){color:red}';
+  assert.equal(expandTopLevelIsCss(overLimitRule, { maxPerRule: 2 }), overLimitRule, 'exceeding maxPerRule must fail-open to original prelude');
+  const dualIsRule = 'html[x] :is(.a,.b):is(.c,.d){color:red}';
+  assert.equal(
+    expandTopLevelIsCss(dualIsRule, { maxPerRule: 2 }),
+    'html[x] .a:is(.c,.d),html[x] .b:is(.c,.d){color:red}',
+    'subjectOnly stops once each expanded branch has a class subject key'
+  );
+
+  // 3) 真实 Ch1 VM 沙盒验证：加载期一次性展开进 adoptedStyleSheets，universal-via-:is 降至 0，总 universal 降幅 >= 85%
+  const rawStyleCss = fs.readFileSync(path.join(ROOT, 'style.css'), 'utf8');
+  const flatMin = cssPack.minifyCss(flattenNestedCss(cssPack.minifyCss(rawStyleCss)));
+  const countBuckets = (css) => {
+    const counts = { id: 0, class: 0, attr: 0, tag: 0, 'universal-via-:is': 0, 'universal-other': 0 };
+    const walk = (src) => {
+      for (const r of cssPack.splitTopLevelCssRules(src)) {
+        const bIdx = r.indexOf('{');
+        if (bIdx < 0) continue;
+        const pre = r.slice(0, bIdx).trim();
+        const body = r.slice(bIdx + 1, r.lastIndexOf('}'));
+        if (pre.startsWith('@')) {
+          if (/^@(?:media|supports|container|layer|starting-style|scope)\b/i.test(pre)) walk(body);
+          continue;
+        }
+        let d = 0, q = '', st = 0;
+        for (let i = 0; i <= pre.length; i++) {
+          const c = pre[i] || ',';
+          if (c === '\\') { i++; continue; }
+          if (q) { if (c === q) q = ''; continue; }
+          if (c === '"' || c === "'") { q = c; continue; }
+          if (c === '(' || c === '[') d++;
+          else if ((c === ')' || c === ']') && d) d--;
+          else if (c === ',' && !d) {
+            const sel = pre.slice(st, i).trim();
+            if (sel) counts[classifySelectorSubject(sel)] += 1;
+            st = i + 1;
+          }
+        }
+      }
+    };
+    walk(css);
+    counts.totalUniversal = counts['universal-via-:is'] + counts['universal-other'];
+    return counts;
+  };
+
+  const staticBuckets = countBuckets(flatMin);
+  assert.ok(staticBuckets['universal-via-:is'] >= 150, `Static flatMin keeps compact :is() (${staticBuckets['universal-via-:is']}) for 0 Ch1 bloat`);
+
+  const exprAuto = cdp.buildInjectExpression({ ...cdp.DEFAULT_CONFIG, language: 'auto' }, { noDiskCache: true });
+  assert.ok(Buffer.byteLength(exprAuto, 'utf8') <= 389200, `Ch1[auto] (${Buffer.byteLength(exprAuto, 'utf8')} B) must stay <= 389,200 B`);
+
+  const sheets = [];
+  class MockCSSStyleSheet { replaceSync(txt) { this.cssText = txt; } }
+  const styleById = new Map();
+  const mkNode = (tag) => {
+    const attrs = new Map();
+    return {
+      tagName: tag.toUpperCase(), textContent: '', parentNode: null, lastElementChild: null,
+      getAttribute: (k) => (attrs.has(k) ? attrs.get(k) : null),
+      setAttribute: (k, v) => attrs.set(k, String(v)),
+      hasAttribute: (k) => attrs.has(k),
+      removeAttribute: (k) => attrs.delete(k),
+      appendChild(ch) { if (ch.id) styleById.set(ch.id, ch); ch.parentNode = this; this.lastElementChild = ch; return ch; },
+      remove() {},
+    };
+  };
+  const html = mkNode('html'), head = mkNode('head'), body = mkNode('body');
+  body.classList = { contains: (c) => c === 'monaco-workbench' };
+  const doc = {
+    documentElement: html, head, body, title: 'Antigravity', readyState: 'complete',
+    adoptedStyleSheets: sheets,
+    createElement: (t) => mkNode(t),
+    getElementById: (id) => styleById.get(id) || null,
+    querySelector: () => null, querySelectorAll: () => [],
+    addEventListener() {}, removeEventListener() {},
+  };
+  const codeHashMatch = exprAuto.match(/codeHash==?"([a-f0-9]+)"/);
+  const sandbox = {
+    document: doc, location: { href: 'vscode-file://vscode-app/workbench.html' },
+    CSSStyleSheet: MockCSSStyleSheet,
+    addEventListener() {}, removeEventListener() {},
+    setTimeout, clearTimeout, performance,
+    __agPrism: {
+      version: cdp.PLUGIN_VERSION,
+      codeHash: codeHashMatch ? codeHashMatch[1] : '',
+      refreshConfig() {},
+      getState: () => ({ cfg: cdp.DEFAULT_CONFIG }),
+    },
+  };
+  sandbox.window = sandbox;
+  sandbox.globalThis = sandbox;
+  vm.runInNewContext(exprAuto, sandbox);
+
+  assert.equal(doc.adoptedStyleSheets.length, 1, 'Ch1 must mount exactly 1 adoptedStyleSheet');
+  const runtimeCss = doc.adoptedStyleSheets[0].cssText;
+  assert.equal(runtimeCss, expandTopLevelIsCss(flatMin), 'Runtime adopted CSS must match expandTopLevelIsCss(flatMin) byte-for-byte');
+  const runtimeBuckets = countBuckets(runtimeCss);
+  assert.equal(runtimeBuckets['universal-via-:is'], 0, `Runtime universal-via-:is must drop to 0, got ${runtimeBuckets['universal-via-:is']}`);
+  const dropRatio = 1 - runtimeBuckets.totalUniversal / staticBuckets.totalUniversal;
+  assert.ok(
+    dropRatio >= 0.85,
+    `Runtime total universal_rules_ must drop >= 85% (${staticBuckets.totalUniversal} -> ${runtimeBuckets.totalUniversal}, ${(dropRatio * 100).toFixed(2)}%)`
+  );
+  assert.equal(runtimeCss.includes(':has('), false, 'Runtime expanded CSS must contain 0 :has(');
+  assert.equal(runtimeCss.includes('steps('), false, 'Runtime expanded CSS must contain 0 steps(');
+});

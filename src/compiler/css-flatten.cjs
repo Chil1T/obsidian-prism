@@ -5,6 +5,9 @@
 
 const GROUP_AT_RULE_RE = /^@(?:media|supports|container|layer|starting-style|scope)\b/i;
 const UNSAFE_VENDOR_SEL_RE = /(?:::?-(?:moz|ms|o)-)/i;
+const PSEUDO_ELEM_RE = /::|:(?:before|after|first-line|first-letter|-webkit-|-moz-|-ms-|-o-)/i;
+const ROOT_PREFIX_START_RE = /^(?:html|:root|body)(?=$|[\s>+~.:[#])/i;
+const ROOT_ANCESTOR_PREFIX_RE = /^(?:html|:root)(?:\[[^\]]*\]|:not\([^)]*\)|:is\([^)]*\)|:where\([^)]*\))*(?:>body(?:\[[^\]]*\]|:not\([^)]*\)|:is\([^)]*\)|:where\([^)]*\))*)?\s+$/i;
 
 function isUrlStart(s, i) {
   const c0 = s.charCodeAt(i);
@@ -274,10 +277,79 @@ function hasBalancedBraces(css) {
   return depth === 0;
 }
 
+// 提取选择器最右侧复合选择器起始偏移（跳过引号、括号与属性选择器内部）
+function findRightmostCompoundStart(sel) {
+  let lastComb = -1;
+  scanSelector(sel, (c, i, d) => {
+    if (!d && (c === ' ' || c === '>' || c === '+' || c === '~')) lastComb = i;
+    return true;
+  });
+  return lastComb + 1;
+}
+
+// 按 Blink RuleSet 分桶规则归类选择器 subject：id / class / attr / tag / universal-via-:is / universal-other
+function classifySelectorSubject(sel) {
+  if (typeof sel !== 'string' || !sel.trim()) return 'universal-other';
+  const start = findRightmostCompoundStart(sel);
+  const rc = sel.slice(start).trim();
+  let top = '';
+  let hasAttr = false;
+  let hasTopIs = false;
+  let d = 0;
+  for (let i = 0; i < rc.length; i++) {
+    const c = rc[i];
+    if (c === '\\') {
+      if (!d) top += rc.slice(i, i + 2);
+      i++;
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      i = skipQuoted(rc, i);
+      continue;
+    }
+    if (c === '[') {
+      if (!d) hasAttr = true;
+      d++;
+      continue;
+    }
+    if (c === ']') {
+      if (d) d--;
+      continue;
+    }
+    if (c === '(') {
+      if (!d && rc.slice(Math.max(0, i - 3), i) === ':is' && rc[i - 4] !== ':') hasTopIs = true;
+      d++;
+      continue;
+    }
+    if (c === ')') {
+      if (d) d--;
+      continue;
+    }
+    if (!d) top += c;
+  }
+  const noPseudo = top.replace(/::?[\w-]+/g, '');
+  if (/#[\w-]+/.test(noPseudo)) return 'id';
+  if (/\.[\w-]+/.test(noPseudo)) return 'class';
+  if (hasAttr) return 'attr';
+  if (/^[a-zA-Z][\w-]*/.test(noPseudo)) return 'tag';
+  if (hasTopIs) return 'universal-via-:is';
+  return 'universal-other';
+}
+
 function flattenNestedCss(rawCss, options = null) {
   if (typeof rawCss !== 'string' || !rawCss) return '';
   const supportsSelector = options && typeof options.supportsSelector === 'function' ? options.supportsSelector : null;
-  const shouldExpandTopLevelIs = Boolean(options && options.expandTopLevelIs === true);
+  const shouldExpandTopLevelIs = Boolean(options && options.expandTopLevelIs);
+  const expandMixedSpecificity = Boolean(
+    options && (options.expandMixedSpecificity === true || options.expandTopLevelIs === 'all')
+  );
+  const expandSubjectOnly = Boolean(options && options.subjectOnly === true);
+  const expandDescendantComplex = Boolean(
+    options && (options.expandDescendantComplex === true || options.expandTopLevelIs === 'all')
+  );
+  const maxDepth = Number.isInteger(options?.maxDepth) && options.maxDepth > 0 ? options.maxDepth : 10;
+  const maxPerSelector = Number.isInteger(options?.maxPerSelector) && options.maxPerSelector > 0 ? options.maxPerSelector : 400;
+  const maxPerRule = Number.isInteger(options?.maxPerRule) && options.maxPerRule > 0 ? options.maxPerRule : 800;
   const css = stripCssCommentsSafe(rawCss);
   if (!hasBalancedBraces(css)) return rawCss;
 
@@ -334,8 +406,14 @@ function flattenNestedCss(rawCss, options = null) {
     return out + child.slice(last);
   };
 
-  // 仅在匹配集合与特异性完全等价且不触及 :not()/:where()/:has()/属性内部时展开顶层 :is(...)
-  const expandTopLevelIs = (sel, from = 0) => {
+  // 展开顶层 :is(...)：跳过 :not()/:where()/:has()/属性/字符串，保护 vendor 伪元素、伪元素后置及祖先语义
+  const expandTopLevelIs = (sel, from = 0, depth = 0) => {
+    if (depth >= maxDepth || sel.indexOf(':is(', from) < 0) return [sel];
+    if (expandSubjectOnly) {
+      if (classifySelectorSubject(sel) !== 'universal-via-:is') return [sel];
+      const rStart = findRightmostCompoundStart(sel);
+      if (from < rStart) from = rStart;
+    }
     let at = -1;
     let end = -1;
     scanSelector(sel, (c, i, d) => {
@@ -358,25 +436,37 @@ function flattenNestedCss(rawCss, options = null) {
     const parts = splitTopLevelCommas(sel.slice(at + 4, end));
     const pre = sel.slice(0, at);
     const post = sel.slice(end + 1);
-    const fits = (p) =>
-      isCompoundSelector(p)
-        ? !pre || /[\s>+~(,]$/.test(pre) || !/^[\w*-]/.test(p)
-        : !pre.trim() && /^([\s>+~.:[#]|$)/.test(post);
+    const preTrim = pre.trim();
+    const preEndsSpace = /\s$/.test(pre);
+    const preIsRootAncestor = !preTrim || ROOT_ANCESTOR_PREFIX_RE.test(pre);
+    const preEndsComb = !pre || /[\s>+~(,]$/.test(pre);
+    const postOk = !post || /^[\s>+~.:[#]/.test(post);
+    const postHasNonPseudo = Boolean(post && post[0] !== ':');
+    const fits = (p) => {
+      if (post && PSEUDO_ELEM_RE.test(p) && (postHasNonPseudo || !/^:(?!:)/.test(post))) return false;
+      if (isCompoundSelector(p)) {
+        return preEndsComb || !/^[\w*-]/.test(p);
+      }
+      if (!postOk) return false;
+      if (!preTrim) return true;
+      if (!preEndsSpace || ROOT_PREFIX_START_RE.test(p)) return false;
+      return preIsRootAncestor || expandDescendantComplex;
+    };
 
-    if (!parts.length || parts.length > 40 || !sameSpecificity(parts) || !parts.every((p) => fits(p) && isOkSel(p))) {
-      return expandTopLevelIs(sel, end + 1);
+    const specOk = expandMixedSpecificity || sameSpecificity(parts);
+    if (!parts.length || parts.length > 48 || !specOk || !parts.every((p) => fits(p) && isOkSel(p))) {
+      return expandTopLevelIs(sel, end + 1, depth);
     }
     const res = [];
     for (let i = 0; i < parts.length; i++) {
-      const sub = expandTopLevelIs(pre + parts[i] + post, at);
+      const sub = expandTopLevelIs(pre + parts[i] + post, expandSubjectOnly ? 0 : at, depth + 1);
       for (let j = 0; j < sub.length; j++) {
-        if (res.push(sub[j]) > 200) return [sel];
+        if (res.push(sub[j]) > maxPerSelector) return [sel];
       }
     }
     return res;
   };
 
-  const PSEUDO_ELEM_RE = /::|:(?:before|after|first-line|first-letter|-webkit-|-moz-|-ms-|-o-)/i;
   const foldDescendantList = (P, children) => {
     const order = [];
     let curRun = null;
@@ -441,7 +531,7 @@ function flattenNestedCss(rawCss, options = null) {
       if (parentSels.length > 1 && (!sameSpecificity(parentSels) || list.length > 1 || parentSels.length * list.length > 200)) {
         const joinedParents = parentSels.join(',');
         list = list.map((c) => substParent(c, joinedParents, 0));
-      } else if (parentSels.length === 1 && list.length > 1 && parentSels[0].length >= 20) {
+      } else if (!shouldExpandTopLevelIs && parentSels.length === 1 && list.length > 1 && parentSels[0].length >= 20) {
         list = foldDescendantList(parentSels[0], list);
       } else {
         const combined = [];
@@ -458,10 +548,10 @@ function flattenNestedCss(rawCss, options = null) {
     if (!shouldExpandTopLevelIs) return list;
     const expanded = [];
     for (let i = 0; i < list.length; i++) {
-      const ex = expandTopLevelIs(list[i]);
+      const ex = expandTopLevelIs(list[i], 0, 0);
       for (let j = 0; j < ex.length; j++) {
         expanded.push(ex[j]);
-        if (expanded.length > 800) return list;
+        if (expanded.length > maxPerRule) return list;
       }
     }
     return expanded;
@@ -532,8 +622,161 @@ function flattenNestedCss(rawCss, options = null) {
   return flat;
 }
 
+// 对已扁平化 CSS 执行有上限、fail-open 的顶层 :is(...) 展开（与运行期加载展开保持一致语义，Ref: #151）
+function expandTopLevelIsCss(flatCss, options = null) {
+  if (typeof flatCss !== 'string' || !flatCss || flatCss.indexOf(':is(') < 0) return flatCss || '';
+  try {
+    const subjectOnly = options ? options.subjectOnly !== false : true;
+    const expandMixedSpecificity = options ? options.expandMixedSpecificity !== false : true;
+    const expandDescendantComplex = options ? options.expandDescendantComplex !== false : true;
+    const maxDepth = Number.isInteger(options?.maxDepth) && options.maxDepth > 0 ? options.maxDepth : 10;
+    const maxPerRule = Number.isInteger(options?.maxPerRule) && options.maxPerRule > 0 ? options.maxPerRule : 400;
+    const maxRules = Number.isInteger(options?.maxRules) && options.maxRules > 0 ? options.maxRules : 4000;
+    const supportsSelector = options && typeof options.supportsSelector === 'function' ? options.supportsSelector : null;
+    const specCache = new Map();
+    const getSpec = (s) => {
+      let v = specCache.get(s);
+      if (v === undefined) {
+        v = computeSelectorSpecificity(s);
+        specCache.set(s, v);
+      }
+      return v;
+    };
+    const sameSpec = (parts) => {
+      if (!parts.length) return false;
+      const b = getSpec(parts[0]);
+      if (b !== b) return false;
+      for (let i = 1; i < parts.length; i++) if (getSpec(parts[i]) !== b) return false;
+      return true;
+    };
+    const expandSel = (sel, from, depth) => {
+      if (depth >= maxDepth || sel.indexOf(':is(', from) < 0) return [sel];
+      if (subjectOnly) {
+        if (classifySelectorSubject(sel) !== 'universal-via-:is') return [sel];
+        const rStart = findRightmostCompoundStart(sel);
+        if (from < rStart) from = rStart;
+      }
+      let at = -1;
+      let end = -1;
+      scanSelector(sel, (c, i, d) => {
+        if (i >= from && d === 1 && c === '(' && sel.slice(i - 3, i) === ':is' && sel[i - 4] !== ':') {
+          at = i - 3;
+          return false;
+        }
+        return true;
+      });
+      if (at < 0) return [sel];
+      scanSelector(sel.slice(at), (c, i, d) => {
+        if (c === ')' && !d) {
+          end = at + i;
+          return false;
+        }
+        return true;
+      });
+      if (end < 0) return [sel];
+
+      const parts = splitTopLevelCommas(sel.slice(at + 4, end));
+      const pre = sel.slice(0, at);
+      const post = sel.slice(end + 1);
+      const preTrim = pre.trim();
+      const preEndsSpace = /\s$/.test(pre);
+      const preIsRoot = !preTrim || ROOT_ANCESTOR_PREFIX_RE.test(pre);
+      const preEndsComb = !pre || /[\s>+~(,]$/.test(pre);
+      const postOk = !post || /^[\s>+~.:[#]/.test(post);
+      const postHasNonPseudo = Boolean(post && post[0] !== ':');
+      const fits = (p) => {
+        if (post && PSEUDO_ELEM_RE.test(p) && (postHasNonPseudo || !/^:(?!:)/.test(post))) return false;
+        if (isCompoundSelector(p)) return preEndsComb || !/^[\w*-]/.test(p);
+        if (!postOk) return false;
+        if (!preTrim) return true;
+        if (!preEndsSpace || ROOT_PREFIX_START_RE.test(p)) return false;
+        return preIsRoot || expandDescendantComplex;
+      };
+      if (
+        !parts.length ||
+        parts.length > 48 ||
+        (!expandMixedSpecificity && !sameSpec(parts)) ||
+        !parts.every((p) => fits(p) && isSafeExpandableSelector(p, supportsSelector))
+      ) {
+        return expandSel(sel, end + 1, depth);
+      }
+      const res = [];
+      for (let i = 0; i < parts.length; i++) {
+        const sub = expandSel(pre + parts[i] + post, subjectOnly ? 0 : at, depth + 1);
+        for (let j = 0; j < sub.length; j++) {
+          if (res.push(sub[j]) > maxPerRule) return [sel];
+        }
+      }
+      return res;
+    };
+
+    let expandedBudget = 0;
+    const walkBlock = (src) => {
+      let out = '';
+      let i = 0;
+      const n = src.length;
+      while (i < n) {
+        const st = i;
+        let par = 0;
+        while (i < n) {
+          const c = src[i];
+          if (c === '\\') { i += 2; continue; }
+          if (c === '"' || c === "'") { i = skipQuoted(src, i) + 1; continue; }
+          if (isUrlStart(src, i)) { i = skipUrlToken(src, i) + 1; continue; }
+          if (c === '(' || c === '[') par++;
+          else if ((c === ')' || c === ']') && par) par--;
+          else if (!par && (c === '{' || c === ';')) break;
+          i++;
+        }
+        if (i >= n) {
+          out += src.slice(st);
+          break;
+        }
+        if (src[i] === ';') {
+          out += src.slice(st, i + 1);
+          i++;
+          continue;
+        }
+        const prelude = src.slice(st, i);
+        const endIdx = findMatchingBlockEnd(src, i + 1);
+        const body = src.slice(i + 1, endIdx);
+        i = endIdx + 1;
+        const pTrim = prelude.trim();
+        if (pTrim[0] === '@') {
+          out += GROUP_AT_RULE_RE.test(pTrim) ? prelude + '{' + walkBlock(body) + '}' : prelude + '{' + body + '}';
+        } else if (expandedBudget >= maxRules || prelude.indexOf(':is(') < 0) {
+          out += prelude + '{' + body + '}';
+        } else {
+          const sels = splitTopLevelCommas(prelude);
+          const expanded = [];
+          let overflow = false;
+          for (let k = 0; k < sels.length && !overflow; k++) {
+            const ex = expandSel(sels[k], 0, 0);
+            for (let m = 0; m < ex.length; m++) {
+              if (expanded.push(ex[m]) > maxPerRule) {
+                overflow = true;
+                break;
+              }
+            }
+          }
+          if (!overflow) expandedBudget += expanded.length;
+          out += (overflow ? prelude : expanded.join(',')) + '{' + body + '}';
+        }
+      }
+      return out;
+    };
+
+    const res = walkBlock(flatCss);
+    return res && hasBalancedBraces(res) ? res : flatCss;
+  } catch {
+    return flatCss;
+  }
+}
+
 module.exports = {
   flattenNestedCss,
+  expandTopLevelIsCss,
+  classifySelectorSubject,
   computeSelectorSpecificity,
   isSafeExpandableSelector,
   stripCssCommentsSafe,
