@@ -37,7 +37,6 @@
   };
   const PB = 'data-ag-cs-prism-box', PM = 'data-ag-cs-prism-mirror', CV_A = 'data-ag-cs-prism-cv', CV_C = 'ag-cs-prism-rim-cv', CV_S = '.' + CV_C;
   const CAP = { capture: true, passive: true };
-  const ANIM_SEL = '[data-ag-cs-prism-box="1"],[data-ag-cs-overview-shell="1"],.agy-overlay,[data-testid="step-plan"]';
 
   const parseAmbientScale = (r) =>
     G.__agPrismRipple?.parseAmbientScale
@@ -568,19 +567,20 @@
     };
     const onWinBlur = () => { if (!isDestroyed()) { clrRaf(); clrAll(); } };
     const syncBusRects = () => { if (!isDestroyed() && canDraw() && !rectAt) rdRec(); };
-    const onScroll = () => {
+    const ancOf = (a, b) => { if (!a || !b) return false; if (isFn(a.contains)) return a.contains(b); for (let c = b; c; c = c.parentElement) if (c === a) return true; return false; };
+    const isRootT = (t, d, w) => !t || t === d || t === d?.documentElement || t === d?.body || t === w;
+    const onScroll = (ev) => {
       if (isDestroyed()) return;
+      const t = ev?.target, d = getDoc(), w = typeof window !== 'undefined' ? window : d?.defaultView;
+      if (!isRootT(t, d, w) && !pBoxes.some((e) => ancOf(t, e?.box)) && !ancOf(t, orchE?.box)) return;
       rectAt = 0;
-      if (canDraw()) {
-        const bus = busOf();
-        if ((pBoxes.length || orchE) && bus?.measure) bus.measure('rim:rects', syncBusRects);
-        schedRaf();
-      }
+      if (canDraw()) { const bus = busOf(); if ((pBoxes.length || orchE) && bus?.measure) bus.measure('rim:rects', syncBusRects); schedRaf(); }
     };
     const onAnimEnd = (ev) => {
-      const t = !isDestroyed() && ev?.target;
-      if (!t || (t.nodeType !== undefined && t.nodeType !== 1)) return;
-      try { if (!t.closest?.(ANIM_SEL) && !t.querySelector?.(ANIM_SEL)) return; } catch { return; }
+      const t = !isDestroyed() && ev?.target, d = getDoc();
+      if (isRootT(t, d, null) || (t.nodeType !== undefined && t.nodeType !== 1)) return;
+      const hit = (b) => !!(b && (b === t || ancOf(t, b) || ancOf(b, t)));
+      if (!pBoxes.some((e) => hit(e?.box)) && !hit(orchE?.box)) return;
       rectAt = 0; pDirty = true; wake();
     };
     const bindEv = (m) => {

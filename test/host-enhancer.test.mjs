@@ -2311,14 +2311,14 @@ test('Dual-pane .agy-scroll-bottom strict local viewport isolation (subagent/sid
     assert.equal(mainVp.scrollTop, 1800, 'Main viewport must glide to its own bottom');
     assert.equal(subVp.scrollTop, 40, 'Scrolling main pane must NEVER move subagent viewport');
 
-    // 4) onWinScrollPassive supports local scrollable containers beyond S_CV without cross-pane bleed
+    // 4) Passive scroll no longer writes useless data-ag-scrolling="1" onto whole scope containers (only button itself marks during glide)
     env.win.dispatchEvent({ type: 'scroll', target: subVp });
-    assert.equal(subTab.getAttribute('data-ag-scrolling'), '1', 'Subagent viewport scroll must mark local subagent container');
+    assert.equal(subTab.hasAttribute('data-ag-scrolling'), false, 'Passive scroll must NOT stamp data-ag-scrolling onto whole subagent scope container');
     assert.equal(mainConv.hasAttribute('data-ag-scrolling'), false, 'Subagent scroll must not mark main conversation');
 
     env.win.dispatchEvent({ type: 'scroll', target: sidePlainScroll });
-    assert.equal(sideQ.getAttribute('data-ag-scrolling'), '1', 'Plain local scrollable container in side-question-panel must mark its local scope');
-    assert.equal(subTab.hasAttribute('data-ag-scrolling'), false, 'Switching active scroll scope must clear previous scope marker');
+    assert.equal(sideQ.hasAttribute('data-ag-scrolling'), false, 'Passive scroll must NOT stamp data-ag-scrolling onto whole side-question scope container');
+    assert.equal(subTab.hasAttribute('data-ag-scrolling'), false);
     assert.equal(mainConv.hasAttribute('data-ag-scrolling'), false);
   } finally {
     ctl.destroy();

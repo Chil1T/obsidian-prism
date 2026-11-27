@@ -2391,7 +2391,7 @@
       const direct = syncDirectMotionDomAttr(actor, actor.el);
       const depth = actor.stackedOn ? getStackDepth(actor.id) : 0;
       const tx = snapCoord(actor.x, direct);
-      const ty = snapCoord(yPx, direct);
+      const ty = snapCoord(yPx + (now < actor.nodUntil ? actor.nodY : 0), direct);
       const tz = yieldMode === 'peek' ? '8' : actor.dragging ? '38' : depth > 0 ? String(24 + depth * 2) : '24';
       if (actor.lastDomX !== tx || actor.lastDomY !== ty) {
         actor.lastDomX = tx;
@@ -2401,14 +2401,12 @@
       } else {
         perfStats.domTransformSkips += 1;
       }
-      // 60fps GPU 倾角同步到内层 canvas（外层 actor.el 维持纯 translate3d 兼容），静止 rot=0 清回 ''
+      // 60fps GPU rot on inner canvas
       const nextRot = snapRot(inspectState ? 0 : effectiveRot(actor, now));
       if (actor.lastDomRot !== nextRot) {
         actor.lastDomRot = nextRot;
         actor.lastRender.lastRot = nextRot;
-        if (actor.canvas && actor.canvas.style) {
-          actor.canvas.style.transform = nextRot ? `rotate(${nextRot}deg)` : '';
-        }
+        if (actor.canvas?.style) actor.canvas.style.transform = nextRot ? `rotate(${nextRot}deg)` : '';
         perfStats.domTransformWrites += 1;
       }
       if (actor.lastDomZ !== tz) {
@@ -2862,7 +2860,7 @@
         const effectivePose = inspectState ? inspectState.pose : hasRider && pose === 'idle' ? 'squash' : pose;
         const sulkJitter = effectivePose === 'sulk' && !reducedMotion && !inspectState ? (tickIdx % 4 < 2 ? 0 : -PX) : 0;
         const liftPx = st?.lift && !reducedMotion ? st.lift * PX : 0;
-        const nodOffset = (now < a.nodUntil ? a.nodY : 0) + sulkJitter + liftPx;
+        const nodOffset = sulkJitter + liftPx;
         let sqW = inspectState ? inspectState.sqW : st ? st.sqW : 0;
         let sqH = inspectState ? inspectState.sqH : st ? st.sqH : 0;
         if (!inspectState && !st && hasRider && pose !== 'idle') sqH = -1;
@@ -2912,7 +2910,6 @@
         const snappedTy = round(Number(nodOffset || 0) / PX) * PX;
         const frameIdx = computeLayersFrameIdx(layers);
         const rc = a.lastRender;
-        // 像素层仅在精灵帧/朝向/表情/挤压/尺寸等真实像素内容变化时重绘，物理位移与倾角 rot 由 GPU transform 实时驱动
         if (
           rc.poseKey === effectivePose &&
           rc.frameIdx === frameIdx &&
@@ -3980,8 +3977,8 @@
     const startMiniBallistic = startEntityBallistic;
 
     const dragReleaseHooks = [];
-    let dragRafPending = false;
-    let dragRafId = 0;
+    let dragRafPending = false, dragRafId = 0, typeRaf = 0;
+    const schedTypeRender = () => { if (!disposed && !typeRaf) typeRaf = rAF(() => { typeRaf = 0; if (!disposed) renderAllFrames(); }); };
     const cAF =
       (win && isFn(win.cancelAnimationFrame) && win.cancelAnimationFrame.bind(win)) ||
       (typeof cancelAnimationFrame === 'function' ? cancelAnimationFrame : null);
@@ -5214,28 +5211,23 @@
         markActivity();
         const workers = workingActors();
         if (!workers.length) return;
-        const trimmed = String(text || '').replace(/\s+$/, '');
-        if (/[?？]$/.test(trimmed)) {
-          for (const w of workers) startClip(w, 'tilt', 750, { rot: -9, sym: 'q' });
-        } else if (/[!！]$/.test(trimmed)) {
-          for (const w of workers) startClip(w, 'wow', 700, { sym: 'bang' });
+        const s = typeof text === 'string' ? text : '';
+        const tail = (s.length > 16 ? s.slice(-16) : s).trimEnd().slice(-4);
+        if (/[?？]$/.test(tail)) {
+          for (const w of workers) { startClip(w, 'tilt', 750, { rot: -9, sym: 'q' }); applyActorTransform(w, now); }
+        } else if (/[!！]$/.test(tail)) {
+          for (const w of workers) { startClip(w, 'wow', 700, { sym: 'bang' }); applyActorTransform(w, now); }
         } else {
-          for (const w of workers) {
-            w.nodY = PX; // 打字点头：整格下沉 1 格
-            w.nodUntil = now + 140;
-            w.eyeScan = 0;
-          }
+          for (const w of workers) { w.nodY = PX; w.nodUntil = now + 140; w.eyeScan = 0; }
           clearTimeout(pauseTimer);
           pauseTimer = setTimeout(() => {
             if (disposed) return;
             for (const w of workingActors()) w.eyeScan = tickIdx % 2 ? -1 : 1;
-            renderAllFrames();
-            later(500, () => {
-              for (const w of activeMainActors()) w.eyeScan = 0;
-            });
+            schedTypeRender();
+            later(500, () => { for (const w of activeMainActors()) w.eyeScan = 0; });
           }, 450);
         }
-        renderAllFrames(now);
+        schedTypeRender();
       },
       setRimLight(n = null) {
         if (disposed) return;
@@ -5364,6 +5356,7 @@
         if (tickTimer !== null) { clearInterval(tickTimer); tickTimer = null; }
         currentTickMs = 0;
         if (dragRafId && cAF) { try { cAF(dragRafId); } catch {} dragRafId = 0; }
+        if (typeRaf && cAF) { try { cAF(typeRaf); } catch {} typeRaf = 0; }
         dragRafPending = false;
         if (resizeRaf && cAF) { try { cAF(resizeRaf); } catch {} resizeRaf = 0; }
         clearTimeout(pauseTimer); clearTimeout(theaterTimer);

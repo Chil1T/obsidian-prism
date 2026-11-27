@@ -13,29 +13,35 @@
   }
 
   function createSmoothCaretController({ isDestroyed, isEnabled, setAttrIfChanged, runGuardedMut }) {
-    let caretTypingTimer = null;
-    let caretRaf = 0;
-    let pendingCaretTyping = false;
-    let pendingCaretRefreshMetrics = false;
-    let pendingCaretScroll = false;
-    let editorMetricsEpoch = 1;
-    let cachedEditors = [];
-    let lastEditorScanAt = 0;
-    const editorMetricsCache = new WeakMap();
+    let caretTypingTimer = null, caretRaf = 0, lastBlinkHoldAt = 0;
+    let pendingCaretTyping = false, pendingCaretRefreshMetrics = false, pendingCaretScroll = false;
+    let editorMetricsEpoch = 1, cachedEditors = [], lastEditorScanAt = 0;
+    const editorMetricsCache = new WeakMap(), caretPrevState = new WeakMap(), caretNodeCache = new WeakMap(), selectionSigCache = new WeakMap();
     let emptyCaretProbeCache = new WeakMap();
-    const caretPrevState = new WeakMap();
-    const caretNodeCache = new WeakMap();
-    const selectionSigCache = new WeakMap();
+
+    const isBlankTxt = (n) => { const v = n.data ?? n.nodeValue ?? ''; return !v.length || (v.length === 1 && v.charCodeAt(0) === 0x200b); };
+    const isEditorQuickEmpty = (ed, fn) => {
+      if (!ed) return true;
+      const ch = ed.children, cns = ed.childNodes;
+      if ((ch && ch.length > 1) || (fn?.nodeType === 3 && !isBlankTxt(fn))) return false;
+      if (!ch && !cns) return !(ed.textContent && ed.textContent.replace(/\u200b/g, '').length);
+      if (cns && cns.length > 1) return false;
+      let cur = (ch && ch[0]) || ed.firstChild || (cns && cns[0]) || null;
+      for (let d = 0; d < 3; d++) {
+        if (!cur || cur.nodeName === 'BR') return true;
+        if (cur.nodeType === 3) return isBlankTxt(cur);
+        const k = cur.childNodes;
+        if (!k || !k.length) return d < 2;
+        if (k.length > 1) return false;
+        cur = k[0];
+      }
+      return false;
+    };
 
     function teardown() {
-      if (caretTypingTimer) {
-        clearTimeout(caretTypingTimer);
-        caretTypingTimer = null;
-      }
-      if (caretRaf && typeof cancelAnimationFrame === 'function') {
-        cancelAnimationFrame(caretRaf);
-        caretRaf = 0;
-      }
+      if (caretTypingTimer) { clearTimeout(caretTypingTimer); caretTypingTimer = null; }
+      if (caretRaf && typeof cancelAnimationFrame === 'function') { cancelAnimationFrame(caretRaf); caretRaf = 0; }
+      lastBlinkHoldAt = 0;
       pendingCaretTyping = false;
       pendingCaretRefreshMetrics = false;
       pendingCaretScroll = false;
@@ -95,6 +101,7 @@
         }
       };
 
+      const okR = (r) => !!(r && r.height > 0 && (r.left > 0 || r.top > 0));
       if (typeof document !== 'undefined' && typeof document.getSelection === 'function') {
         const sel = document.getSelection();
         if (sel && sel.rangeCount > 0) {
@@ -103,59 +110,31 @@
           if (!isCol0) return { collapsed: false };
           if (range && ed.contains && ed.contains(range.startContainer)) {
             const rects = typeof range.getClientRects === 'function' ? range.getClientRects() : [];
-            const r0 =
-              rects && rects.length > 0
-                ? rects[rects.length - 1]
-                : typeof range.getBoundingClientRect === 'function'
-                ? range.getBoundingClientRect()
-                : null;
-            if (r0 && r0.height > 0 && (r0.left > 0 || r0.top > 0)) {
-              return checkScrollBounds({ collapsed: true, left: r0.left, top: r0.top, height: r0.height });
-            }
-
-            const sc = range.startContainer;
-            const so = range.startOffset;
-            if (sc?.nodeName === 'BR' && typeof sc.getBoundingClientRect === 'function') {
-              const brRect = sc.getBoundingClientRect();
-              if (brRect && brRect.height > 0 && (brRect.left > 0 || brRect.top > 0)) {
-                if (!ed.textContent) cacheEmptyProbe(brRect);
-                return checkScrollBounds({ collapsed: true, left: brRect.left, top: brRect.top, height: brRect.height });
-              }
-            }
+            const r0 = rects && rects.length > 0 ? rects[rects.length - 1] : range.getBoundingClientRect?.() || null;
+            if (okR(r0)) return checkScrollBounds({ collapsed: true, left: r0.left, top: r0.top, height: r0.height });
+            const sc = range.startContainer, so = range.startOffset;
+            const brBox = (n, chkSingle) => {
+              const r = n?.nodeName === 'BR' ? n.getBoundingClientRect?.() : null;
+              if (!okR(r)) return null;
+              if ((!chkSingle || sc.childNodes.length <= 1) && isEditorQuickEmpty(ed, sc)) cacheEmptyProbe(r);
+              return checkScrollBounds({ collapsed: true, left: r.left, top: r.top, height: r.height });
+            };
+            const b0 = brBox(sc, false);
+            if (b0) return b0;
             if (sc && sc.nodeType === 1) {
-              const childAt = sc.childNodes?.[so];
-              if (childAt?.nodeName === 'BR' && typeof childAt.getBoundingClientRect === 'function') {
-                const brRect = childAt.getBoundingClientRect();
-                if (brRect && brRect.height > 0 && (brRect.left > 0 || brRect.top > 0)) {
-                  if (sc.childNodes.length <= 1 && !ed.textContent) cacheEmptyProbe(brRect);
-                  return checkScrollBounds({ collapsed: true, left: brRect.left, top: brRect.top, height: brRect.height });
-                }
+              const b1 = brBox(sc.childNodes?.[so], true);
+              if (b1) return b1;
+              const cp = so > 0 ? sc.childNodes?.[so - 1] : null, br = cp?.nodeName === 'BR' ? cp.getBoundingClientRect?.() : null;
+              if (okR(br)) {
+                const mg = cp.hasAttribute?.('data-lexical-managed-linebreak') || sc.childNodes.length === 1;
+                const sr = sc.getBoundingClientRect?.();
+                const box = { collapsed: true, left: sr && sr.left > 0 ? sr.left : br.left, top: mg ? br.top : br.bottom, height: br.height };
+                if (mg && sc.childNodes.length <= 1 && isEditorQuickEmpty(ed, sc)) cacheEmptyProbe(box);
+                return checkScrollBounds(box);
               }
-              const childPrev = so > 0 ? sc.childNodes?.[so - 1] : null;
-              if (childPrev?.nodeName === 'BR' && typeof childPrev.getBoundingClientRect === 'function') {
-                const brRect = childPrev.getBoundingClientRect();
-                if (brRect && brRect.height > 0 && (brRect.left > 0 || brRect.top > 0)) {
-                  const isManagedEmptyLine =
-                    (typeof childPrev.hasAttribute === 'function' && childPrev.hasAttribute('data-lexical-managed-linebreak')) ||
-                    sc.childNodes.length === 1;
-                  const scRect = typeof sc.getBoundingClientRect === 'function' ? sc.getBoundingClientRect() : null;
-                  const lineLeft = scRect && scRect.left > 0 ? scRect.left : brRect.left;
-                  const lineTop = isManagedEmptyLine ? brRect.top : brRect.bottom;
-                  const box = { collapsed: true, left: lineLeft, top: lineTop, height: brRect.height };
-                  if (isManagedEmptyLine && sc.childNodes.length <= 1 && !ed.textContent) cacheEmptyProbe(box);
-                  return checkScrollBounds(box);
-                }
-              }
-              if (typeof sc.getBoundingClientRect === 'function' && sc !== ed) {
-                const scRect = sc.getBoundingClientRect();
-                if (scRect && (scRect.left > 0 || scRect.top > 0)) {
-                  return checkScrollBounds({
-                    collapsed: true,
-                    left: scRect.left,
-                    top: scRect.top,
-                    height: Math.min(estGlyphH, scRect.height || estGlyphH),
-                  });
-                }
+              if (sc !== ed) {
+                const sr = sc.getBoundingClientRect?.();
+                if (sr && (sr.left > 0 || sr.top > 0)) return checkScrollBounds({ collapsed: true, left: sr.left, top: sr.top, height: Math.min(estGlyphH, sr.height || estGlyphH) });
               }
             }
           }
@@ -225,11 +204,13 @@
         const isCol = r0 && typeof r0.collapsed === 'boolean' ? r0.collapsed : rc > 0 ? Boolean(sel.isCollapsed) : true;
         const fNode = r0 && r0.endContainer !== undefined ? r0.endContainer : rc > 0 ? sel.focusNode : null;
         const fOff = r0 && typeof r0.endOffset === 'number' ? r0.endOffset : rc > 0 ? sel.focusOffset : -1;
-        const childCnt = ed.childNodes ? ed.childNodes.length : 0;
+        const childCnt = ed.children ? ed.children.length : (ed.childNodes ? ed.childNodes.length : 0);
         const textSig =
           fNode && typeof fNode.nodeValue === 'string'
             ? fNode.nodeValue.length
-            : (ed.firstChild && typeof ed.firstChild.textContent === 'string' ? ed.firstChild.textContent.length : (ed.textContent || '').length);
+            : fNode && fNode.childNodes
+            ? fNode.childNodes.length
+            : (ed.childNodes ? ed.childNodes.length : 0);
         const prevSig = selectionSigCache.get(ed);
         const alreadySynced = Boolean(prevSig) && (ed.hasAttribute?.('data-ag-cs-smooth-caret') || prevSig.hidden);
         let sameSelection = false;
@@ -276,8 +257,7 @@
         });
         const clientLeft = host.clientLeft || 0;
         const clientTop = host.clientTop || 0;
-        const cleanText = (ed.textContent || '').replace(/\u200b/g, '');
-        const isNowEmpty = cleanText.length === 0 && ed.querySelectorAll('p, div').length <= 1;
+        const isNowEmpty = isEditorQuickEmpty(ed, fNode);
         list.push({
           ed,
           host,
@@ -354,18 +334,14 @@
           if (isFocused) {
             setAttrIfChanged(caret, 'data-ag-cs-caret-visible', '1');
             setAttrIfChanged(ed, 'data-ag-cs-smooth-caret', '1');
-            if (isTypingEvent) {
+            const armTypingHold = (ms) => {
+              lastBlinkHoldAt = Date.now();
               setAttrIfChanged(caret, 'data-ag-cs-caret-typing', '1');
               if (caretTypingTimer) clearTimeout(caretTypingTimer);
-              caretTypingTimer = setTimeout(() => {
-                caretTypingTimer = null;
-                if (caret.isConnected) caret.removeAttribute('data-ag-cs-caret-typing');
-              }, 420);
-            } else if (prev && (prev.x !== x || prev.y !== y) && typeof caret.getAnimations === 'function') {
-              for (const anim of caret.getAnimations()) {
-                if (anim && anim.animationName === 'ag-cs-caret-blink') anim.currentTime = 0;
-              }
-            }
+              caretTypingTimer = setTimeout(() => { caretTypingTimer = null; if (caret.isConnected) caret.removeAttribute('data-ag-cs-caret-typing'); }, ms);
+            };
+            if (isTypingEvent) armTypingHold(420);
+            else if (prev && (prev.x !== x || prev.y !== y) && Date.now() - lastBlinkHoldAt >= 60) armTypingHold(220);
           } else {
             if (caret.hasAttribute('data-ag-cs-caret-visible')) caret.removeAttribute('data-ag-cs-caret-visible');
             if (ed.hasAttribute('data-ag-cs-smooth-caret')) ed.removeAttribute('data-ag-cs-smooth-caret');

@@ -268,23 +268,18 @@ test('w6-1: host-workbench-enhancer eliminates scroll layout thrashing, skips co
   });
 
   try {
-    // 1a) First scroll goes through domBus.measure -> domBus.mutate (strict Read-before-Write)
+    // 1a) Passive scroll no longer performs scrollHeight layout reads or writes useless data-ag-scrolling="1" onto whole scope container
     win.dispatchEvent({ type: 'scroll', target: scroller });
-    assert.equal(scope.getAttribute('data-ag-scrolling'), null, 'Scroll mark must wait for batched mutate phase when domBus is present');
-    assert.equal(measureCalls, 1);
     bus.flushNow();
-    assert.equal(scope.getAttribute('data-ag-scrolling'), '1', 'Batched mutate must stamp data-ag-scrolling="1"');
-    const idxLayout = events.indexOf('layout:scrollHeight');
-    const idxWrite = events.indexOf('dom:set-scrolling');
-    assert.ok(idxLayout >= 0 && idxWrite > idxLayout, 'scrollHeight read must strictly precede data-ag-scrolling write');
-    assert.equal(scrollHeightReads, 1);
-    assert.equal(setScrollingCount, 1);
+    assert.equal(scope.hasAttribute('data-ag-scrolling'), false, 'Passive scroll must NOT stamp data-ag-scrolling="1" onto whole scope container');
+    assert.equal(scrollHeightReads, 0, 'Passive scroll must trigger 0 scrollHeight layout reads');
+    assert.equal(setScrollingCount, 0, 'Passive scroll must trigger 0 scope data-ag-scrolling DOM writes');
 
-    // 1b) 50 subsequent scroll events on same target only renew timer: 0 extra scrollHeight reads & 0 extra DOM writes
+    // 1b) 50 subsequent scroll events on same target remain 0 layout reads & 0 scope DOM writes
     for (let i = 0; i < 50; i++) win.dispatchEvent({ type: 'scroll', target: scroller });
     bus.flushNow();
-    assert.equal(scrollHeightReads, 1, 'Repeated scroll events must perform 0 redundant scrollHeight reads');
-    assert.equal(setScrollingCount, 1, 'Repeated scroll events must perform 0 redundant DOM writes');
+    assert.equal(scrollHeightReads, 0, 'Repeated scroll events must perform 0 scrollHeight reads');
+    assert.equal(setScrollingCount, 0, 'Repeated scroll events must perform 0 scope DOM writes');
 
     // 1c) Code block sync in hot/scrolling phase avoids full bodyWrap.textContent concatenation
     ctl.sync();

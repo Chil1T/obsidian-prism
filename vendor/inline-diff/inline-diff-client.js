@@ -453,9 +453,19 @@ if(kids.length===2){const o=kids.find((k)=>k!==badgeEl&&!k.contains?.(badgeEl)),
 }
 return null;
 }
-function syncChips(){
+function syncChips(scope=null){
 if(isDead()||!doc?.querySelectorAll)return;
-const badges=qa(doc,S_CNT);if(!badges.length)return;
+let badges;
+if(scope&&scope!==doc){
+const list=Array.isArray(scope)?scope:[scope],seen=new Set();
+badges=[];
+for(let i=0;i<list.length;i++){
+const sc=list[i];if(!sc||sc.isConnected===false)continue;
+if(ga(sc,'data-testid')==='diff-line-count'){if(!seen.has(sc)){seen.add(sc);badges.push(sc);}}
+else if(isFn(sc.querySelectorAll))for(const b of qa(sc,S_CNT))if(!seen.has(b)){seen.add(b);badges.push(b);}
+}
+}else badges=qa(doc,S_CNT);
+if(!badges.length)return;
 mut(()=>{
 for(const b of badges){
 if(!b||cl(b,S_CHG))continue;
@@ -579,7 +589,7 @@ if(isFn(win?.addEventListener))for(const[t,fn,o]of EVS)win.addEventListener(t,fn
 ensureStyle();
 
 function unbindHooks(){hookT=baseT;hookGetLang=baseGetLang;hookMut=baseMut;hookSetA=baseSetA;}
-function sync(nextCfg,hooks){if(isDead())return;if(isObj(nextCfg))cfg={...cfg,...nextCfg};if(isObj(hooks)){if(isFn(hooks.t))hookT=hooks.t;if(isFn(hooks.getLang))hookGetLang=hooks.getLang;if(isFn(hooks.runGuardedMut))hookMut=hooks.runGuardedMut;if(isFn(hooks.setAttrIfChanged))hookSetA=hooks.setAttrIfChanged;}ensureStyle();syncChips();}
+function sync(nextCfg,hooks){if(isDead())return;if(isObj(nextCfg))cfg={...cfg,...nextCfg};if(isObj(hooks)){if(isFn(hooks.t))hookT=hooks.t;if(isFn(hooks.getLang))hookGetLang=hooks.getLang;if(isFn(hooks.runGuardedMut))hookMut=hooks.runGuardedMut;if(isFn(hooks.setAttrIfChanged))hookSetA=hooks.setAttrIfChanged;}ensureStyle();syncChips(hooks?.scope||hooks?.scopes||null);}
 function destroy(){
 if(dead)return;dead=true;
 for(const tid of animTimers)clearTimeout(tid);animTimers.clear();
