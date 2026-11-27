@@ -107,6 +107,9 @@ export async function validateCompileCacheDir(dirPath, { allowedBaseDir = '' } =
   if (path.basename(realDir).toLowerCase() !== 'compile-cache') {
     return { ok: false, reason: 'realpath-escape' };
   }
+  if (path.basename(path.dirname(realDir)).toLowerCase() !== 'obsidian-prism') {
+    return { ok: false, reason: 'realpath-invalid-parent' };
+  }
   if (allowedBaseDir) {
     let realBase;
     try {

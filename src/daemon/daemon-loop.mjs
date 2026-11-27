@@ -79,6 +79,7 @@ export class DaemonLoop {
     invokeLog = null,
     enableCompileCacheGuard = !isAutomatedTestRuntime(),
     compileCacheDir = '',
+    compileCacheAllowedBaseDir = '',
     compileCacheCleanupDelayMs = DEFAULT_COMPILE_CACHE_CLEANUP_DELAY_MS,
   } = {}) {
     this.pollIntervalMs = Math.max(200, Number(pollIntervalMs) || 3000);
@@ -118,6 +119,10 @@ export class DaemonLoop {
     this._pendingTick = false;
     this._enableCompileCacheGuard = Boolean(enableCompileCacheGuard);
     this._compileCacheDir = typeof compileCacheDir === 'string' && compileCacheDir.trim() ? compileCacheDir.trim() : '';
+    this._compileCacheAllowedBaseDir =
+      typeof compileCacheAllowedBaseDir === 'string' && compileCacheAllowedBaseDir.trim()
+        ? compileCacheAllowedBaseDir.trim()
+        : '';
     this._compileCacheCleanupDelayMs = Math.max(0, Number(compileCacheCleanupDelayMs) || 0);
     this._compileCacheMaint = null;
   }
@@ -630,9 +635,12 @@ export class DaemonLoop {
     void this._tick();
     upd.startTimers();
     if (this._enableCompileCacheGuard) {
+      const ccDir = this._compileCacheDir || resolveDefaultCompileCacheDir();
+      const ccAllowedBase = this._compileCacheAllowedBaseDir || path.dirname(path.resolve(ccDir));
       this._compileCacheMaint?.cancel?.();
       this._compileCacheMaint = scheduleCompileCacheMaintenance({
-        dirPath: this._compileCacheDir || resolveDefaultCompileCacheDir(),
+        dirPath: ccDir,
+        allowedBaseDir: ccAllowedBase,
         delayMs: this._compileCacheCleanupDelayMs,
         isRunning: () => this.running,
         log: (m) => this.log(m),

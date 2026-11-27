@@ -677,9 +677,30 @@ test('Wave P3-D: compile-cache governance gates short-lived CLI/tests, prunes ol
     fs.mkdirSync(externalDir, { recursive: true });
     fs.writeFileSync(externalFile, '{"secret":"must-stay"}', 'utf8');
 
-    // Reject non-compile-cache dir name & outside-base path
+    // Reject non-compile-cache dir name, outside-base path, and realDir parent !== obsidian-prism
     assert.equal((await validateCompileCacheDir(externalDir, { allowedBaseDir: allowedParent })).ok, false);
     assert.equal((await validateCompileCacheDir(path.join(tmpBase, 'other', 'compile-cache'), { allowedBaseDir: allowedParent })).ok, false);
+    const wrongParent = path.join(tmpBase, 'not-obsidian-prism');
+    const wrongParentCache = path.join(wrongParent, 'compile-cache');
+    fs.mkdirSync(wrongParentCache, { recursive: true });
+    const wrongParentRes = await validateCompileCacheDir(wrongParentCache, { allowedBaseDir: wrongParent });
+    assert.equal(wrongParentRes.ok, false, 'validateCompileCacheDir must reject realDir whose parent is not obsidian-prism even when inside allowedBaseDir');
+    assert.equal(wrongParentRes.reason, 'realpath-invalid-parent');
+
+    // Best-effort symlinked obsidian-prism parent escaping to a non-obsidian-prism realDir parent
+    const linkParent = path.join(tmpBase, 'link-box', 'obsidian-prism');
+    fs.mkdirSync(path.dirname(linkParent), { recursive: true });
+    let parentLinkCreated = false;
+    try {
+      fs.symlinkSync(wrongParent, linkParent, process.platform === 'win32' ? 'junction' : 'dir');
+      parentLinkCreated = true;
+    } catch {}
+    if (parentLinkCreated) {
+      const escapedRes = await validateCompileCacheDir(path.join(linkParent, 'compile-cache'), { allowedBaseDir: linkParent });
+      assert.equal(escapedRes.ok, false, 'symlinked obsidian-prism parent resolving to non-obsidian-prism must fail-closed');
+      assert.equal(escapedRes.reason, 'realpath-invalid-parent');
+    }
+
     assert.equal((await validateCompileCacheDir(cacheDir, { allowedBaseDir: allowedParent })).ok, true);
 
     // Seed 10 cache files with staggered mtimes (0 = oldest, 9 = newest)
@@ -736,6 +757,14 @@ test('Wave P3-D: compile-cache governance gates short-lived CLI/tests, prunes ol
     await daemon.stop(false, { skipAutoArchive: true });
     assert.equal(fakeMaint.cancelled, true, 'DaemonLoop.stop() must invoke cancel() on compile-cache maintenance handle');
     assert.equal(daemon.daemonLoop._compileCacheMaint, null, 'DaemonLoop.stop() must clear _compileCacheMaint handle');
+
+    // P2-3: DaemonLoop passes allowedBaseDir to scheduleCompileCacheMaintenance
+    const loopSrc = fs.readFileSync(path.join(ROOT, 'src', 'daemon', 'daemon-loop.mjs'), 'utf8');
+    assert.match(
+      loopSrc,
+      /scheduleCompileCacheMaintenance\(\{[\s\S]*?allowedBaseDir:\s*ccAllowedBase/,
+      'daemon-loop.mjs must pass explicit allowedBaseDir into scheduleCompileCacheMaintenance'
+    );
   } finally {
     fs.rmSync(tmpBase, { recursive: true, force: true });
   }

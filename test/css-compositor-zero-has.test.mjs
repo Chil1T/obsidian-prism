@@ -614,6 +614,10 @@ test('Wave P3-B: overview-panel frosted-glass GPU layer decoupling & Top expensi
     .find((l) => l.includes(':is([data-ag-cs-overview-shell="1"],.animate-overview-panel){background:0 0!important;backdrop-filter:none!important;')) || '';
   assert.ok(ovDecoupleLine, 'style.css must strip backdrop-filter from overview shell container itself');
   assert.ok(
+    ovDecoupleLine.includes('backdrop-filter:none!important;isolation:isolate;'),
+    'overview shell and .animate-overview-panel must set isolation:isolate so ::before z-index:-1 cannot bleed into parent stacking context'
+  );
+  assert.ok(
     ovDecoupleLine.includes('&::before{content:"";position:absolute;inset:0;z-index:-1;border-radius:inherit;pointer-events:none;contain:layout style paint;transform:translateZ(0);') &&
       ovDecoupleLine.includes('backdrop-filter:blur(16px) saturate(140%)!important'),
     'overview shell must host static blur(16px) saturate(140%) on isolated GPU ::before layer'
