@@ -557,3 +557,42 @@ test('6. style.css bottom-0 fade overlay mask rule excludes [data-testid="conver
     );
   }
 });
+
+test('sidebar conversation rows unify padding-left:30px!important so pinned rows align with grouped rows and clear the left accent bar', () => {
+  const targetSel = 'html[data-ag-cs-style][data-ag-cs-sidebar="on"] [data-testid="conversation-row-sidebar"]';
+  const flatRules = [...flatStyleCss.matchAll(/([^{}]+)\{([^{}]+)\}/g)];
+  const baseRowRule = flatRules.find((m) => m[1].trim() === targetSel && m[2].includes('padding-block:4px!important'));
+  assert.ok(baseRowRule, `flattened CSS must contain base sidebar row rule for ${targetSel}`);
+  const decls = baseRowRule[2];
+  assert.ok(
+    decls.includes('padding-left:30px!important'),
+    `base sidebar row rule must enforce padding-left:30px!important to align px-2 pinned rows with pl-[30px] normal rows: ${decls}`
+  );
+  assert.equal(
+    /(?:^|;)padding(?:-right|-inline)?\s*:/.test(decls),
+    false,
+    `base sidebar row rule must not use padding/padding-right/padding-inline shorthand that could clobber host pr-2 or trigger CSSOM bugs: ${decls}`
+  );
+
+  // Compact sidebar mode must keep inheriting padding-left:30px without resetting horizontal padding
+  const compactSel = 'html[data-ag-cs-style][data-ag-cs-sidebar="on"][data-ag-cs-sidebar-compact="on"] [data-testid="conversation-row-sidebar"]';
+  const compactRowRule = flatRules.find((m) => m[1].trim() === compactSel);
+  assert.ok(compactRowRule, `flattened CSS must retain compact sidebar row rule for ${compactSel}`);
+  assert.equal(
+    /padding-left\s*:/.test(compactRowRule[2]),
+    false,
+    `compact sidebar row rule must inherit padding-left:30px!important without overriding it: ${compactRowRule[2]}`
+  );
+
+  // Top sidebar nav buttons and project headers must NEVER receive padding-left:30px!important
+  const pl30Rules = flatRules.filter((m) => m[2].includes('padding-left:30px!important'));
+  assert.equal(pl30Rules.length, 1, `expected exactly 1 padding-left:30px!important rule, got ${pl30Rules.length}`);
+  assert.equal(pl30Rules[0][1].trim(), targetSel);
+  for (const excluded of ['new-conversation-button', 'automations-button', 'project-header']) {
+    assert.equal(
+      pl30Rules[0][1].includes(excluded),
+      false,
+      `padding-left:30px!important must never target ${excluded}`
+    );
+  }
+});
