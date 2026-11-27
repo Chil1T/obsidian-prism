@@ -606,7 +606,7 @@ onComposerRimUpdate: (info) => safe(() => msRig?.setRimLight?.(info)),
 
 const smoothCaretCtl = smoothCaretMod?.createSmoothCaretController
 ? smoothCaretMod.createSmoothCaretController({ isDestroyed: () => destroyed, isEnabled: isCaretOn, setAttrIfChanged, runGuardedMut })
-: mkStub('queue|sync|applyMutations|measureSnapshot|bumpMetricsEpoch|teardown');
+: mkStub('queue|sync|applyMutations|measureSnapshot|bumpMetricsEpoch|invalidateSelection|teardown');
 
 const iconPendSig = new WeakMap(), A_IC = 'data-ag-cs-icon-injected', A_OS = 'data-ag-cs-orig-svg', A_OD = 'data-ag-cs-orig-disp';
 const applySingleHostIcon = (btn, iconName, origSvg, size, eqSig) => {
@@ -2040,7 +2040,7 @@ if (!isThoughtMutationRecord(m) && !isOwnPluginMutation(m)) { pendingHiddenFullS
 }
 return;
 }
-let anyRelevant = false, urgentTk = false, ctxCache = null;
+let anyRelevant = false, urgentTk = false, caretDirty = false, ctxCache = null;
 for (let i = 0; i < mutations.length; i++) {
 const m = mutations[i];
 if (m.type === 'attributes') {
@@ -2106,6 +2106,7 @@ if (pCtx.skip) continue;
 if (tidOf(tgt) === 'aux-pane-split') dirtyFlags.a = anyRelevant = true;
 }
 const inComposerBox = !!(pCtx && pCtx.inComp), inEditor = !!(pCtx && pCtx.inEd);
+if (inEditor && (m.addedNodes?.length || m.removedNodes?.length)) caretDirty = true;
 const isSibHost = !!(isElementLike(tgt) && !inComposerBox && !pCtx?.inSide && !pCtx?.inDlg && tgt !== D.body && tgt !== de() && qs(tgt, S_IB));
 const scanList = (list, isAdd) => {
 if (!list || !list.length) return;
@@ -2115,7 +2116,7 @@ if (!isElementLike(node) || isThoughtIsolatedNode(node) || isOwnPluginNode(node,
 if (inEditor && !tidOf(node) && !isTkOrQHit(node)) { const t = tagU(node); if (t !== 'BUTTON' && t !== 'STYLE' && t !== 'IMG') continue; }
 if (isAdd && tidOf(node) === 'conversation-row-sidebar' && ga(node, 'data-selected') === 'true') streamChoreoCtl.stampSidebarRowRunningImmediate?.(node);
 classifyDirtySubtree(node, isAdd, pCtx);
-if (inComposerBox && !inEditor) dirtyFlags.c = dirtyFlags.r = true;
+if (inComposerBox && !inEditor) { dirtyFlags.c = dirtyFlags.r = caretDirty = true; }
 if (isTkOrQHit(node) || isSibHost) { dirtyFlags.c = dirtyFlags.o = urgentTk = true; }
 anyRelevant = true;
 }
@@ -2127,6 +2128,7 @@ scanList(m.removedNodes, false);
 }
 }
 }
+if (caretDirty) { smoothCaretCtl.invalidateSelection?.(); if (isCaretOn() && !dirtyFlags.c) smoothCaretCtl.queue(false); }
 if (urgentTk) syncTakeoverNow();
 if (anyRelevant && (O.values(dirtyFlags).some(Boolean) || dirtyTurboRoots.size > 0)) scheduleSync();
 } catch {}
