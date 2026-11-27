@@ -1759,3 +1759,297 @@ test('ui-runtime invalidates smooth-caret selection and queues lightweight caret
 
   win.__agPrism.destroy();
 });
+
+test('smooth-caret hardens inline chip guards: inside-chip closest alignment, pre-rect element boundary, offset-0/ZWSP bogus rect cross-check, wrapped multi-rect chips, and bounded text-predecessor range without full editor scans', () => {
+  const smoothCaretMod = require('../smooth-caret.js');
+  const prevDoc = globalThis.document;
+  const prevWin = globalThis.window;
+  const prevGetCs = globalThis.getComputedStyle;
+  const prevRaf = globalThis.requestAnimationFrame;
+
+  const hostKids = [];
+  let fullEdTextReads = 0;
+  let edQsaCalls = 0;
+  let hotQsCalls = 0;
+
+  const makeEl = (tag) => {
+    const attrs = new Map();
+    const el = {
+      tagName: tag.toUpperCase(),
+      nodeName: tag.toUpperCase(),
+      nodeType: 1,
+      className: '',
+      style: {},
+      isConnected: true,
+      parentNode: null,
+      parentElement: null,
+      childNodes: [],
+      setAttribute(k, v) { attrs.set(k, String(v)); },
+      getAttribute(k) { return attrs.has(k) ? attrs.get(k) : null; },
+      hasAttribute(k) { return attrs.has(k); },
+      removeAttribute(k) { attrs.delete(k); },
+      remove() { this.isConnected = false; },
+      appendChild(c) {
+        c.parentNode = el;
+        c.parentElement = el;
+        el.childNodes.push(c);
+        return c;
+      },
+      matches(sel) {
+        return String(sel)
+          .split(',')
+          .map((s) => s.trim())
+          .some((tok) => {
+            if (tok === '[contenteditable="false"]') return attrs.get('contenteditable') === 'false';
+            if (tok === '[data-lexical-decorator]') return attrs.has('data-lexical-decorator');
+            return false;
+          });
+      },
+      closest(sel) {
+        for (let c = el; c && c.nodeType === 1; c = c.parentElement || c.parentNode) {
+          if (c.matches?.(sel)) return c;
+        }
+        return null;
+      },
+      querySelector() {
+        hotQsCalls += 1;
+        return null;
+      },
+      querySelectorAll() {
+        hotQsCalls += 1;
+        return [];
+      },
+    };
+    return el;
+  };
+  const makeTxt = (v) => ({ nodeType: 3, nodeValue: v, data: v, parentNode: null, parentElement: null });
+
+  const host = makeEl('div');
+  host.clientLeft = 0;
+  host.clientTop = 0;
+  host.scrollLeft = 0;
+  host.scrollTop = 0;
+  host.getBoundingClientRect = () => ({ left: 600, top: 900, width: 720, height: 80 });
+  host.appendChild = (ch) => { ch.isConnected = true; ch.parentElement = host; hostKids.push(ch); return ch; };
+  host.querySelector = (sel) => (sel.startsWith('.ag-cs-smooth-caret') ? hostKids.find((c) => c.className === 'ag-cs-smooth-caret') || null : null);
+
+  const ed = makeEl('div');
+  ed.setAttribute('contenteditable', 'true');
+  ed.parentElement = host;
+  ed.scrollLeft = 0;
+  ed.scrollTop = 0;
+  ed.scrollHeight = 80;
+  ed.clientHeight = 80;
+  ed.getBoundingClientRect = () => ({ left: 600, right: 1320, top: 900, bottom: 980, width: 720, height: 80 });
+  ed.contains = (n) => { for (let c = n; c; c = c.parentNode) if (c === ed) return true; return false; };
+  Object.defineProperty(ed, 'textContent', {
+    get() {
+      fullEdTextReads += 1;
+      return 'forbidden-full-scan';
+    },
+  });
+  ed.querySelector = () => {
+    hotQsCalls += 1;
+    return null;
+  };
+  ed.querySelectorAll = () => {
+    edQsaCalls += 1;
+    return [];
+  };
+
+  let selState = { rangeCount: 0, isCollapsed: true };
+  let tempRangeRectResolver = () => [];
+  globalThis.window = { devicePixelRatio: 1 };
+  globalThis.getComputedStyle = () => ({ paddingLeft: '8px', paddingTop: '10px', fontSize: '14px', lineHeight: '22px' });
+  globalThis.requestAnimationFrame = (cb) => { cb(); return 1; };
+  globalThis.document = {
+    activeElement: ed,
+    createElement: (tag) => makeEl(tag),
+    createRange: () => {
+      const r = {
+        startContainer: null,
+        startOffset: 0,
+        endContainer: null,
+        endOffset: 0,
+        setStart(n, o) { this.startContainer = n; this.startOffset = o; },
+        setEnd(n, o) { this.endContainer = n; this.endOffset = o; },
+        getClientRects() { return tempRangeRectResolver(this); },
+        getBoundingClientRect() {
+          const rs = tempRangeRectResolver(this);
+          return rs && rs.length ? rs[rs.length - 1] : { left: 0, right: 0, top: 0, height: 0 };
+        },
+      };
+      return r;
+    },
+    getSelection: () => selState,
+    querySelectorAll: (sel) => {
+      if (sel.includes('[contenteditable="true"]')) return [ed];
+      if (sel === '.ag-cs-smooth-caret') return hostKids;
+      return [];
+    },
+  };
+
+  const setCollapsedSel = (container, offset, rects = []) => {
+    selState = {
+      rangeCount: 1,
+      isCollapsed: true,
+      focusNode: container,
+      focusOffset: offset,
+      getRangeAt: () => ({
+        collapsed: true,
+        startContainer: container,
+        startOffset: offset,
+        endContainer: container,
+        endOffset: offset,
+        getClientRects: () => rects,
+        getBoundingClientRect: () => (rects.length ? rects[rects.length - 1] : { left: 0, top: 0, height: 0 }),
+      }),
+    };
+  };
+
+  try {
+    const ctl = smoothCaretMod.createSmoothCaretController({
+      isDestroyed: () => false,
+      isEnabled: () => true,
+      setAttrIfChanged(el, k, v) { if (el.getAttribute(k) !== v) el.setAttribute(k, v); },
+      runGuardedMut: (fn) => fn(),
+    });
+
+    // Guard 1: caret reported inside a non-editable chip aligns to the chip's right edge & centers vertically on tall pills
+    const p1 = makeEl('p');
+    p1.getBoundingClientRect = () => ({ left: 612, right: 1300, top: 910, bottom: 934, width: 688, height: 24 });
+    const chip = makeEl('span');
+    chip.setAttribute('contenteditable', 'false');
+    chip.setAttribute('data-lexical-decorator', 'true');
+    chip.getBoundingClientRect = () => ({ left: 612, right: 760, top: 910, bottom: 934, width: 148, height: 24 });
+    const chipInner = makeEl('span');
+    const chipTxt = makeTxt('Quote: app.ts:10');
+    chipInner.appendChild(chipTxt);
+    chip.appendChild(chipInner);
+    p1.appendChild(chip);
+    ed.appendChild(p1);
+
+    setCollapsedSel(chipTxt, 5, [{ left: 640, top: 913, height: 18 }]);
+    ctl.sync(false, false);
+    const caret = host.querySelector('.ag-cs-smooth-caret');
+    assert.ok(caret);
+    // Tall pill (h=24, gh=18): top = 910 + (24-18)/2 = 913 -> y=13px, x = 760 - 600 = 160px
+    assert.equal(caret.style.transform, 'translate3d(160px, 13px, 0)', 'Guard 1: caret inside non-editable chip must snap to chip right edge');
+    assert.equal(caret.style.height, '18px');
+
+    // Guard 2: element-level caret immediately after inline chip overrides bogus range.getClientRects()
+    chip.getBoundingClientRect = () => ({ left: 612, right: 760, top: 913, bottom: 931, width: 148, height: 18 });
+    setCollapsedSel(p1, 1, [{ left: 612, top: 913, height: 18 }]);
+    ctl.invalidateSelection();
+    ctl.sync(false, false);
+    assert.equal(caret.style.transform, 'translate3d(160px, 13px, 0)', 'Guard 2: element boundary after inline chip must override stale paragraph-left clientRect');
+
+    // Guard 2 negative: block-level <p> preceding element cursor on editor root must NOT snap to block's right edge (1300)
+    setCollapsedSel(ed, 1, [{ left: 612, top: 935, height: 18 }]);
+    ctl.invalidateSelection();
+    ctl.sync(false, false);
+    assert.equal(caret.style.transform, 'translate3d(12px, 35px, 0)', 'Guard 2 must ignore block elements like <p> and trust range rect');
+
+    // Guard 3a: text node at offset===0 following inline chip cross-checks bogus same-line rect (612 < 760 - 2) -> pr.right + 1
+    const afterSpan = makeEl('span');
+    const afterTxt = makeTxt('hello');
+    afterSpan.appendChild(afterTxt);
+    p1.appendChild(afterSpan);
+    setCollapsedSel(afterTxt, 0, [{ left: 612, top: 913, height: 18 }]);
+    ctl.invalidateSelection();
+    ctl.sync(false, false);
+    assert.equal(caret.style.transform, 'translate3d(161px, 13px, 0)', 'Guard 3a: offset===0 bogus rect left of same-line chip must snap to pr.right + 1 (161px)');
+
+    // Guard 3b: ZWSP text node at offset===1 with bogus same-line rect also cross-checks against chip.right -> pr.right + 1
+    const zwspAfter = makeTxt('\u200b');
+    p1.childNodes = [];
+    p1.appendChild(chip);
+    p1.appendChild(zwspAfter);
+    setCollapsedSel(zwspAfter, 1, [{ left: 612, top: 913, height: 18 }]);
+    ctl.invalidateSelection();
+    ctl.sync(false, false);
+    assert.equal(caret.style.transform, 'translate3d(161px, 13px, 0)', 'Guard 3b: ZWSP bogus same-line rect must snap to pr.right + 1 (161px)');
+
+    // Guard 3c: wrapped next-line rect (deltaY >= max(gh, pr.height)) must NOT snap back to chip on previous line
+    setCollapsedSel(zwspAfter, 0, [{ left: 612, top: 938, height: 18 }]);
+    ctl.invalidateSelection();
+    ctl.sync(false, false);
+    assert.equal(caret.style.transform, 'translate3d(12px, 38px, 0)', 'Guard 3c: next-line rect must not snap to preceding line chip');
+
+    // Guard 3d: accurate rect already at chip right edge (760 >= 760 - 2) stays untouched
+    setCollapsedSel(zwspAfter, 0, [{ left: 760, top: 913, height: 18 }]);
+    ctl.invalidateSelection();
+    ctl.sync(false, false);
+    assert.equal(caret.style.transform, 'translate3d(160px, 13px, 0)', 'Guard 3d: valid rect at chip right edge must not be shifted');
+
+    // Guard 4a: wrapped multi-rect chip uses last non-zero getClientRects() entry rather than union bounding box
+    const wrappedChip = makeEl('span');
+    wrappedChip.setAttribute('contenteditable', 'false');
+    wrappedChip.setAttribute('data-lexical-decorator', 'true');
+    wrappedChip.getBoundingClientRect = () => ({ left: 612, right: 1200, top: 913, bottom: 953, width: 588, height: 40 });
+    wrappedChip.getClientRects = () => [
+      { left: 612, right: 1200, top: 913, bottom: 931, width: 588, height: 18 },
+      { left: 612, right: 708, top: 935, bottom: 953, width: 96, height: 18 },
+      { left: 0, right: 0, top: 0, bottom: 0, width: 0, height: 0 },
+    ];
+    const wrappedZwsp = makeTxt('\u200b');
+    p1.childNodes = [];
+    p1.appendChild(wrappedChip);
+    p1.appendChild(wrappedZwsp);
+    setCollapsedSel(wrappedZwsp, 1, []);
+    ctl.invalidateSelection();
+    ctl.sync(false, false);
+    assert.equal(caret.style.transform, 'translate3d(108px, 35px, 0)', 'Guard 4a: wrapped multi-rect chip must align to last non-zero line rect (708 - 600 = 108px, 935 - 900 = 35px)');
+
+    // Guard 4b-i: empty inline span after plain text measures end of preceding text via temp Range (collapsed hit)
+    const plainTxt = makeTxt('hello');
+    const emptyInline = makeEl('span');
+    p1.childNodes = [];
+    p1.appendChild(plainTxt);
+    p1.appendChild(emptyInline);
+    tempRangeRectResolver = (r) => (r.startContainer === plainTxt && r.startOffset === 5 && r.endOffset === 5 ? [{ left: 668, top: 913, height: 18 }] : []);
+    setCollapsedSel(emptyInline, 0, []);
+    ctl.invalidateSelection();
+    ctl.sync(false, false);
+    assert.equal(caret.style.transform, 'translate3d(68px, 13px, 0)', 'Guard 4b-i: empty span after plain text must align to end of preceding text via temp Range');
+
+    // Guard 4b-ii: ZWSP after plain text with trailing ZWSP falls back to last visible char range [end-1, end]
+    const plainWithTailZwsp = makeTxt('hello\u200b');
+    const trailingZwsp = makeTxt('\u200b');
+    p1.childNodes = [];
+    p1.appendChild(plainWithTailZwsp);
+    p1.appendChild(trailingZwsp);
+    tempRangeRectResolver = (r) =>
+      r.startContainer === plainWithTailZwsp && r.startOffset === 4 && r.endOffset === 5
+        ? [{ left: 660, right: 669, top: 913, height: 18 }]
+        : [];
+    setCollapsedSel(trailingZwsp, 1, []);
+    ctl.invalidateSelection();
+    ctl.sync(false, false);
+    assert.equal(caret.style.transform, 'translate3d(69px, 13px, 0)', 'Guard 4b-ii: ZWSP after text must fall back to last visible char right edge (669 - 600 = 69px)');
+
+    // Guard 4b-iii: bounded walk must NEVER cross block boundary (<p>) to snap to previous paragraph text
+    const p2 = makeEl('p');
+    const p2EmptySpan = makeEl('span');
+    p2EmptySpan.getBoundingClientRect = () => ({ left: 0, right: 0, top: 0, bottom: 0, width: 0, height: 0 });
+    p2.appendChild(p2EmptySpan);
+    ed.appendChild(p2);
+    setCollapsedSel(p2EmptySpan, 0, []);
+    ctl.invalidateSelection();
+    ctl.sync(false, false);
+    assert.equal(caret.hasAttribute('data-ag-cs-caret-visible'), false, 'Guard 4b-iii: empty span on paragraph 2 must never cross block boundary to paragraph 1 text');
+    assert.equal(ed.hasAttribute('data-ag-cs-smooth-caret'), false);
+
+    // Performance & anti-regression invariants
+    assert.equal(fullEdTextReads, 0, 'Must perform strictly 0 full ed.textContent reads across all 4 guards');
+    assert.equal(edQsaCalls, 0, 'Must perform strictly 0 ed.querySelectorAll("*") calls');
+    assert.equal(hotQsCalls, 0, 'Must perform strictly 0 hot-path querySelector/querySelectorAll calls');
+
+    ctl.teardown();
+  } finally {
+    globalThis.document = prevDoc;
+    globalThis.window = prevWin;
+    globalThis.getComputedStyle = prevGetCs;
+    globalThis.requestAnimationFrame = prevRaf;
+  }
+});
