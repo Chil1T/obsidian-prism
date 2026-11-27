@@ -660,3 +660,22 @@ test('Wave P3-B: overview-panel frosted-glass GPU layer decoupling & Top expensi
   assert.equal(styleCss.includes(':not([class*="ag-cs-"])'), false, 'L759 must replace expensive [class*="ag-cs-"] substring scan with :not(:where(#ag-cs-settings-sec *))');
   assert.ok(styleCss.includes(':not(:where(#ag-cs-settings-sec *))'), 'L759 must exempt settings section via zero-specificity :where(#ag-cs-settings-sec *)');
 });
+
+test('PR #150: classic obsidian home restores obsidian background and hides host wallpaper without :has() or universal rules', () => {
+  assert.equal(styleCss.includes(':has('), false, 'style.css must contain 0 :has(');
+  assert.equal(/&/.test(flatStyleCss), false, 'flattened style.css must expand all nested & cleanly');
+
+  const prefix = 'html[data-ag-cs-style][data-ag-cs-palette=obsidian][data-ag-cs-home=classic]:not([data-ag-prism-wallpaper=on])';
+  const bgSel = `${prefix}>body:not([data-has-browser-hole=true]):not([data-has-drawer-browser-hole=true]) .agy-home:not([data-has-browser-hole=true])`;
+  const wpSel = `${prefix} .agy-home>img[data-testid=plugin-theme-home-wallpaper]`;
+
+  const flatRules = [...flatStyleCss.matchAll(/([^{}]+)\{([^{}]+)\}/g)];
+  const bgRule = flatRules.find((m) => m[1].trim() === bgSel);
+  const wpRule = flatRules.find((m) => m[1].trim() === wpSel);
+
+  assert.ok(bgRule, `flattened CSS must contain obsidian classic home background restore rule: ${bgSel}`);
+  assert.ok(bgRule[2].includes('background-color:var(--_cv)!important'), `expected background-color:var(--_cv)!important, got ${bgRule[2]}`);
+  assert.ok(wpRule, `flattened CSS must contain host home wallpaper hide rule: ${wpSel}`);
+  assert.ok(wpRule[2].includes('display:none!important'), `expected display:none!important, got ${wpRule[2]}`);
+  assert.equal(bgSel.includes('*') || wpSel.includes('*'), false, 'PR #150 rules must never introduce universal * selectors');
+});

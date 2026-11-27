@@ -1014,7 +1014,10 @@ test('Bug 4: performance-only drains disable prism-rim-canvas, cap dual-mascot-r
     assert.ok(flatCss.includes('html[data-ag-cs-style][data-ag-cs-perf-mode="performance"] :is([data-ag-overview-running="1"],[data-ag-sp-running="1"],[data-ag-cs-caustic="1"],[data-ag-cs-fiber-camp])::after{animation:none!important}'));
 
     // 聚焦态 performance 规则不得隐藏或暂停状态加载环语义
-    const perfLine = rawCss.split('\n')[625]; // style.css line 626
+    const perfLine = rawCss
+      .split('\n')
+      .find((l) => l.includes('html[data-ag-cs-style][data-ag-cs-perf-mode="performance"]') && l.includes('.ag-cs-liftoff-veil')) || '';
+    assert.ok(perfLine, '必须存在聚焦态 performance 降载规则行');
     assert.equal(perfLine.includes('status-loading-spinner'), false, '聚焦态 performance 规则必须保留加载环状态语义可见');
     assert.equal(perfLine.includes('input-cancel-button'), false, '聚焦态 performance 规则必须保留停止按钮语义可见');
 
