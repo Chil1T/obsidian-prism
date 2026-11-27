@@ -439,8 +439,8 @@ test('1) dual-mascot-rig: typing keeps Canvas rc frame cache 100% hit (0 redraws
   stage.dispose();
 });
 
-// ── 2: ui-runtime 打字 0 读整段 ed.textContent + 输入框内纯打字 0 触发 measureCrabClearanceAll ──
-test('2) ui-runtime: typing reads <=4 tail chars with 0 full ed.textContent reads, and pure editor text mutations skip measureCrabClearanceAll', () => {
+// ── 2: ui-runtime 打字 0 读整段 ed.textContent + 输入框内纯打字 0 触发 measureCrabClearanceAll + 切页整棵挂载 0 微任务回流 ──
+test('2) ui-runtime: typing reads <=4 tail chars with 0 full ed.textContent reads, pure editor mutations skip measureCrabClearanceAll, and conv-view mount skips microtask syncTakeoverNow', async () => {
   const env = createMiniDom();
   const cdp = require(path.join(ROOT, 'cdp.js'));
   const uiSrc = fs.readFileSync(path.join(ROOT, 'ui-runtime.js'), 'utf8');
@@ -519,8 +519,29 @@ test('2) ui-runtime: typing reads <=4 tail chars with 0 full ed.textContent read
   const qCard = env.makeEl('div', { attrs: { 'data-testid': 'queued-messages-card' }, text: 'Queued prompt' });
   sibSlot.appendChild(qCard);
   rootMo.emit([{ type: 'childList', target: sibSlot, addedNodes: [qCard], removedNodes: [] }]);
+  await Promise.resolve();
   env.flushRafs(16);
   assert.ok(offsetHCalls > 0 || checkVisCalls > 0, 'External queued-messages-card insertion must still trigger clearance measurement');
+
+  // 2d) 对话切换挂载整棵 conversation-view（内含 queued-messages-card）：convMount 必须抑制微任务 syncTakeoverNow() 提前回流
+  const conv2 = env.makeEl('div', { attrs: { 'data-testid': 'conversation-view', 'data-cascade-id': '22222222-3333-4444-5555-666666666666' } });
+  const vp2 = env.makeEl('div', { attrs: { 'data-testid': 'autoscroll-viewport' } });
+  const ib2 = env.makeEl('div', { attrs: { 'data-testid': 'agent-input-box' } });
+  const card2 = env.makeEl('div', { className: 'surface-composer-card' });
+  const qCard2 = env.makeEl('div', { attrs: { 'data-testid': 'queued-messages-card' }, text: 'Swap queued' });
+  let conv2OffsetH = 0;
+  Object.defineProperty(card2, 'offsetHeight', { configurable: true, get() { conv2OffsetH += 1; return 80; } });
+  ib2.appendChild(qCard2);
+  ib2.appendChild(card2);
+  conv2.appendChild(vp2);
+  conv2.appendChild(ib2);
+  conv.remove();
+  env.body.appendChild(conv2);
+  offsetHCalls = 0;
+  checkVisCalls = 0;
+  rootMo.emit([{ type: 'childList', target: env.body, addedNodes: [conv2], removedNodes: [conv] }]);
+  await Promise.resolve();
+  assert.equal(conv2OffsetH, 0, 'Whole conversation-view mount must set convMount and suppress microtask syncTakeoverNow() offsetHeight reflow');
 
   env.win.__agPrism.destroy();
 });

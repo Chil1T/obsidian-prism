@@ -586,3 +586,223 @@ test('stream-choreography decouples triggerHeroALiftoff / triggerHeroBHomeReturn
     else globalThis.document = prevDoc;
   }
 });
+
+test('PR #153 安全拆拣：两段切页 GPU 动效、双分屏滑入、发送发射动效、model-overlay 防冲突、Wave P3-B 毛玻璃保留及 performance/motion=off 降级', () => {
+  const scMod = require('../stream-choreography.js');
+  const styleCss = fs.readFileSync(path.join(ROOT, 'style.css'), 'utf8');
+  const scSrc = fs.readFileSync(path.join(ROOT, 'stream-choreography.js'), 'utf8');
+  const uiSrc = fs.readFileSync(path.join(ROOT, 'ui-runtime.js'), 'utf8');
+
+  // 1) CSS 帧 0 防闪烁规则存在，且 100% 保留 Wave P3-B overview-shell 静态 ::before 毛玻璃（绝无画质降级）
+  assert.ok(
+    styleCss.includes('[data-ag-cs-conv-seat="1"][data-ag-cs-swapping="1"] [data-testid="autoscroll-viewport"]:not([data-ag-cs-vp-live="1"]){opacity:0!important}'),
+    'style.css 必须包含对话切换帧 0 防闪烁规则'
+  );
+  assert.match(styleCss, /:is\(\[data-ag-cs-overview-shell="1"\],\.animate-overview-panel\)\{[^}]*&::before\{[^}]*contain:layout style paint;[^}]*backdrop-filter:blur\(16px\)/, 'Wave P3-B overview-shell 静态 ::before 毛玻璃必须完整保留');
+  assert.ok(scSrc.includes("setAttrIfChanged(p, 'data-ag-cs-prism-box', '1')") && scSrc.includes("setAttrIfChanged(p, 'data-ag-cs-prism-mirror', '1')"), 'overview-panel prism 边框与镜面必须保留');
+  assert.ok(scSrc.includes('if (idx >= 12) break;'), '弹窗交错入场必须保持 12 条上限');
+  assert.ok(uiSrc.includes("ga(ov, 'data-ag-cs-model-overlay') === '1'"), 'syncPopupOverlayMirrors 必须跳过模型面板 overlay 避免双重镜像');
+  assert.ok(uiSrc.includes('const maybeBumpAuxResize ='), 'ui-runtime 必须使用 maybeBumpAuxResize 避免单击分屏误触发 resizing 脉冲');
+
+  // 2) 构建轻量 DOM + 可观测 WAAPI + 双 rAF 队列
+  const anims = [];
+  const makeEl = (tag = 'DIV', attrs = {}, cls = '', rect = { left: 0, top: 0, width: 300, height: 40 }) => {
+    const m = new Map(Object.entries(attrs));
+    const el = {
+      nodeType: 1,
+      tagName: tag.toUpperCase(),
+      id: attrs.id || '',
+      className: cls,
+      parentElement: null,
+      children: [],
+      isConnected: true,
+      style: { cssText: '', setProperty() {}, removeProperty() {} },
+      classList: { contains: (c) => String(el.className || '').split(/\s+/).includes(c), add() {}, remove() {} },
+      getAttribute: (k) => (m.has(k) ? m.get(k) : null),
+      setAttribute: (k, v) => m.set(k, String(v)),
+      hasAttribute: (k) => m.has(k),
+      removeAttribute: (k) => m.delete(k),
+      appendChild(c) { c.parentElement = el; el.children.push(c); return c; },
+      remove() { if (el.parentElement) { const i = el.parentElement.children.indexOf(el); if (i >= 0) el.parentElement.children.splice(i, 1); el.parentElement = null; } },
+      getBoundingClientRect: () => rect,
+      animate(kfs, opts) {
+        const rec = { el, kfs, opts, paused: false, played: false, pause() { this.paused = true; }, play() { this.played = true; } };
+        anims.push(rec);
+        return rec;
+      },
+      matches(sel) {
+        return String(sel).split(',').map((s) => s.trim()).some((s) => {
+          if (s.startsWith('.')) return el.classList.contains(s.slice(1));
+          if (s.startsWith('#')) return el.id === s.slice(1);
+          const am = s.match(/^\[([^=\]]+)(?:="([^"]*)")?\]$/);
+          return am ? (am[2] !== undefined ? el.getAttribute(am[1]) === am[2] : el.hasAttribute(am[1])) : false;
+        });
+      },
+      closest(sel) { let c = el; while (c) { if (c.matches(sel)) return c; c = c.parentElement; } return null; },
+      querySelectorAll(sel) {
+        const out = [];
+        const walk = (x) => { for (const c of x.children) { if (c.matches(sel)) out.push(c); walk(c); } };
+        walk(el);
+        return out;
+      },
+      querySelector(sel) { return el.querySelectorAll(sel)[0] || null; },
+    };
+    return el;
+  };
+
+  const prevDoc = globalThis.document;
+  const prevRaf = globalThis.requestAnimationFrame;
+  const prevCaf = globalThis.cancelAnimationFrame;
+  const rafs = [];
+  let rafId = 1;
+  const flushRafFrame = () => { const list = rafs.splice(0, rafs.length); for (const fn of list) fn(); };
+
+  const html = makeEl('HTML', { 'data-ag-cs-motion': 'ultra', 'data-ag-cs-perf-mode': 'balanced' });
+  const body = makeEl('BODY');
+  html.appendChild(body);
+
+  const list = makeEl('DIV');
+  const rowA = makeEl('DIV', { 'data-testid': 'conversation-row-sidebar', 'data-selected': 'true', 'data-cascade-id': 'cid-a' }, '', { left: 10, top: 40, width: 220, height: 34 });
+  const rowB = makeEl('DIV', { 'data-testid': 'conversation-row-sidebar', 'data-selected': 'false', 'data-cascade-id': 'cid-b' }, '', { left: 10, top: 82, width: 220, height: 34 });
+  list.appendChild(rowA);
+  list.appendChild(rowB);
+  body.appendChild(list);
+
+  const seat = makeEl('DIV', { 'data-ag-cs-conv-seat': '1' });
+  const conv = makeEl('DIV', { 'data-testid': 'conversation-view', 'data-cascade-id': 'cid-a' });
+  const vpWrap = makeEl('DIV', { 'data-ag-cs-vp-wrap': '1' });
+  const vp = makeEl('DIV', { 'data-testid': 'autoscroll-viewport' });
+  const oldBubble = makeEl('DIV', { 'data-testid': 'user-message-bubble' });
+  vp.appendChild(oldBubble);
+  vpWrap.appendChild(vp);
+  const inputBox = makeEl('DIV', { 'data-testid': 'agent-input-box' });
+  const card = makeEl('DIV', {}, 'surface-composer-card');
+  const sendBtn = makeEl('BUTTON', { 'data-testid': 'input-send-button' });
+  card.appendChild(sendBtn);
+  inputBox.appendChild(card);
+  conv.appendChild(vpWrap);
+  conv.appendChild(inputBox);
+  seat.appendChild(conv);
+  body.appendChild(seat);
+
+  const split = makeEl('DIV', { 'data-testid': 'aux-pane-split' });
+  const paneL = makeEl('DIV');
+  const paneSep = makeEl('DIV');
+  const paneR = makeEl('DIV');
+  split.appendChild(paneL);
+  split.appendChild(paneSep);
+  split.appendChild(paneR);
+  body.appendChild(split);
+
+  globalThis.document = {
+    documentElement: html,
+    body,
+    getElementById: (id) => body.querySelector(`#${id}`),
+    createElement: (t) => makeEl(t),
+    querySelector: (s) => body.querySelector(s),
+    querySelectorAll: (s) => body.querySelectorAll(s),
+  };
+  globalThis.requestAnimationFrame = (fn) => { rafs.push(fn); return rafId++; };
+  globalThis.cancelAnimationFrame = () => {};
+
+  const glideCalls = [];
+  const ctl = scMod.createStreamChoreographyController({
+    motionEngine: { glideIndicator: (...a) => glideCalls.push(a) },
+    isDestroyed: () => false,
+    isMotionStandardOrUltra: () => html.getAttribute('data-ag-cs-motion') !== 'off',
+    isMotionUltra: () => html.getAttribute('data-ag-cs-motion') === 'ultra',
+    isConvRunning: () => false,
+    setAttrIfChanged: (el, k, v) => el.setAttribute(k, v),
+    runGuardedMut: (fn) => fn(),
+  });
+
+  try {
+    // 2a) 初始化侧栏基线后测试 press-dip -> 取消 -> exit -> 两段入场
+    ctl.syncSidebarSelectionGlide(ctl.measureSidebarSelectionSnapshot());
+    anims.length = 0;
+
+    ctl.prepareConvPressDip(rowB);
+    assert.equal(anims.length, 1, '按下未选中侧栏行应启动预下沉 dip 动画');
+    assert.equal(anims[0].el, vpWrap);
+
+    ctl.prepareConvPressDip(null);
+    assert.equal(anims.length, 2, '指针取消/抬起时应回弹恢复原位');
+
+    ctl.prepareConvSwitchExit(rowB);
+    assert.equal(seat.getAttribute('data-ag-cs-swapping'), '1', '切页退场必须标记 data-ag-cs-swapping 遮挡新视口帧 0');
+    assert.equal(vp.getAttribute('data-ag-cs-vp-live'), '1', '旧视口必须标记 data-ag-cs-vp-live 保持可见退场');
+    assert.equal(anims.length, 3, '切页退场应启动 WAAPI exit 动画');
+
+    // 模拟切换完成至 cid-b
+    rowA.setAttribute('data-selected', 'false');
+    rowB.setAttribute('data-selected', 'true');
+    conv.setAttribute('data-cascade-id', 'cid-b');
+    anims.length = 0;
+    ctl.syncSidebarSelectionGlide(ctl.measureSidebarSelectionSnapshot());
+
+    const portal = body.querySelector('#ag-prism-overlay-portal');
+    assert.ok(portal && portal.querySelector('.ag-cs-sidebar-glide-pill'), '侧栏滑轨胶囊必须仍挂载在 #ag-prism-overlay-portal 内');
+    assert.equal(vp.getAttribute('data-ag-cs-stage-glide'), 'up', 'Hero B2 data-ag-cs-stage-glide 必须保持完整');
+    assert.equal(anims.length, 2, '新对话入场应创建 translate3d + opacity 两条 WAAPI');
+    assert.ok(anims.every((a) => a.paused && !a.played), '双 rAF 同步点到达前，入场动画必须处于 paused 状态');
+    assert.equal(seat.getAttribute('data-ag-cs-swapping'), '1', '首帧未播前仍应保持 swapping 守卫');
+
+    flushRafFrame();
+    assert.ok(anims.every((a) => !a.played), '第 1 帧 rAF 尚未播放');
+    flushRafFrame();
+    assert.ok(anims.every((a) => a.played), '第 2 帧 rAF 必须同步 play() 全部入场动画');
+    assert.equal(seat.getAttribute('data-ag-cs-swapping'), null, '同步播放后必须清理 data-ag-cs-swapping');
+    assert.equal(vp.getAttribute('data-ag-cs-vp-live'), null, '同步播放后必须清理 data-ag-cs-vp-live');
+
+    // 2b) 双分屏 GPU 滑入 / 收回
+    anims.length = 0;
+    ctl.triggerSplitTransition(split, true);
+    assert.equal(anims.length, 4, '开启双分屏应创建左栏位、右栏位(位移+淡入)与分隔线共 4 条 GPU WAAPI');
+    assert.ok(anims.every((a) => a.paused && !a.played));
+    flushRafFrame();
+    flushRafFrame();
+    assert.ok(anims.every((a) => a.played), '双 rAF 后必须统一 play() 分屏动画');
+
+    anims.length = 0;
+    ctl.triggerSplitTransition(split, false);
+    assert.equal(anims.length, 1, '关闭双分屏应仅创建主栏单条 GPU 动画');
+    flushRafFrame();
+    flushRafFrame();
+    assert.equal(anims[0].played, true);
+
+    // 2c) 发送发射动效 + 新发送气泡浮入
+    anims.length = 0;
+    ctl.triggerSendLaunch(sendBtn, sendBtn);
+    assert.equal(anims.length, 2, 'triggerSendLaunch 应驱动输入框卡片微沉与按钮上扬 2 条 GPU WAAPI');
+    const freshBubble = makeEl('DIV', { 'data-testid': 'user-message-bubble' });
+    vp.appendChild(freshBubble);
+    ctl.syncHeroRouteChoreography({ inHome: false, formalConv: conv, checkCaustics: false });
+    assert.equal(anims.length, 3, '新发送用户气泡应通过 markFreshSentBubble 触发 1 条浮入 WAAPI');
+    assert.equal(anims[2].el, freshBubble);
+    // 再次 sync 不重复播放
+    ctl.syncHeroRouteChoreography({ inHome: false, formalConv: conv, checkCaustics: false });
+    assert.equal(anims.length, 3, '同一已播气泡绝不重复触发发射动画');
+
+    // 2d) performance 模式与 motion="off" 优雅降级：0 WAAPI、0 swapping 遗留
+    for (const [attr, val] of [['data-ag-cs-perf-mode', 'performance'], ['data-ag-cs-motion', 'off']]) {
+      html.setAttribute('data-ag-cs-perf-mode', 'balanced');
+      html.setAttribute('data-ag-cs-motion', 'ultra');
+      html.setAttribute(attr, val);
+      anims.length = 0;
+      ctl.prepareConvPressDip(rowA);
+      ctl.prepareConvSwitchExit(rowA);
+      ctl.triggerSplitTransition(split, true);
+      ctl.triggerSendLaunch(sendBtn, sendBtn);
+      assert.equal(anims.length, 0, `${attr}="${val}" 下必须完全降级：0 WAAPI 创建`);
+      assert.equal(seat.getAttribute('data-ag-cs-swapping'), null, `${attr}="${val}" 下严禁残留 data-ag-cs-swapping`);
+    }
+
+    ctl.clearTransientTimers();
+    ctl.flushAllStreamArtifacts(true);
+  } finally {
+    if (prevDoc === undefined) delete globalThis.document;
+    else globalThis.document = prevDoc;
+    globalThis.requestAnimationFrame = prevRaf;
+    globalThis.cancelAnimationFrame = prevCaf;
+  }
+});

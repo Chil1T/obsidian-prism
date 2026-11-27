@@ -454,3 +454,95 @@ test('prism-rim-canvas 事件驱动矩形与圆角缓存、setTimeout 限帧、�
     globalThis.clearTimeout = prevClrT;
   }
 });
+
+test('prism-rim-canvas 切页回流剪枝：侧边栏清 ptr、!ptrIn 零 getComputedStyle、mountNewBoxes 零空 rAF 与 markDirty(true) 延帧', () => {
+  const { doc, boxes, makeEl } = createMockRimDom();
+  const prevDoc = globalThis.document;
+  const prevRaf = globalThis.requestAnimationFrame;
+  const prevCancel = globalThis.cancelAnimationFrame;
+  const prevPerf = globalThis.performance;
+  const prevGcs = globalThis.getComputedStyle;
+  const prevDpr = globalThis.devicePixelRatio;
+
+  const rafs = new Map();
+  let rafSeq = 1;
+  let cancelledIds = [];
+  let now = 200;
+  let gcsCalls = 0;
+
+  globalThis.document = doc;
+  globalThis.requestAnimationFrame = (cb) => { const id = rafSeq++; rafs.set(id, cb); return id; };
+  globalThis.cancelAnimationFrame = (id) => { cancelledIds.push(id); rafs.delete(id); };
+  globalThis.performance = { now: () => now };
+  globalThis.devicePixelRatio = 1;
+  globalThis.getComputedStyle = () => { gcsCalls++; return { borderTopLeftRadius: '18px' }; };
+
+  const sidebarRow = makeEl('div', { 'data-testid': 'conversation-row-sidebar' }, { left: 0, top: 40, width: 220, height: 34, right: 220, bottom: 74 });
+  sidebarRow.closest = (sel) => (String(sel).includes('conversation-row-sidebar') ? sidebarRow : null);
+  const boxA = makeEl('div', { class: 'surface-composer-card', 'data-ag-cs-prism-box': '1' }, { left: 100, top: 760, width: 420, height: 96, right: 520, bottom: 856 });
+  boxes.push(boxA);
+
+  const ctl = createPrismRimCanvasController({
+    isDestroyed: () => false,
+    isDarkTheme: () => true,
+    motionReduced: () => false,
+    getMinFrameGapMs: () => 0,
+    getAmbientIntensity: () => 1,
+    getAccentTone: () => 'default',
+    canMountRealCanvas: () => true,
+    setAttrIfChanged: (el, k, v) => { if (el.getAttribute(k) !== v) el.setAttribute(k, v); },
+    runGuardedMut: (fn) => fn(),
+  });
+
+  const drainRafs = () => {
+    for (const [id, cb] of [...rafs.entries()]) { rafs.delete(id); cb(now += 16); }
+  };
+
+  try {
+    // 1) 初始指针未进入：mountNewBoxes() 与 rescanNow() 均应触发 0 次 getComputedStyle 且不调度空 rAF
+    ctl.mountNewBoxes();
+    assert.equal(gcsCalls, 0, '!ptrIn 时 mountNewBoxes() 严禁触发 getComputedStyle');
+    assert.equal(rafs.size, 0, '!ptrIn 且无高亮残余时 mountNewBoxes() 严禁调度空 rAF');
+
+    ctl.rescanNow();
+    assert.equal(gcsCalls, 0, '!ptrIn 时 rescanNow() 严禁触发 getComputedStyle');
+
+    // 2) 指针移入侧边栏行：无条件将 ptr 重置为 (-9999, -9999)
+    ctl.onPointerMove({ clientX: 260, clientY: 770, target: boxA });
+    drainRafs();
+    assert.equal(gcsCalls, 1, '指针进入后懒读取 1 次 borderTopLeftRadius');
+    ctl.onPointerMove({ clientX: 60, clientY: 50, target: sidebarRow });
+    assert.deepEqual(ctl.getLastPointerPos(), { x: -9999, y: -9999 }, '进入侧边栏后必须重置 ptr 为 (-9999, -9999)');
+    drainRafs(); // 清空最后一帧高亮
+
+    // 3) 切页挂载新输入框：!ptrIn 时 0 getComputedStyle 且 0 空 rAF
+    boxes.length = 0;
+    const boxB = makeEl('div', { class: 'surface-composer-card', 'data-ag-cs-prism-box': '1' }, { left: 100, top: 760, width: 420, height: 96, right: 520, bottom: 856 });
+    boxes.push(boxB);
+    const gcsBeforeSwap = gcsCalls;
+    ctl.mountNewBoxes();
+    assert.equal(gcsCalls, gcsBeforeSwap, '切页挂新盒体时 !ptrIn 必须触发 0 次 getComputedStyle');
+    assert.equal(rafs.size, 0, '切页且无残余高亮时 mountNewBoxes() 必须调度 0 次 rAF');
+
+    // 4) markDirty(true) 取消已有同帧 prismRaf 并顺延至下一帧
+    ctl.onPointerMove({ clientX: 260, clientY: 770, target: boxB });
+    assert.equal(rafs.size, 1, '指针移入应排队 1 个 prismRaf');
+    const firstId = [...rafs.keys()][0];
+    cancelledIds = [];
+    ctl.markDirty(true);
+    assert.ok(cancelledIds.includes(firstId), 'markDirty(true) 必须取消同帧挂起 prismRaf');
+    assert.equal(rafs.size, 1, 'markDirty(true) 必须重排到下一帧 rAF');
+
+    // 执行延后帧：懒补读 1 次 borderTopLeftRadius 并正常绘制
+    drainRafs();
+    assert.equal(gcsCalls, gcsBeforeSwap + 1, '延后帧绘制时应懒补读一次新盒体圆角并缓存');
+  } finally {
+    ctl.teardown();
+    globalThis.document = prevDoc;
+    globalThis.requestAnimationFrame = prevRaf;
+    globalThis.cancelAnimationFrame = prevCancel;
+    globalThis.performance = prevPerf;
+    globalThis.getComputedStyle = prevGcs;
+    globalThis.devicePixelRatio = prevDpr;
+  }
+});
