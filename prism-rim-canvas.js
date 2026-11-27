@@ -21,7 +21,7 @@
       })
   );
 
-  const isFn = (v) => typeof v === 'function';
+  const isFn = (v) => typeof v === 'function', mn = Math.min, mx = Math.max, T = (f) => { try { return f(); } catch {} };
   const ga = (e, k) => e?.getAttribute?.(k);
   const ra = (e, k) => e?.removeAttribute?.(k);
   const dis = (e) => !e || e.isConnected === false;
@@ -30,7 +30,7 @@
   const rg = (rgb, a) => `rgba(${rgb},${a.toFixed(4)})`;
   const fillRad = (ctx, cx, cy, r, w, h, st) => {
     const x0 = cx > r ? (cx - r) | 0 : 0, y0 = cy > r ? (cy - r) | 0 : 0;
-    const x1 = Math.min(w, Math.ceil(cx + r)), y1 = Math.min(h, Math.ceil(cy + r));
+    const x1 = mn(w, Math.ceil(cx + r)), y1 = mn(h, Math.ceil(cy + r));
     if (x1 <= x0 || y1 <= y0) return;
     ctx.fillStyle = addS(ctx.createRadialGradient(cx, cy, 0, cx, cy, r), st);
     ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
@@ -44,7 +44,7 @@
       ? G.__agPrismRipple.parseAmbientScale(r)
       : r == null || r === ''
       ? 1
-      : Math.max(0, Math.min(1, +r > 1 ? +r / 100 : Number.isFinite(+r) ? +r : 1));
+      : mx(0, mn(1, +r > 1 ? +r / 100 : Number.isFinite(+r) ? +r : 1));
 
   function createPrismRimCanvasController({
     isDestroyed, isDarkTheme, motionReduced, getMinFrameGapMs, getAmbientIntensity, getAccentTone,
@@ -58,6 +58,7 @@
 
     const getDoc = () => (typeof document !== 'undefined' ? document : null);
     const getHtml = () => getDoc()?.documentElement || null;
+    const qsa = (s) => getDoc()?.querySelectorAll?.(s) || [];
     const unobs = (o, s, e) => { if (s.has(e)) { try { o?.unobserve?.(e); } catch {} s.delete(e); } };
     const clrOffs = (m) => { for (const f of m.values()) { try { f(); } catch {} } m.clear(); };
     const zClr = (cv) => { try { const c = cv.getContext?.('2d'); if (c && cv.width > 0 && cv.height > 0) c.clearRect(0, 0, cv.width, cv.height); } catch {} };
@@ -115,7 +116,7 @@
       if (all) {
         emitComp(null);
         for (const c of trkCvs) zCv(c);
-        getDoc()?.querySelectorAll?.(CV_S)?.forEach?.(zCv);
+        qsa(CV_S).forEach?.(zCv);
       }
     };
     const armIdle = () => {
@@ -129,7 +130,7 @@
       if (!e) return;
       e._s = '';
       if (e.ctx && e.cv && e.cv.width > 0 && e.cv.height > 0 && !e.cl) {
-        try { e.ctx.clearRect(0, 0, e.cv.width, e.cv.height); } catch {}
+        T(() => e.ctx.clearRect(0, 0, e.cv.width, e.cv.height));
         e.cl = true;
       }
     };
@@ -138,7 +139,7 @@
       pBoxes.forEach(clrEnt);
       clrEnt(orchE);
       emitComp(null);
-      getDoc()?.querySelectorAll?.(CV_S)?.forEach?.(zClr);
+      qsa(CV_S).forEach?.(zClr);
       if (immediateShrink) shrinkRims(1);
       else armIdle();
     };
@@ -187,8 +188,8 @@
         return;
       }
       for (const cv of Array.from(trkCvs)) if (dis(cv)) trkCvs.delete(cv);
-      d.querySelectorAll(CV_S).forEach((cv) => { if (!keepHost(cv.parentElement)) rmCv(cv); else trkCvs.add(cv); });
-      d.querySelectorAll(`[${CV_A}]`).forEach((h) => { if (!keepHost(h) || !h.querySelector?.(CV_S)) ra(h, CV_A); });
+      qsa(CV_S).forEach((cv) => { if (!keepHost(cv.parentElement)) rmCv(cv); else trkCvs.add(cv); });
+      qsa(`[${CV_A}]`).forEach((h) => { if (!keepHost(h) || !h.querySelector?.(CV_S)) ra(h, CV_A); });
     };
 
     const ensureCv = (hostEl) => {
@@ -218,7 +219,7 @@
     const strokeRR = (ctx, x, y, w, h, r) => {
       ctx.beginPath();
       if (isFn(ctx.roundRect)) { ctx.roundRect(x, y, w, h, r); return; }
-      const cr = Math.max(0, Math.min(r, w * 0.5, h * 0.5));
+      const cr = mx(0, mn(r, w * 0.5, h * 0.5));
       ctx.moveTo(x + cr, y);
       ctx.arcTo(x + w, y, x + w, y + h, cr);
       ctx.arcTo(x + w, y + h, x, y + h, cr);
@@ -239,7 +240,7 @@
       if ((rW || 0) * (rH || 0) > 120000) return;
       const dO = Math.hypot(lx < 0 ? -lx : lx > rW ? lx - rW : 0, ly < 0 ? -ly : ly > rH ? ly - rH : 0);
       if (dO > 42) return;
-      const a = effA * Math.max(0, 1 - dO / 42) * (dark ? 1 : 0.65);
+      const a = effA * mx(0, 1 - dO / 42) * (dark ? 1 : 0.65);
       if (a <= 0.01) return;
       const rx = gx + 3.2 * dpr, ry = gy + 4.2 * dpr;
       fillRad(ctx, rx + 2 * dpr, ry + 3 * dpr, 26 * dpr, w, h, dark ? [0, rg('248,252,255', 0.135 * a), 0.45, rg('216,232,252', 0.05 * a), 1, 'rgba(200,220,250,0)'] : [0, rg('37,99,235', 0.065 * a), 1, 'rgba(37,99,235,0)']);
@@ -257,11 +258,11 @@
       if (!active || amb <= 0.001) { clrEnt(e); return true; }
       const isM = !!e.mm, isRB = !isM && !!e.rb, ip = e.ip || 0;
       const dprCap = busOf()?.getAdaptiveDprCap?.(1.5) || 1.5;
-      const dpr = Math.min((typeof window !== 'undefined' && window.devicePixelRatio) || G.devicePixelRatio || 1, dprCap);
-      const w = Math.max(4, Math.round((e.rect.width + ip) * dpr));
-      const h = Math.max(4, Math.round((e.rect.height + ip) * dpr));
+      const dpr = mn((typeof window !== 'undefined' && window.devicePixelRatio) || G.devicePixelRatio || 1, dprCap);
+      const w = mx(4, Math.round((e.rect.width + ip) * dpr));
+      const h = mx(4, Math.round((e.rect.height + ip) * dpr));
       const cssR = e.br > 0 ? e.br : 10;
-      const effA = Math.max(0, Math.min(1, amb * (!isM && toneKey === 'mono' ? 0.58 : 1)));
+      const effA = mx(0, mn(1, amb * (!isM && toneKey === 'mono' ? 0.58 : 1)));
       const sig = `${w}|${h}|${radius}|${dark ? 1 : 0}|${isM ? 'm' : toneKey}|${isRB ? 'b' : ''}|${effA.toFixed(3)}|${cssR}|${ip}`;
       if (!e.cl && e.cv.width === w && e.cv.height === h && e._s === sig && Math.abs(lx - e._x) < 0.5 && Math.abs(ly - e._y) < 0.5) return true;
       if (e.cv.width !== w || e.cv.height !== h) { e.cv.width = w; e.cv.height = h; }
@@ -269,9 +270,9 @@
       const ctx = e.ctx;
       ctx.clearRect(0, 0, w, h);
       const padOff = ip * 0.5, gx = (lx + padOff) * dpr, gy = (ly + padOff) * dpr, gr = radius * dpr;
-      const inset = (ip ? 1 : 0.75) * dpr, rw = Math.max(2, w - inset * 2), rh = Math.max(2, h - inset * 2), rr = Math.min(rw * 0.5, rh * 0.5, cssR * dpr);
-      const prevA = ctx.globalAlpha;
-      const canTr = isFn(ctx.save) && isFn(ctx.translate) && isFn(ctx.restore);
+      const inset = (ip ? 1 : 0.75) * dpr, rw = mx(2, w - inset * 2), rh = mx(2, h - inset * 2), rr = mn(rw * 0.5, rh * 0.5, cssR * dpr);
+      const prevA = ctx.globalAlpha, resA = () => { ctx.globalAlpha = prevA !== undefined ? prevA : 1; return true; };
+      const canClip = isFn(ctx.save) && isFn(ctx.clip), canTr = isFn(ctx.save) && isFn(ctx.translate) && isFn(ctx.restore);
       const strokeRad = (slot, key, tx, ty, rad, lw, al, mk) => {
         if (canTr) {
           const g = cGrad(e, slot, key, () => mk(0, 0, rad));
@@ -285,9 +286,9 @@
       };
 
       if (isM) {
-        if (isFn(ctx.save) && isFn(ctx.clip) && isFn(ctx.fillRect)) {
+        if (canClip && isFn(ctx.fillRect)) {
           ctx.save();
-          strokeRR(ctx, 0, 0, w, h, Math.min(w * 0.5, h * 0.5, cssR * dpr));
+          strokeRR(ctx, 0, 0, w, h, mn(w * 0.5, h * 0.5, cssR * dpr));
           ctx.clip();
           fillRad(ctx, gx, gy, 210 * dpr, w, h, dark ? [0, rg('238,245,255', 0.068 * effA), 0.42, rg('206,224,250', 0.026 * effA), 0.8, rg('180,202,238', 0.006 * effA), 1, 'rgba(180,202,238,0)'] : [0, rg('37,99,235', 0.042 * effA), 0.5, rg('37,99,235', 0.014 * effA), 1, 'rgba(37,99,235,0)']);
           if (isFn(ctx.translate) && isFn(ctx.createLinearGradient)) drawRefl(ctx, gx, gy, w, h, dpr, dark, effA, e.rect.width, e.rect.height, lx, ly);
@@ -295,18 +296,17 @@
         }
         const mSt = dark ? [0, 'rgba(255,255,255,.95)', .24, 'rgba(232,240,252,0.56)', .54, 'rgba(186,202,228,.18)', .85, 'rgba(148,168,198,.03)', 1, 'rgba(148,168,198,0)'] : [0, 'rgba(30,64,175,.52)', .42, 'rgba(59,130,246,.2)', 1, 'rgba(59,130,246,0)'];
         strokeRad('ms', `${gr}|${dark ? 1 : 0}`, gx, gy, gr, 1.35 * dpr, effA, (x, y, rad) => addS(ctx.createRadialGradient(x, y, 0, x, y, rad), mSt));
-        ctx.globalAlpha = prevA !== undefined ? prevA : 1;
-        return true;
+        return resA();
       }
 
       if (isRB) {
-        const gyR = h + 16 * dpr, grR = Math.max(radius * 1.15, 220) * dpr, ob = ly - e.rect.height;
-        const aR = effA * 0.46 * (ob > 150 ? Math.max(0, 1 - (ob - 150) / 190) : ly < 0 ? Math.max(0, 1 + ly / 80) : 1);
+        const gyR = h + 16 * dpr, grR = mx(radius * 1.15, 220) * dpr, ob = ly - e.rect.height;
+        const aR = effA * 0.46 * (ob > 150 ? mx(0, 1 - (ob - 150) / 190) : ly < 0 ? mx(0, 1 + ly / 80) : 1);
         if (aR > 0.004) {
           strokeRad('rb', `${grR}|${dark ? 1 : 0}|${toneKey}`, gx, gyR, grR, 1.15 * dpr, aR, (x, y, rad) => palS(ctx.createRadialGradient(x, y, 0, x, y, rad), toneKey, dark));
-          if (isFn(ctx.save) && isFn(ctx.clip)) {
+          if (canClip) {
             ctx.save(); strokeRR(ctx, inset, inset, rw, rh, rr); ctx.clip();
-            const wh = Math.min(rh, 14 * dpr), wc = dark ? '255,255,255' : '59,130,246', wr = Math.max(grR * 0.72, 160 * dpr), yTop = Math.max(0, h - wh);
+            const wh = mn(rh, 14 * dpr), wc = dark ? '255,255,255' : '59,130,246', wr = mx(grR * 0.72, 160 * dpr), yTop = mx(0, h - wh);
             if (canTr) {
               ctx.globalAlpha = 0.032 * aR; ctx.translate(gx, h + 2 * dpr);
               ctx.fillStyle = cGrad(e, 'rw', `${wr}|${dark ? 1 : 0}`, () => addS(ctx.createRadialGradient(0, 0, 0, 0, 0, wr), [0, `rgba(${wc},1)`, 1, `rgba(${wc},0)`]));
@@ -323,13 +323,11 @@
             ctx.save(); ctx.globalCompositeOperation = 'destination-in'; ctx.globalAlpha = 1; ctx.fillStyle = mkG; ctx.fillRect(0, 0, w, h); ctx.restore();
           }
         }
-        ctx.globalAlpha = prevA !== undefined ? prevA : 1;
-        return true;
+        return resA();
       }
 
       strokeRad('nm', `${gr}|${dark ? 1 : 0}|${toneKey}`, gx, gy, gr, 1.45 * dpr, effA, (x, y, rad) => palS(ctx.createRadialGradient(x, y, 0, x, y, rad), toneKey, dark));
-      ctx.globalAlpha = prevA !== undefined ? prevA : 1;
-      return true;
+      return resA();
     };
 
     const busOf = () => G.__agDomBus || G.__agPrismDomBus || (typeof window !== 'undefined' && (window.__agDomBus || window.__agPrismDomBus)) || null;
@@ -371,7 +369,7 @@
       return spIoI;
     };
     const scanSp = (rd) => {
-      const ps = Array.from(getDoc()?.querySelectorAll?.('[data-testid="step-plan"]') || []), des = new Set(), rcs = new Map();
+      const ps = Array.from(qsa('[data-testid="step-plan"]')), des = new Set(), rcs = new Map();
       const bus = busOf();
       if (isRimOn() && !isWB()) {
         for (let i = ps.length - 1; i >= 0 && des.size < 2; i--) {
@@ -398,19 +396,19 @@
           }));
         }
         for (const [o, off] of Array.from(visOffs.entries())) if (!pSet.has(o) || dis(o)) {
-          try { off(); } catch {}
+          T(off);
           visOffs.delete(o); spVis.delete(o);
         }
       } else {
         const io = ps.length ? spIo() : spIoI;
         if (io) {
-          for (const p of ps) if (!spObs.has(p)) { try { io.observe(p); spObs.add(p); } catch {} }
+          for (const p of ps) if (!spObs.has(p)) T(() => { io.observe(p); spObs.add(p); });
           for (const o of Array.from(spObs)) if (!pSet.has(o) || dis(o)) { unobs(io, spObs, o); spVis.delete(o); }
         }
       }
       for (const s of Array.from(spOn)) if (!des.has(s)) {
         spOn.delete(s);
-        try { ra(s, PB); ra(s, PM); s.style?.removeProperty?.('--ag-px'); s.style?.removeProperty?.('--ag-py'); } catch {}
+        T(() => { ra(s, PB); ra(s, PM); s.style?.removeProperty?.('--ag-px'); s.style?.removeProperty?.('--ag-py'); });
       }
       for (const s of des) {
         setAttrIfChanged(s, PB, '1');
@@ -429,20 +427,20 @@
       const bus = busOf();
       const sp = scanSp(allowRd), ro = ensureRo(), prevM = new Map(), nextObs = new Set(), next = [], bSet = new Set(), bList = [];
       for (const e of pBoxes) prevM.set(e.box, e);
-      for (const b of document.querySelectorAll(`[${PB}="1"]`) || []) if ((!spOn.has(b) || sp.des.has(b)) && !bSet.has(b)) { bSet.add(b); bList.push(b); }
+      for (const b of qsa(`[${PB}="1"]`)) if ((!spOn.has(b) || sp.des.has(b)) && !bSet.has(b)) { bSet.add(b); bList.push(b); }
       for (const s of sp.des) if (!bSet.has(s)) { bSet.add(s); bList.push(s); }
       const trk = getActiveCrystalTrack ? getActiveCrystalTrack() : null;
       let nextO = null;
       const pre = bList.map((box) => {
-        const prev = prevM.get(box), sk = Boolean(bus?.isSkipped?.(box));
+        const prev = prevM.get(box), sk = !!bus?.isSkipped?.(box);
         return [box, prev, prev && prev.br >= 0 ? prev.br : readRad(box, 10), sk ? null : (sp.rcs.get(box) || (allowRd && box.getBoundingClientRect ? box.getBoundingClientRect() : null))];
       });
       const oRect = trk && allowRd && !bus?.isSkipped?.(trk) && trk.getBoundingClientRect ? trk.getBoundingClientRect() : null;
       const mkEntry = (box, rect, prev, ip, br, mm = false, rb = false) => {
         nextObs.add(box);
         if (bus?.observeSize) {
-          if (!szOffs.has(box)) { try { szOffs.set(box, bus.observeSize(box, onResize)); } catch {} }
-        } else if (ro && !obsSet.has(box)) { try { ro.observe(box); obsSet.add(box); } catch {} }
+          if (!szOffs.has(box)) T(() => szOffs.set(box, bus.observeSize(box, onResize)));
+        } else if (ro && !obsSet.has(box)) T(() => { ro.observe(box); obsSet.add(box); });
         const reuse = !!(prev?.cv?.isConnected), rim = reuse ? prev : ensureCv(box);
         return {
           box, rect, cv: rim ? rim.cv : null, ctx: rim ? rim.ctx : null, ip, mm, rb, br,
@@ -460,7 +458,7 @@
           next.push(mkEntry(box, rect, prev, pad, br, mM, rB));
         }
         if (trk) nextO = mkEntry(trk, oRect, orchE?.box === trk ? orchE : null, 0, 999, false, false);
-        for (const [oldEl, off] of Array.from(szOffs.entries())) if (!nextObs.has(oldEl)) { try { off(); } catch {} szOffs.delete(oldEl); }
+        for (const [oldEl, off] of Array.from(szOffs.entries())) if (!nextObs.has(oldEl)) { T(off); szOffs.delete(oldEl); }
         if (ro) for (const oldEl of Array.from(obsSet)) if (!nextObs.has(oldEl)) unobs(ro, obsSet, oldEl);
         prOrp();
       });
@@ -486,11 +484,11 @@
         return;
       }
       const now = typeof rafNow === 'number' && rafNow > 0 ? rafNow : performance.now();
-      const minGap = Math.max(0, Number(getMinFrameGapMs?.() ?? 0) || 0);
+      const minGap = mx(0, Number(getMinFrameGapMs?.() ?? 0) || 0);
       if (minGap > 0 && drawAt > 0 && now - drawAt < minGap) { schedRaf(); return; }
       drawAt = now;
       const { x, y } = ptr, allowRd = ptrIn(), bus = busOf();
-      const hasRo = Boolean(boxRo || szOffs.size > 0);
+      const hasRo = !!(boxRo || szOffs.size > 0);
       const trk = getActiveCrystalTrack ? getActiveCrystalTrack() : null;
       if (
         pDirty || !pBoxes.length || (!hasRo && now - cacheAt > 2500) || now - cacheAt > 8000 ||
@@ -514,7 +512,7 @@
           if (hit) { inR = true; lx = x - r.left; ly = y - r.top; }
         }
         if (!e.mm && !e.rb && e.box?.classList?.contains?.('surface-composer-card')) {
-          const st = inR && Math.abs(ly) < 220 ? Math.min(1, amb * (tk === 'mono' ? 0.62 : 1)) * (1 - Math.abs(ly) / 220) : 0;
+          const st = inR && Math.abs(ly) < 220 ? mn(1, amb * (tk === 'mono' ? 0.62 : 1)) * (1 - Math.abs(ly) / 220) : 0;
           if (!compRim || st > compRim.strength) compRim = { localX: lx, strength: st, toneKey: tk, dark };
         }
         if (e.ctx && paintRim(e, inR, lx, ly, gradR, dark, tk, amb)) return;
@@ -617,10 +615,8 @@
       if (isDestroyed()) return;
       if (isH()) { clrRaf(); shrinkRims(1); return; }
       if (!isRimOn()) { runGuardedMut(() => { clrRaf(); clrAll(true); }); return; }
-      const d = getDoc();
-      if (!d || !isFn(d.querySelectorAll)) return;
       runGuardedMut(() => {
-        for (const box of d.querySelectorAll(`[${PB}="1"]`) || []) if (!dis(box) && ga(box, CV_A) !== '1') ensureCv(box);
+        for (const box of qsa(`[${PB}="1"]`)) if (!dis(box) && ga(box, CV_A) !== '1') ensureCv(box);
         if (!isWB() && !dragOff()) { drawAt = 0; schedRaf(); }
       });
     };
@@ -650,18 +646,18 @@
       clrRaf(); emitComp(null); bindEv('removeEventListener'); shrinkRims(1); trkCvs.clear();
       sbT = null; sbAt = 0; rectAt = 0;
       clrOffs(szOffs);
-      if (boxRo) { try { boxRo.disconnect(); } catch {} boxRo = null; }
+      if (boxRo) { T(() => boxRo.disconnect()); boxRo = null; }
       obsSet.clear();
       clrOffs(visOffs);
-      if (spIoI) { try { spIoI.disconnect(); } catch {} spIoI = null; }
+      if (spIoI) { T(() => spIoI.disconnect()); spIoI = null; }
       spObs.clear(); spVis.clear();
-      for (const s of spOn) { try { ra(s, PB); ra(s, PM); } catch {} }
+      for (const s of spOn) T(() => { ra(s, PB); ra(s, PM); });
       spOn.clear();
       const d = getDoc();
       if (d) {
         d.getElementById?.('ag-prism-dyn-vars')?.remove?.();
-        d.querySelectorAll?.(CV_S)?.forEach?.((n) => n.remove?.());
-        d.querySelectorAll?.(`[${CV_A}]`)?.forEach?.((e) => ra(e, CV_A));
+        qsa(CV_S).forEach?.((n) => n.remove?.());
+        qsa(`[${CV_A}]`).forEach?.((e) => ra(e, CV_A));
       }
       pBoxes = []; orchE = null;
     };

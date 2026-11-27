@@ -183,7 +183,7 @@ function createCh1Templates({
       const cfg = __AG_REF_CFG__, W = window, D = document, G = globalThis;
       const api = W.__agPrism || W.__agClaudeStyle;
       if (api && api.version === __AG_REF_VER__ && api.codeHash === __AG_REF_HASH__ && typeof api.refreshConfig === 'function') {
-        const T = (f) => { try { f(); } catch {} };
+        const off = (v) => v === 'off' || v === false, T = (f) => { try { f(); } catch {} };
         if (cfg.__pmAuto) T(() => W.__agDomBus?.resolveAutoBootPerfMode?.(cfg, W));
         if (api.refreshConfig(cfg) === false) return { refreshed: true, skippedStale: true, version: api.version };
         const e = api.getState?.()?.cfg || cfg, de = D.documentElement;
@@ -191,9 +191,9 @@ function createCh1Templates({
         const rm = (s) => qa(s).forEach((n) => n.remove?.());
         const ra = (s) => de && s.split(',').forEach((a) => de.removeAttribute?.(a));
         const dw = (s, p = '') => s.split(',').forEach((k) => { T(() => delete W[p + k]); T(() => delete G[p + k]); });
-        T(() => (e?.telemetryModule === 'off' || e?.telemetryModule === false ? (api.detachTelemetry?.(), W.__agPrismTelemetry?.destroy?.()) : (W.__agPrismTelemetry?.sync?.(e), api.syncTelemetry?.())));
-        T(() => (e?.effortSliderModule === 'off' || e?.effortSliderModule === false ? W.__agPrismEffortSlider?.destroy?.() : W.__agPrismEffortSlider?.sync?.(e)));
-        if (e?.contextMenu === false || e?.contextMenu === 'off') T(() => W.__agPrismContextMenu?.destroy?.());
+        T(() => (off(e?.telemetryModule) ? (api.detachTelemetry?.(), W.__agPrismTelemetry?.destroy?.()) : (W.__agPrismTelemetry?.sync?.(e), api.syncTelemetry?.())));
+        T(() => (off(e?.effortSliderModule) ? W.__agPrismEffortSlider?.destroy?.() : W.__agPrismEffortSlider?.sync?.(e)));
+        if (off(e?.contextMenu)) T(() => W.__agPrismContextMenu?.destroy?.());
         T(() => W.__agPrismThought?.sync?.(e));
         T(() => W.__agPrismInlineDiff?.sync?.(e));
         T(() => (e?.omniModule === 'off' ? W.__agPrismOmni?.destroy?.() : W.__agPrismOmni?.sync?.(e, W.__agPrismOmniServerMeta || null)));
@@ -208,14 +208,12 @@ function createCh1Templates({
           else if ((l && l !== 'zh-CN' && l !== 'tr' && l !== 'auto') || ((!l || l === 'auto') && navL && !/^(?:zh(?:$|-(?:cn|hans|sg)(?:-|$))|tr(?:$|-))/i.test(navL))) W.__agPrismHostI18n?.destroy?.();
           else W.__agPrismHostI18n?.setMode?.('auto');
         });
-        if (e?.mascot === 'off' || e?.mascot === false) {
-          T(() => {
-            T(() => W.__agDualMascotRig?.dispose?.()); T(() => api.sync?.());
-            qa('.ag-cs-crab,.ag-cs-dual-stage,.ag-cs-crab-stage,.ag-cs-mascot-stage,.ag-v2-mascot-stage,.ag-v2-habitat-prop').forEach((n) => { T(() => n.__agMascotApi?.dispose?.()); n.remove?.(); });
-            qa('[data-ag-cs-crab-anchor]').forEach((n) => n.removeAttribute?.('data-ag-cs-crab-anchor'));
-            ra('data-ag-cs-has-crab,data-ag-cs-mascot-drag');
-            dw('__agDualMascotRig,__agPrismMascotArt');
-          });
+        if (off(e?.mascot)) {
+          T(() => W.__agDualMascotRig?.dispose?.()); T(() => api.sync?.());
+          T(() => qa('.ag-cs-crab,.ag-cs-dual-stage,.ag-cs-crab-stage,.ag-cs-mascot-stage,.ag-v2-mascot-stage,.ag-v2-habitat-prop').forEach((n) => { T(() => n.__agMascotApi?.dispose?.()); n.remove?.(); }));
+          T(() => qa('[data-ag-cs-crab-anchor]').forEach((n) => n.removeAttribute?.('data-ag-cs-crab-anchor')));
+          ra('data-ag-cs-has-crab,data-ag-cs-mascot-drag');
+          dw('__agDualMascotRig,__agPrismMascotArt');
         }
         if (e?.homeLayout && e.homeLayout !== 'studio') {
           T(() => {
@@ -224,7 +222,7 @@ function createCh1Templates({
             dw('__agPrismHomeStudioPanel,__agHomeStudioPanel');
           });
         }
-        if (e?.periodicModelPicker === 'off' || e?.periodicModelPicker === false) {
+        if (off(e?.periodicModelPicker)) {
           T(() => {
             W.__agPrismPeriodicStub?.destroy?.();
             W.__agPrismPeriodicPicker?.destroy?.();
@@ -279,7 +277,7 @@ function createCh1Templates({
     if (_injectWrapperTemplate) return _injectWrapperTemplate;
     const rawTpl = `(() => {
       const W = window, D = document, G = globalThis;
-      const isF = (v) => typeof v === 'function', isO = (v) => Boolean(v && typeof v === 'object');
+      const isF = (v) => typeof v === 'function', isS = (v) => typeof v === 'string', isO = (v) => !!(v && typeof v === 'object');
       const T = (f) => { try { return f(); } catch {} }, sp = (s) => s.split(',');
       const gid = (i) => D.getElementById?.(i), qa = (s) => D.querySelectorAll?.(s) || [], qs = (s) => T(() => D.querySelector(s));
       const VER = ${JSON.stringify(pluginVersion)}, SID = ${JSON.stringify(STYLE_ID)}, LSID = ${JSON.stringify(LEGACY_STYLE_ID)}, OFF_MSG = 'Sidecar daemon offline';
@@ -297,8 +295,10 @@ function createCh1Templates({
         if (prev && prev.cssHash === fk && !prev._disposed) return prev;
         T(() => prev?.destroy?.());
         const css = getCss(), SC = W.CSSStyleSheet || (typeof CSSStyleSheet === 'function' ? CSSStyleSheet : null);
-        const canA = () => Boolean(T(() => SC && isF(SC.prototype?.replaceSync) && isF(D.adoptedStyleSheets?.[Symbol.iterator])));
+        const hasAd = () => isF(D.adoptedStyleSheets?.[Symbol.iterator]);
+        const canA = () => !!T(() => SC && isF(SC.prototype?.replaceSync) && hasAd());
         let sh = null;
+        const dropAd = () => { if (sh && hasAd()) T(() => { D.adoptedStyleSheets = Array.from(D.adoptedStyleSheets).filter((s) => s !== sh); }); };
         const setSent = (txt, ad) => {
           const p = D.head || D.documentElement;
           if (!p) return;
@@ -324,7 +324,7 @@ function createCh1Templates({
               if (!cur.includes(sh)) D.adoptedStyleSheets = cur.concat(sh);
               setSent('', true);
             } else {
-              if (sh && isF(D.adoptedStyleSheets?.[Symbol.iterator])) T(() => { D.adoptedStyleSheets = Array.from(D.adoptedStyleSheets).filter((s) => s !== sh); });
+              dropAd();
               setSent(css, false);
             }
             return mgr;
@@ -332,7 +332,7 @@ function createCh1Templates({
           destroy(opts) {
             if (mgr._disposed) return;
             mgr._disposed = true;
-            if (sh && isF(D.adoptedStyleSheets?.[Symbol.iterator])) T(() => { D.adoptedStyleSheets = Array.from(D.adoptedStyleSheets).filter((s) => s !== sh); });
+            dropAd();
             sh = null; mgr.activeKeys = []; mgr.activeBytes = 0;
             T(() => { const s = gid(SID); if (s) { if (opts?.keepStyleNode) s.textContent = ''; else s.remove?.(); } });
           },
@@ -373,7 +373,7 @@ function createCh1Templates({
         if (W.__agPrismRepoBridge?.__prismBridgeReady) return;
         const c = mkRpc('__agPrismRepoCall', 8, () => ({ ok: false, timeout: true, noRemote: true, hasRemote: false }), (e) => ({ ok: false, error: e }), { ok: false, disposed: true });
         const fn = (inp) => {
-          const p = typeof inp === 'string' ? { action: inp } : isO(inp) ? { ...inp } : { action: 'status' }, a = p.action || 'status';
+          const p = isS(inp) ? { action: inp } : isO(inp) ? { ...inp } : { action: 'status' }, a = p.action || 'status';
           if (!isF(W.__agPrismRepoCall)) return Promise.resolve({ ok: false, offline: true, action: a, isGitRepo: false, noRemote: true, hasRemote: false, branch: 'local', commit: VER, shortHash: VER, remoteUrl: '', hasUpdates: false, upToDate: true, updated: false, message: OFF_MSG });
           return c.send((id) => ({ id, action: a, input: p }), 16000).then((r) => (r && !r.action ? { ...r, action: a } : r));
         };
@@ -402,8 +402,8 @@ function createCh1Templates({
             const it = c.pend.get(id);
             if (!it || !isF(it.onP)) return;
             let txt = null;
-            if (typeof ch === 'string') it.buf = txt = ch;
-            else if (isO(ch) && typeof ch.a === 'string') { const s = typeof it.buf === 'string' ? it.buf : ''; if ((ch.o | 0) === s.length) it.buf = txt = s + ch.a; }
+            if (isS(ch)) it.buf = txt = ch;
+            else if (isO(ch) && isS(ch.a)) { const s = isS(it.buf) ? it.buf : ''; if ((ch.o | 0) === s.length) it.buf = txt = s + ch.a; }
             if (txt !== null) { T(() => it.arm?.(60000)); T(() => it.onP(txt)); }
           },
           resolve: c.resolve, dispose: c.dispose,
@@ -420,7 +420,7 @@ function createCh1Templates({
         const rpc = (q, ms = 18000) => (!isF(W.__agPrismUsageCall) ? Promise.resolve(fu({ offline: true })) : c.send((id) => ({ id, ...q }), ms));
         const b = {
           __prismBridgeReady: true, isOnline: () => isF(W.__agPrismUsageCall),
-          fetchBatch: (o, ms = 18000) => (isO(o) && !Array.isArray(o) ? rpc({ action: o.action || 'fetch-batch', items: Array.isArray(o.items) ? o.items : [], includeSummaries: Boolean(o.includeSummaries) }, ms) : rpc({ action: 'fetch-batch', items: Array.isArray(o) ? o : [] }, ms)),
+          fetchBatch: (o, ms = 18000) => (isO(o) && !Array.isArray(o) ? rpc({ action: o.action || 'fetch-batch', items: Array.isArray(o.items) ? o.items : [], includeSummaries: !!o.includeSummaries }, ms) : rpc({ action: 'fetch-batch', items: Array.isArray(o) ? o : [] }, ms)),
           listSummaries: (ms = 12000) => rpc({ action: 'list-summaries', items: [], includeSummaries: true }, ms),
           resolve: c.resolve, dispose: c.dispose,
         };
@@ -446,13 +446,13 @@ function createCh1Templates({
         for (const k of sp('__agPrismCssMgr,__agPrismPeriodicStub,__agPrismPeriodicStubFactory,__agPeriodicPendingOpen,__agPeriodicFullLoaded,__agPeriodicStubHash,__agPrismThought,__agPrismThoughtSettingsUi,__agPrismInlineDiff,__agPrismInlineDiffFactory,__agPrismInlineDiffResolve,__agPrismOmni,__agPrismContextMenu,__agPrism,__agClaudeStyle')) { delete W[k]; delete G[k]; }
       };
 
-      const hasMarkers = () => Boolean(T(() => {
+      const hasMarkers = () => !!T(() => {
         const cl = D.body?.classList;
         return (cl && (cl.contains('theme-standalone') || cl.contains('monaco-workbench'))) || qs('.agy-shell,.agy-home,[data-testid="aux-pane-split"],[data-testid="conversation-view"],[data-testid="agent-input-box"],[data-testid="model-selector-trigger"],.monaco-workbench');
-      }));
+      });
 
       const checkHost = () => T(() => {
-        const href = typeof W.location?.href === 'string' ? W.location.href : '';
+        const href = isS(W.location?.href) ? W.location.href : '';
         if (!href) return 'ok';
         const low = href.toLowerCase(), ttl = String(D.title || '');
         if (/^(?:devtools:\\/\\/|data:|chrome:|chrome-extension:|edge:|blob:|plugin:)/.test(low)) return 'reject';

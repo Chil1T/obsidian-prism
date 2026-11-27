@@ -8,7 +8,6 @@
   'use strict';
   const BUSY_ATTR = 'data-ag-perf-busy', PERF_MODE_ATTR = 'data-ag-cs-perf-mode', STREAM_ATTR = 'data-ag-cs-stream-active';
   const PERF_CHANGE_EVENT = 'ag-prism-perf-mode-change', CV_EV = 'contentvisibilityautostatechange', BM_EV = 'beforematch';
-  const SCROLL_HOLD_MS = 200, LOW_STREAM_THROTTLE_MS = 180, DEFAULT_IO_MARGIN = '250px 0px';
   const PASSIVE_CAP = Object.freeze({ capture: true, passive: true }), PASSIVE_OPT = Object.freeze({ passive: true });
   const OFF_P = 'html[data-ag-cs-style][data-ag-cs-motion="off"] :is(';
   const OFF_PS = '[data-testid="status-loading-spinner"],[data-testid="input-cancel-button"],[data-ag-cs-row-running="1"],[data-ag-sub-running="1"],[data-ag-overview-running="1"],[data-ag-sp-running="1"],[data-ag-cs-caustic="1"],[data-ag-cs-fiber-camp],[data-ag-cs-thought-streaming="1"],.ag-cs-sidebar-glide-pill,.agy-scroll-bottom';
@@ -22,33 +21,34 @@
   });
   const SW_RE = /swiftshader|llvmpipe|softpipe|microsoft basic render|software rasterizer|mesa offscreen/i;
   const PM_RE = /^(?:performance|eco|balanced|quality)$/;
-  const normalizePerformanceMode = (raw) => {
-    if (typeof raw !== 'string') return 'balanced';
-    const l = raw.trim().toLowerCase();
+  const isF = (v) => typeof v === 'function', isS = (v) => typeof v === 'string', isN = (v) => typeof v === 'number';
+  const isO = (v) => !!(v && typeof v === 'object'), isA = Array.isArray, isFin = Number.isFinite;
+  const T = (f) => { try { return f(); } catch {} }, noop = () => {}, trimL = (v) => (isS(v) ? v.trim().toLowerCase() : '');
+  const clrT = (t) => { if (t) clearTimeout(t); return 0; };
+  const normPm = (raw) => {
+    const l = trimL(raw);
     return l === 'performance' || l === 'eco' ? 'performance' : l === 'quality' ? 'quality' : 'balanced';
   };
   const readHw = (env) => {
     const s = isO(env) ? env : null, nav = s?.navigator || (s ? null : (typeof navigator !== 'undefined' ? navigator : G?.navigator || null));
-    const r = typeof s?.renderer === 'string' ? s.renderer : typeof s?.glRenderer === 'string' ? s.glRenderer : '';
-    const rm = s && 'deviceMemory' in s ? s.deviceMemory : nav?.deviceMemory;
-    const rc = s && 'hardwareConcurrency' in s ? s.hardwareConcurrency : nav?.hardwareConcurrency;
-    return { sw: Boolean(r && SW_RE.test(r)), mem: rm == null || rm === '' ? NaN : +rm, cores: rc == null || rc === '' ? NaN : +rc };
+    const r = isS(s?.renderer) ? s.renderer : isS(s?.glRenderer) ? s.glRenderer : '';
+    const num = (v) => (v == null || v === '' ? NaN : +v);
+    return { sw: !!(r && SW_RE.test(r)), mem: num(s && 'deviceMemory' in s ? s.deviceMemory : nav?.deviceMemory), cores: num(s && 'hardwareConcurrency' in s ? s.hardwareConcurrency : nav?.hardwareConcurrency) };
   };
-  const isLowHw = (h) => h.sw || (isFin(h.mem) && h.mem > 0 && h.mem <= 4) || (isFin(h.cores) && h.cores > 0 && h.cores <= 4 && !(isFin(h.mem) && h.mem >= 8));
-  const detectLowEndHardware = (env) => isLowHw(readHw(env));
-  function resolveEffectivePerformanceMode(rawMode, opts) {
+  const posLe = (v, m) => isFin(v) && v > 0 && v <= m;
+  const isLowHw = (h) => h.sw || posLe(h.mem, 4) || (posLe(h.cores, 4) && !(isFin(h.mem) && h.mem >= 8));
+  const isLowEnd = (env) => isLowHw(readHw(env));
+  function resEffPm(rawMode, opts) {
     const o = isO(opts) ? opts : {};
-    if (o.explicit === true) return normalizePerformanceMode(rawMode);
-    if (typeof o.savedMode === 'string' && o.savedMode.trim() && o.forceAuto !== true) return normalizePerformanceMode(o.savedMode);
-    const l = typeof rawMode === 'string' ? rawMode.trim().toLowerCase() : '';
-    if ((!l || l === 'auto' || l === 'balanced') && detectLowEndHardware(o.env !== undefined ? o.env : o.win?.navigator ? { navigator: o.win.navigator } : undefined)) return 'performance';
-    return normalizePerformanceMode(rawMode);
+    if (o.explicit === true) return normPm(rawMode);
+    if (isS(o.savedMode) && o.savedMode.trim() && o.forceAuto !== true) return normPm(o.savedMode);
+    const l = trimL(rawMode);
+    if ((!l || l === 'auto' || l === 'balanced') && isLowEnd(o.env !== undefined ? o.env : o.win?.navigator ? { navigator: o.win.navigator } : undefined)) return 'performance';
+    return normPm(rawMode);
   }
   const normPri = (p) => (p === 'user-blocking' || p === 'background' ? p : 'user-visible');
   const nowMs = () => (typeof performance !== 'undefined' && performance?.now ? performance.now() : Date.now());
-  const isF = (v) => typeof v === 'function', isO = (v) => Boolean(v && typeof v === 'object'), isA = Array.isArray, isFin = Number.isFinite;
-  const T = (f) => { try { return f(); } catch {} }, noop = () => {};
-  function readBoxSize(entry) {
+  function rdBox(entry) {
     if (!entry) return null;
     for (const k of ['borderBoxSize', 'contentBoxSize']) {
       const bx = isA(entry[k]) ? entry[k][0] : entry[k];
@@ -78,18 +78,18 @@
     const evPair = (tg, add, e1, f1, e2, f2, opt) => {
       const m = add ? 'addEventListener' : 'removeEventListener';
       if (!isF(tg?.[m])) return false;
-      return Boolean(T(() => { tg[m](e1, f1, opt); tg[m](e2, f2, opt); return true; }));
+      return !!T(() => { tg[m](e1, f1, opt); tg[m](e2, f2, opt); return true; });
     };
 
-    const isStreaming = (o) => stBusy || Boolean(getHtml(o)?.getAttribute?.(STREAM_ATTR) === '1');
+    const isStr = (o) => stBusy || getHtml(o)?.getAttribute?.(STREAM_ATTR) === '1';
     const syncBusy = (o) => { const h = getHtml(o); if (h) { if (scBusy || stBusy || mUntil > nowMs()) setA(h, BUSY_ATTR, '1'); else rmA(h, BUSY_ATTR); } };
-    function bumpScrollBusy(ms) {
-      const d = typeof ms === 'number' && ms >= 0 ? ms : SCROLL_HOLD_MS;
+    function bumpSc(ms) {
+      const d = isN(ms) && ms >= 0 ? ms : 200;
       scBusy = true; syncBusy();
-      if (scTmr) clearTimeout(scTmr);
+      scTmr = clrT(scTmr);
       scTmr = setTimeout(() => { scTmr = 0; scBusy = false; syncBusy(); }, d);
     }
-    const onScroll = () => bumpScrollBusy(SCROLL_HOLD_MS);
+    const onScroll = () => bumpSc(200);
     function toggleLs(on, dO, wO) {
       if (on) { if (dO) bDoc = dO; if (wO) bWin = wO; }
       if (on === lsOn) return;
@@ -97,17 +97,17 @@
       if (evPair(tg, on, 'scroll', onScroll, 'wheel', onScroll, PASSIVE_CAP)) lsOn = on;
       else if (!on) lsOn = false;
     }
-    const attach = (d, w) => { toggleLs(true, d, w); attachDv(d); };
+    const att = (d, w) => { toggleLs(true, d, w); attachDv(d); };
     const detach = () => { toggleLs(false); detachDv(); };
-    const setStreaming = (a) => { stBusy = Boolean(a); syncBusy(); };
-    function bumpBusy(ms) {
-      const d = typeof ms === 'number' && ms > 0 ? ms : SCROLL_HOLD_MS, u = nowMs() + d;
+    const setStr = (a) => { stBusy = !!a; syncBusy(); };
+    function bumpB(ms) {
+      const d = isN(ms) && ms > 0 ? ms : 200, u = nowMs() + d;
       if (u > mUntil) mUntil = u;
       syncBusy();
-      if (mTmr) clearTimeout(mTmr);
+      mTmr = clrT(mTmr);
       mTmr = setTimeout(() => { mTmr = 0; if (nowMs() >= mUntil) { mUntil = 0; syncBusy(); } }, d + 4);
     }
-    const isBusy = () => scBusy || isStreaming() || mUntil > nowMs();
+    const isBsy = () => scBusy || isStr() || mUntil > nowMs();
 
     function calcMoOpts() {
       let cL = false, sb = false, at = false, cd = false, allF = true;
@@ -133,10 +133,10 @@
       const t = m.type;
       if (t === 'childList' ? !s.wC : t === 'characterData' ? !s.wD : t === 'attributes' && (!s.wA || (s.aS && m.attributeName && !s.aS.has(m.attributeName)))) return false;
       if (s.rO && m.target && obsTgt && m.target !== obsTgt) return false;
-      return s.f ? Boolean(s.f(m)) : true;
+      return s.f ? !!s.f(m) : true;
     }
     function flushSub(s) {
-      if (s.tm) { clearTimeout(s.tm); s.tm = 0; }
+      s.tm = clrT(s.tm);
       if (!s.q.length) return;
       const b = s.q.splice(0, s.q.length);
       s.at = nowMs();
@@ -144,14 +144,14 @@
     }
     function dispatchMo(muts) {
       if (!muts?.length || !subs.size) return;
-      const hi = isStreaming() || scBusy, caps = getPerfCaps(), now = nowMs();
+      const hi = isStr() || scBusy, caps = gCaps(), now = nowMs();
       for (const s of subs.values()) {
         let hit = null;
         if (s.pa) hit = muts;
         else for (let i = 0; i < muts.length; i++) if (matchRec(s, muts[i])) (hit || (hit = [])).push(muts[i]);
         if (!hit?.length) continue;
         if (s.p === 'low' && (hi || s.th > 0)) {
-          const wMs = hi ? Math.max(s.th || 0, caps.lowPriorityThrottleMs || LOW_STREAM_THROTTLE_MS) : s.th;
+          const wMs = hi ? Math.max(s.th || 0, caps.lowPriorityThrottleMs || 180) : s.th;
           s.q.push(...hit);
           const el = now - s.at;
           if (el >= wMs && !s.tm) flushSub(s);
@@ -160,7 +160,7 @@
         else { s.at = now; T(() => s.h(hit)); }
       }
     }
-    function drainMutations() {
+    function drainM() {
       if (!isF(rootMo?.takeRecords)) return [];
       const r = T(() => rootMo.takeRecords() || []) || [];
       if (r.length) dispatchMo(r);
@@ -176,25 +176,25 @@
       rootMo = new MO(dispatchMo); obsTgt = tg; obsKey = key;
       T(() => rootMo.observe(tg, opts));
     }
-    function subscribe(a1, a2, a3) {
+    function sub(a1, a2, a3) {
       let id = '', h = null, o = {};
       if (isF(a1)) { h = a1; o = isO(a2) ? a2 : {}; }
-      else if (typeof a1 === 'string' && isF(a2)) { id = a1; h = a2; o = isO(a3) ? a3 : {}; }
+      else if (isS(a1) && isF(a2)) { id = a1; h = a2; o = isO(a3) ? a3 : {}; }
       else if (isO(a1) && isF(a2)) { o = a1; h = a2; }
       if (!isF(h)) return noop;
       id = id || o.id || 'sub-' + ++subSeq;
       if (o.doc) bDoc = o.doc;
       if (o.win) bWin = o.win;
       const pv = subs.get(id);
-      if (pv?.tm) clearTimeout(pv.tm);
-      const mo = isO(o.observeOptions) ? o.observeOptions : { childList: true, subtree: true, attributes: Boolean(o.attributes), attributeFilter: o.attributeFilter };
-      const wC = mo.childList !== false, wD = Boolean(mo.characterData), wA = Boolean(mo.attributes);
+      if (pv) pv.tm = clrT(pv.tm);
+      const mo = isO(o.observeOptions) ? o.observeOptions : { childList: true, subtree: true, attributes: !!o.attributes, attributeFilter: o.attributeFilter };
+      const wC = mo.childList !== false, wD = !!mo.characterData, wA = !!mo.attributes;
       const aS = wA && isA(mo.attributeFilter) && mo.attributeFilter.length ? new Set(mo.attributeFilter) : null;
       const rO = mo.subtree === false, f = isF(o.filter) ? o.filter : null;
-      const en = { id, h, p: o.priority === 'high' || o.priority === 'low' ? o.priority : 'normal', f, th: typeof o.throttleMs === 'number' && o.throttleMs > 0 ? o.throttleMs : 0, o: mo, wC, wD, wA, aS, rO, pa: !f && !rO && wC && wD && wA && !aS, q: [], tm: 0, at: 0 };
+      const en = { id, h, p: o.priority === 'high' || o.priority === 'low' ? o.priority : 'normal', f, th: isN(o.throttleMs) && o.throttleMs > 0 ? o.throttleMs : 0, o: mo, wC, wD, wA, aS, rO, pa: !f && !rO && wC && wD && wA && !aS, q: [], tm: 0, at: 0 };
       subs.set(id, en);
-      attach(); reconcileMo();
-      return () => { const c = subs.get(id); if (c !== en) return; if (c.tm) { clearTimeout(c.tm); c.tm = 0; } c.q.length = 0; subs.delete(id); reconcileMo(); };
+      att(); reconcileMo();
+      return () => { const c = subs.get(id); if (c !== en) return; c.tm = clrT(c.tm); c.q.length = 0; subs.delete(id); reconcileMo(); };
     }
 
     function flushBatch() {
@@ -212,24 +212,24 @@
       if (raf) bRaf = raf(flushBatch); else bTmr = setTimeout(flushBatch, 0);
     }
     const enq = (q, pf, k, fn) => { const cb = isF(k) ? k : fn; if (!isF(cb)) return; q.set(isF(k) || !k ? pf + ++bSeq : k, cb); schedBatch(); };
-    const measure = (k, f) => enq(mQ, '__m_', k, f), mutate = (k, f) => enq(wQ, '__w_', k, f);
-    const flushNow = () => { cancelBRaf(); if (bTmr) { clearTimeout(bTmr); bTmr = 0; } flushBatch(); };
+    const meas = (k, f) => enq(mQ, '__m_', k, f), mut = (k, f) => enq(wQ, '__w_', k, f);
+    const flushN = () => { cancelBRaf(); bTmr = clrT(bTmr); flushBatch(); };
 
     function postMc(cb) {
       const MC = gFn('MessageChannel');
-      return Boolean(MC && T(() => {
+      return !!(MC && T(() => {
         if (!mc) { mc = new MC(); mc.port1.onmessage = () => { const f = mcQ.shift(); if (f) f(); }; }
         mcQ.push(cb); mc.port2.postMessage(null); return true;
       }));
     }
-    function yieldSlice() {
+    function ySlice() {
       const sc = getWin()?.scheduler || (typeof scheduler !== 'undefined' ? scheduler : null);
       if (isF(sc?.yield)) { const p = T(() => sc.yield()); if (p) return p; }
       return new Promise((r) => { if (!postMc(r)) setTimeout(r, 0); });
     }
 
     function clrFb(r) {
-      if (r.t) { clearTimeout(r.t); r.t = 0; }
+      r.t = clrT(r.t);
       if (r.i) { T(() => gFn('cancelIdleCallback')?.(r.i)); r.i = 0; }
       r.g++;
     }
@@ -252,21 +252,21 @@
         setT(() => runFb(r), 16);
       } else setT(() => runFb(r), 0);
     }
-    function cancelTask(k) {
+    function cTask(k) {
       const r = tasks.get(k);
       if (!r) return false;
       r.x = true; finT(r); clrFb(r);
       T(() => r.c?.abort?.()); T(() => r.rs?.(undefined));
       return true;
     }
-    function cancelGroup(pf) {
-      if (typeof pf !== 'string' || !pf) return 0;
+    function cGrp(pf) {
+      if (!isS(pf) || !pf) return 0;
       const ks = [];
       for (const k of tasks.keys()) if (k === pf || k.startsWith(pf)) ks.push(k);
-      for (let i = 0; i < ks.length; i++) cancelTask(ks[i]);
+      for (let i = 0; i < ks.length; i++) cTask(ks[i]);
       return ks.length;
     }
-    function reprioritizeTask(k, np) {
+    function repriTask(k, np) {
       const r = tasks.get(k);
       if (!r || r.x || r.d) return false;
       const nm = normPri(np); r.p = nm;
@@ -274,21 +274,21 @@
       if (r.m === 'fb') { armFb(r, 0); return true; }
       return false;
     }
-    function scheduleTask(a1, a2, a3) {
+    function schTask(a1, a2, a3) {
       let k = '', f = null, o = {};
       if (isF(a1)) { f = a1; o = isO(a2) ? a2 : {}; }
       else { k = String(a1 || ''); f = a2; o = isO(a3) ? a3 : {}; }
       if (!isF(f)) return Promise.resolve(undefined);
       k = k || 'task-' + ++tSeq;
-      cancelTask(k);
-      const p = normPri(o.priority), dl = typeof o.delay === 'number' && o.delay > 0 ? o.delay : 0;
+      cTask(k);
+      const p = normPri(o.priority), dl = isN(o.delay) && o.delay > 0 ? o.delay : 0;
       const w = getWin(), sc = w?.scheduler || (typeof scheduler !== 'undefined' ? scheduler : null);
       const TC = gFn('TaskController', w), AC = gFn('AbortController', w);
       let rs, rj;
       const pr = new Promise((a, b) => { rs = a; rj = b; });
       const r = { k, f, p, x: false, d: false, m: 'fb', c: null, t: 0, i: 0, g: 0, rs, rj };
       tasks.set(k, r);
-      const bind = () => { pr.cancel = () => cancelTask(k); pr.reprioritize = (np) => reprioritizeTask(k, np); return pr; };
+      const bind = () => { pr.cancel = () => cTask(k); pr.reprioritize = (np) => repriTask(k, np); return pr; };
       if (isF(sc?.postTask)) {
         const ok = T(() => {
           r.m = 'nt';
@@ -308,17 +308,17 @@
       armFb(r, dl);
       return bind();
     }
-    async function runChunked(items, fn, o) {
+    async function runChk(items, fn, o) {
       const ls = items ? (isA(items) ? items : Array.from(items)) : [];
       if (!ls.length || !isF(fn)) return { processed: 0, slices: 0, aborted: false };
-      const cfg = isO(o) ? o : {}, bud = typeof cfg.budgetMs === 'number' && cfg.budgetMs > 0 ? cfg.budgetMs : getPerfCaps().chunkBudgetMs || 3.5;
+      const cfg = isO(o) ? o : {}, bud = isN(cfg.budgetMs) && cfg.budgetMs > 0 ? cfg.budgetMs : gCaps().chunkBudgetMs || 3.5;
       const sig = cfg.signal || null, ep = chkEp;
       let processed = 0, slices = 1, st = nowMs();
       for (let i = 0; i < ls.length; i++) {
         if (ep !== chkEp || sig?.aborted) return { processed, slices, aborted: true };
         fn(ls[i], i); processed++;
         if (i + 1 < ls.length && nowMs() - st >= bud) {
-          await yieldSlice();
+          await ySlice();
           if (ep !== chkEp || sig?.aborted) return { processed, slices, aborted: true };
           slices++; st = nowMs();
         }
@@ -332,7 +332,7 @@
       if (!RO) return null;
       szRo = T(() => new RO((es) => {
         for (let i = 0; es && i < es.length; i++) {
-          const en = es[i], el = en?.target, sz = el ? readBoxSize(en) : null;
+          const en = es[i], el = en?.target, sz = el ? rdBox(en) : null;
           if (!sz) continue;
           szCache.set(el, sz);
           const st = szCbs.get(el);
@@ -341,7 +341,7 @@
       })) || null;
       return szRo;
     }
-    function observeSize(el, cb) {
+    function obsSz(el, cb) {
       if (!el || !isF(cb)) return noop;
       let st = szCbs.get(el); const nw = !st;
       if (!st) { st = new Set(); szCbs.set(el, st); }
@@ -357,12 +357,12 @@
         }
       };
     }
-    const getSize = (el) => (el ? szCache.get(el) || null : null);
+    const getSz = (el) => (el ? szCache.get(el) || null : null);
 
     function emitVis(el, vis, source, detail) {
       const r = vMap.get(el);
       if (!r?.cbs.size) return;
-      const info = { visible: Boolean(vis), skipped: !vis, isIntersecting: Boolean(vis), source, detail };
+      const v = !!vis, info = { visible: v, skipped: !v, isIntersecting: v, source, detail };
       for (const cb of r.cbs) T(() => cb(info));
     }
     const handleVis = (ev, bm) => {
@@ -371,7 +371,7 @@
       const t = ev?.target;
       if (!t || (t.nodeType !== undefined && t.nodeType !== 1)) return;
       if (bm) { skEls.delete(t); ioSkEls.delete(t); emitVis(t, true, BM_EV, ev); }
-      else { const sk = Boolean(ev.skipped); if (sk) skEls.add(t); else skEls.delete(t); emitVis(t, !sk, 'content-visibility', ev); }
+      else { const sk = !!ev.skipped; if (sk) skEls.add(t); else skEls.delete(t); emitVis(t, !sk, 'content-visibility', ev); }
     };
     const onCv = (ev) => handleVis(ev, false), onBm = (ev) => handleVis(ev, true);
     function attachDv(dO) {
@@ -385,7 +385,7 @@
       dvOn = false; dvTgt = null;
     }
     function ensureIo(rm) {
-      const k = typeof rm === 'string' && rm ? rm : DEFAULT_IO_MARGIN;
+      const k = isS(rm) && rm ? rm : '250px 0px';
       let pl = ioPools.get(k);
       if (pl) return pl;
       const IO = gFn('IntersectionObserver');
@@ -396,20 +396,20 @@
             const en = es[i], t = en?.target;
             if (!t) continue;
             if (en.isIntersecting) ioSkEls.delete(t); else ioSkEls.add(t);
-            emitVis(t, Boolean(en.isIntersecting) && !skEls.has(t), 'io', en);
+            emitVis(t, !!en.isIntersecting && !skEls.has(t), 'io', en);
           }
         }, { rootMargin: k });
         pl = { io, els: new Set(), k }; ioPools.set(k, pl); return pl;
       }) || null;
     }
-    function observeVisibility(el, cb, o) {
+    function obsVis(el, cb, o) {
       if (!el || !isF(cb)) return noop;
       const cfg = isO(o) ? o : {};
       attachDv(cfg.doc);
       let r = vMap.get(el);
       if (!r) {
         let u = null;
-        const eCv = (e) => onCv(e?.target ? e : { target: el, skipped: Boolean(e?.skipped) });
+        const eCv = (e) => onCv(e?.target ? e : { target: el, skipped: !!e?.skipped });
         const eBm = (e) => onBm(e?.target ? e : { target: el });
         if (evPair(el, true, CV_EV, eCv, BM_EV, eBm, PASSIVE_OPT)) u = () => evPair(el, false, CV_EV, eCv, BM_EV, eBm, PASSIVE_OPT);
         let pl = null;
@@ -433,21 +433,21 @@
         }
       };
     }
-    function observeViewportVisibility(el, cb, o) {
+    function obsVpVis(el, cb, o) {
       if (!el || !isF(cb)) return noop;
       const c = isO(o) ? o : {};
       let pv = null;
-      return observeVisibility(el, (i) => { const v = Boolean(i?.visible); if (v !== pv) { pv = v; cb(v, i); } }, { doc: c.doc, io: true, rootMargin: typeof c.rootMargin === 'string' && c.rootMargin ? c.rootMargin : '0px' });
+      return obsVis(el, (i) => { const v = !!i?.visible; if (v !== pv) { pv = v; cb(v, i); } }, { doc: c.doc, io: true, rootMargin: isS(c.rootMargin) && c.rootMargin ? c.rootMargin : '0px' });
     }
-    function isSkipped(el) {
+    function isSk(el) {
       if (!el) return false;
       if (ioSkEls.has(el) || skEls.has(el)) return true;
       for (let c = el.parentElement, n = 0; c && n < 12; c = c.parentElement, n++) if (skEls.has(c)) return true;
       return false;
     }
 
-    function applyPerformanceMode(mode, dO, wO) {
-      const nm = normalizePerformanceMode(mode), d = getDoc(dO), w = getWin(wO, d), h = getHtml(d);
+    function applyPm(mode, dO, wO) {
+      const nm = normPm(mode), d = getDoc(dO), w = getWin(wO, d), h = getHtml(d);
       const pv = curPerf || h?.getAttribute?.(PERF_MODE_ATTR) || '';
       curPerf = nm;
       if (h) { T(() => { if (h.dataset) h.dataset.agCsPerfMode = nm; }); setA(h, PERF_MODE_ATTR, nm); }
@@ -457,20 +457,20 @@
       });
       return nm;
     }
-    function getPerfCaps(mO, dO) {
-      if (typeof mO === 'string' && mO) return PERF_CAPS_TABLE[normalizePerformanceMode(mO)];
+    function gCaps(mO, dO) {
+      if (isS(mO) && mO) return PERF_CAPS_TABLE[normPm(mO)];
       const h = getHtml(dO), raw = (h && T(() => h.dataset?.agCsPerfMode || h.getAttribute?.(PERF_MODE_ATTR))) || '';
-      return PERF_CAPS_TABLE[normalizePerformanceMode(raw || curPerf || 'balanced')];
+      return PERF_CAPS_TABLE[normPm(raw || curPerf || 'balanced')];
     }
-    function getAdaptiveDprCap(baseCap, envOrDoc) {
-      const isD = isO(envOrDoc) && Boolean(envOrDoc.documentElement), env = isD ? undefined : envOrDoc;
-      const caps = getPerfCaps(null, isD ? envOrDoc : null), b = isFin(+baseCap) && +baseCap > 0 ? +baseCap : caps.maxDpr || 1.5;
+    function gDprCap(baseCap, envOrDoc) {
+      const isD = isO(envOrDoc) && !!envOrDoc.documentElement, env = isD ? undefined : envOrDoc;
+      const caps = gCaps(null, isD ? envOrDoc : null), b = isFin(+baseCap) && +baseCap > 0 ? +baseCap : caps.maxDpr || 1.5;
       if (caps.mode === 'performance') return Math.min(b, 1);
       const hw = readHw(env);
       if (!isLowHw(hw)) return b;
-      return Math.min(b, hw.sw || (isFin(hw.mem) && hw.mem > 0 && hw.mem <= 2) ? 1 : 1.25);
+      return Math.min(b, hw.sw || posLe(hw.mem, 2) ? 1 : 1.25);
     }
-    function resolveAutoBootPerfMode(cfg, wO) {
+    function resAutoPm(cfg, wO) {
       if (!isO(cfg)) return null;
       const tag = cfg.__pmAuto ?? (cfg.perfModeAuto === true ? 1 : cfg.perfModeExplicit === true ? 0 : cfg.__uiSlice?.pmAuto);
       delete cfg.__pmAuto; delete cfg.perfModeAuto; delete cfg.perfModeExplicit;
@@ -478,17 +478,17 @@
       const w = getWin(wO), forceAuto = tag === 2;
       const savedMode = forceAuto ? '' : (T(() => {
         const s = (w?.localStorage || (typeof localStorage !== 'undefined' ? localStorage : null))?.getItem?.('ag-prism:config');
-        const v = s ? String(JSON.parse(s)?.performanceMode || '').trim().toLowerCase() : '';
+        const v = s ? trimL(JSON.parse(s)?.performanceMode) : '';
         return PM_RE.test(v) ? v : '';
       }) || '');
-      return (cfg.performanceMode = resolveEffectivePerformanceMode(cfg.performanceMode, { explicit: false, forceAuto, savedMode, env: w?.navigator ? { navigator: w.navigator } : undefined }));
+      return (cfg.performanceMode = resEffPm(cfg.performanceMode, { explicit: false, forceAuto, savedMode, env: w?.navigator ? { navigator: w.navigator } : undefined }));
     }
 
     function dispose(dO, wO) {
       chkEp++;
-      for (const k of Array.from(tasks.keys())) cancelTask(k);
+      for (const k of Array.from(tasks.keys())) cTask(k);
       tasks.clear();
-      for (const s of subs.values()) { if (s.tm) clearTimeout(s.tm); s.q.length = 0; }
+      for (const s of subs.values()) { s.tm = clrT(s.tm); s.q.length = 0; }
       subs.clear();
       if (rootMo) { T(() => rootMo.disconnect()); rootMo = null; }
       obsTgt = null; obsKey = '';
@@ -500,10 +500,10 @@
       ioPools.clear();
       skEls = new WeakSet(); ioSkEls = new WeakSet(); lastVEv = null;
       cancelBRaf(wO);
-      if (bTmr) { clearTimeout(bTmr); bTmr = 0; }
+      bTmr = clrT(bTmr);
       bSched = false; mQ.clear(); wQ.clear();
-      if (scTmr) { clearTimeout(scTmr); scTmr = 0; }
-      if (mTmr) { clearTimeout(mTmr); mTmr = 0; }
+      scTmr = clrT(scTmr);
+      mTmr = clrT(mTmr);
       scBusy = stBusy = false; mUntil = 0; curPerf = '';
       detach();
       while (mcQ.length) T(() => mcQ.shift()());
@@ -514,15 +514,15 @@
 
     return {
       BUSY_ATTR, PERF_MODE_ATTR, STREAM_ATTR, MOTION_OFF_SCOPED_CSS, PERF_CAPS_TABLE,
-      attach, subscribe, drainMutations, measure, mutate, flushNow,
-      scheduleTask, cancelTask, cancelGroup, reprioritizeTask, yieldSlice, runChunked,
-      observeSize, getSize, readBoxSize, observeVisibility, observeViewportVisibility, isSkipped,
-      setStreaming, bumpBusy, bumpScrollBusy, isBusy, isStreaming,
-      detectLowEndHardware, resolveEffectivePerformanceMode, resolveAutoBootPerfMode, getAdaptiveDprCap,
-      normalizePerformanceMode, applyPerformanceMode, getPerfCaps,
+      attach: att, subscribe: sub, drainMutations: drainM, measure: meas, mutate: mut, flushNow: flushN,
+      scheduleTask: schTask, cancelTask: cTask, cancelGroup: cGrp, reprioritizeTask: repriTask, yieldSlice: ySlice, runChunked: runChk,
+      observeSize: obsSz, getSize: getSz, readBoxSize: rdBox, observeVisibility: obsVis, observeViewportVisibility: obsVpVis, isSkipped: isSk,
+      setStreaming: setStr, bumpBusy: bumpB, bumpScrollBusy: bumpSc, isBusy: isBsy, isStreaming: isStr,
+      detectLowEndHardware: isLowEnd, resolveEffectivePerformanceMode: resEffPm, resolveAutoBootPerfMode: resAutoPm, getAdaptiveDprCap: gDprCap,
+      normalizePerformanceMode: normPm, applyPerformanceMode: applyPm, getPerfCaps: gCaps,
       getDebugState: () => ({
-        subscriberCount: subs.size, observing: Boolean(rootMo), listenersAttached: lsOn,
-        scrollBusy: scBusy, streamBusy: stBusy, busy: isBusy(), perfMode: getPerfCaps().mode,
+        subscriberCount: subs.size, observing: !!rootMo, listenersAttached: lsOn,
+        scrollBusy: scBusy, streamBusy: stBusy, busy: isBsy(), perfMode: gCaps().mode,
         pendingMeasures: mQ.size, pendingMutates: wQ.size, pendingTasks: tasks.size,
         sizeObservedCount: szCbs.size, visibilityObservedCount: vMap.size,
       }),

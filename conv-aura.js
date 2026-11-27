@@ -3,6 +3,7 @@
   'use strict';
   const M = Math, G = root || (typeof globalThis !== 'undefined' ? globalThis : window);
   if (!G) return;
+  const getD = () => (typeof document !== 'undefined' ? document : null);
 
   const CONV_AURA_HEIGHT_RATIO = 0.32, CONV_AURA_START_MS = 1150, CONV_AURA_COMPLETE_MS = 1400;
   const CONV_AURA_IDLE_SLEEP_MS = 1200, CONV_AURA_DECISION_BREATH_MS = 1600, CONV_AURA_DECISION_CLEAR_MS = 400;
@@ -33,12 +34,13 @@
 
   function isWithinScope(el, scope) {
     if (!el) return false;
-    if (!scope || scope === document || el === scope) return true;
+    const d = getD();
+    if (!scope || scope === d || el === scope) return true;
     if (typeof scope.contains === 'function' && scope.contains(el)) return true;
     const ownerView = el.closest?.('[data-testid="conversation-view"]') || null;
     if (ownerView) return ownerView === scope;
-    const allViews = typeof document !== 'undefined' && typeof document.querySelectorAll === 'function'
-      ? document.querySelectorAll('[data-testid="conversation-view"]') : null;
+    const allViews = typeof d?.querySelectorAll === 'function'
+      ? d.querySelectorAll('[data-testid="conversation-view"]') : null;
     return !allViews || allViews.length <= 1;
   }
 
@@ -54,10 +56,11 @@
       if (n.closest?.(SUBAGENT_SEL)) continue;
       if (isVisibleAuraNode(n, skipSyncVis)) return n;
     }
-    if (scope !== document && typeof document.querySelectorAll === 'function') {
-      const allViews = document.querySelectorAll('[data-testid="conversation-view"]');
+    const d = getD();
+    if (scope !== d && typeof d?.querySelectorAll === 'function') {
+      const allViews = d.querySelectorAll('[data-testid="conversation-view"]');
       const singlePane = !allViews || allViews.length <= 1;
-      for (const n of document.querySelectorAll(sel)) {
+      for (const n of d.querySelectorAll(sel)) {
         if (n.closest?.(SUBAGENT_SEL)) continue;
         const ownerView = n.closest?.('[data-testid="conversation-view"]') || null;
         if (ownerView && ownerView !== scope) continue;
@@ -69,8 +72,9 @@
   }
 
   function isConvRunning(skipSyncVis = false, scopeEl = null) {
-    if (typeof document === 'undefined') return false;
-    const scope = scopeEl && typeof scopeEl.querySelectorAll === 'function' ? scopeEl : document;
+    const d = getD();
+    if (!d) return false;
+    const scope = scopeEl && typeof scopeEl.querySelectorAll === 'function' ? scopeEl : d;
     const now = readNowMs();
     if (cachedRunningScope === scope && cachedRunningAt >= 0 && M.abs(now - cachedRunningAt) < 200) return cachedRunningVal;
     if (cachedRunningScope === scope && isLiveMatchedIndicator(cachedRunningEl, RUNNING_SEL, skipSyncVis, scope)) {
@@ -86,8 +90,9 @@
   }
 
   function isAwaitingDecision(skipSyncVis = false, scopeEl = null) {
-    if (typeof document === 'undefined') return false;
-    const scope = scopeEl && typeof scopeEl.querySelectorAll === 'function' ? scopeEl : document;
+    const d = getD();
+    if (!d) return false;
+    const scope = scopeEl && typeof scopeEl.querySelectorAll === 'function' ? scopeEl : d;
     const now = readNowMs();
     if (cachedDecisionScope === scope && cachedDecisionAt >= 0 && M.abs(now - cachedDecisionAt) < 200) return cachedDecisionVal;
     if (cachedDecisionScope === scope && isLiveMatchedIndicator(cachedDecisionEl, DECISION_SEL, skipSyncVis, scope)) {
@@ -101,11 +106,12 @@
   }
 
   function consumeFreshDomError(convView) {
-    if (!seenErrorNodes || typeof document === 'undefined') return false;
+    const d = getD();
+    if (!seenErrorNodes || !d) return false;
     const now = readNowMs();
     if (cachedErrorAt >= 0 && M.abs(now - cachedErrorAt) < 240) return false;
     cachedErrorAt = now;
-    const scope = convView || document;
+    const scope = convView || d;
     if (typeof scope.querySelectorAll !== 'function') return false;
     const errs = scope.querySelectorAll('.ag-cs-thinking-spark[data-state="error"], [data-testid="agent-error"], [role="alert"][data-error="true"]');
     let hitFresh = false;
@@ -215,13 +221,13 @@
     let externalAwaiting = null, externalErrorPending = false, wb = false;
     const WB = 'data-ag-cs-win-blur', PM_A = 'data-ag-cs-perf-mode';
     const PP_OPEN = 'data-ag-pp-open';
-    const getHtml = () => (typeof document !== 'undefined' ? document.documentElement : null);
+    const getHtml = () => getD()?.documentElement || null;
     const ga = (k) => getHtml()?.getAttribute?.(k);
     const rw = () => G.__agPrismRippleWorker || null;
     const getPerfMode = () => String(getHtml()?.dataset?.agCsPerfMode || ga(PM_A) || '').trim().toLowerCase();
     const isAB = () => ga(WB) === '1';
     const isPpOpen = () => ga(PP_OPEN) === '1' && /^(performance|eco)$/.test(getPerfMode());
-    const isH = () => !!(typeof document !== 'undefined' && document.hidden);
+    const isH = () => !!(getD()?.hidden);
     const isP = () => !!(isH() || isAB() || wb || isPpOpen());
 
     function normAmbientVal(v) {
@@ -246,7 +252,8 @@
 
     function checkWindowFocused() {
       if (typeof isWindowFocused === 'function') return !!(isWindowFocused());
-      try { return typeof document !== 'undefined' && typeof document.hasFocus === 'function' ? !!(document.hasFocus()) : true; } catch { return true; }
+      const d = getD();
+      try { return typeof d?.hasFocus === 'function' ? !!(d.hasFocus()) : true; } catch { return true; }
     }
 
     function isValidConvView(cv) {
@@ -260,13 +267,14 @@
     }
 
     function findConvAuraView() {
-      if (typeof document === 'undefined' || !isHomeRippleEnabled() || document.querySelector('.agy-home')) return null;
+      const d = getD();
+      if (!d || !isHomeRippleEnabled() || d.querySelector('.agy-home')) return null;
       if (isValidConvView(preferredView)) return preferredView;
       preferredView = null;
-      const actCv = resolveConvViewTarget(document.activeElement);
+      const actCv = resolveConvViewTarget(d.activeElement);
       if (actCv) return actCv;
       if (convAura && isValidConvView(convAura.convView)) return convAura.convView;
-      for (const cv of document.querySelectorAll('[data-testid="conversation-view"]')) {
+      for (const cv of d.querySelectorAll('[data-testid="conversation-view"]')) {
         if (isValidConvView(cv)) return cv;
       }
       return null;
@@ -278,7 +286,7 @@
       st.onUserReturn = null;
       try {
         if (typeof window !== 'undefined') { window.removeEventListener?.('focus', fn); window.removeEventListener?.('pointermove', fn); }
-        if (typeof document !== 'undefined') document.removeEventListener?.('pointerenter', fn);
+        getD()?.removeEventListener?.('pointerenter', fn);
       } catch {}
     }
 
@@ -295,7 +303,7 @@
       const opt = { once: true, passive: true };
       try {
         if (typeof window !== 'undefined') { window.addEventListener?.('focus', onReturn, opt); window.addEventListener?.('pointermove', onReturn, opt); }
-        if (typeof document !== 'undefined') document.addEventListener?.('pointerenter', onReturn, opt);
+        getD()?.addEventListener?.('pointerenter', onReturn, opt);
       } catch {}
     }
 
@@ -380,9 +388,9 @@
     function sync(preserveCache = false) {
       if (!preserveCache) { cachedRunningAt = cachedDecisionAt = cachedErrorAt = -1; }
       if (isDestroyed() || !isHomeRippleEnabled()) { unmount(); return; }
-      const convView = findConvAuraView();
+      const convView = findConvAuraView(), docRef = getD();
       const seatParent = convView ? convView.parentElement || convView : null;
-      if (!convView || !seatParent || typeof document === 'undefined') {
+      if (!convView || !seatParent || !docRef) {
         if (convAura) park();
         return;
       }
@@ -397,7 +405,7 @@
         const a = convAura;
         if (a.seatParent !== seatParent || a.convView !== convView || !a.host.isConnected || !a.canvas.isConnected) {
           const switchedPane = a.convView !== convView, nowRe = readNowMs(), [runRe, phaseRe] = readPhase();
-          const canDeferRelayout = !switchedPane && !a.backingReleased && !!(a.ro) && a.width > 0 && a.height > 0 && typeof requestAnimationFrame === 'function' && !document.hidden;
+          const canDeferRelayout = !switchedPane && !a.backingReleased && !!(a.ro) && a.width > 0 && a.height > 0 && typeof requestAnimationFrame === 'function' && !docRef.hidden;
           const [reW, reH] = canDeferRelayout ? [0, 0] : readSize();
           try { a.ro?.disconnect(); } catch {}
           a.seatParent = seatParent; a.convView = convView; a.parked = false;
@@ -426,14 +434,14 @@
       const [initRunning, initPhase] = readPhase();
       consumeFreshDomError(convView);
 
-      const host = document.createElement('div');
+      const host = docRef.createElement('div');
       host.className = 'ag-cs-conv-aura-host';
       host.setAttribute('data-ag-no-i18n', '');
       host.setAttribute('aria-hidden', 'true');
       host.setAttribute('data-aura-phase', initPhase);
       for (const [k, v] of [['top', 'auto'], ['bottom', '0'], ['left', '0'], ['right', '0'], ['height', '32%']]) host.style.setProperty(k, v, 'important');
 
-      let glowCanvas = document.createElement('canvas');
+      let glowCanvas = docRef.createElement('canvas');
       glowCanvas.className = 'ag-cs-conv-glow';
       host.appendChild(glowCanvas);
       seatParent.insertBefore(host, seatParent.firstChild);
@@ -456,7 +464,7 @@
 
       const RESIZE_DEBOUNCE_MS = 120;
       const RESIZE_BURST_WINDOW_MS = 180;
-      const isResizing = () => typeof document !== 'undefined' && document.documentElement?.getAttribute?.('data-ag-cs-resizing') === '1';
+      const isResizing = () => getHtml()?.getAttribute?.('data-ag-cs-resizing') === '1';
       const isWorkerGlow = () => state.glow?.mode === 'worker-webgl2';
       const hasCvBuf = () => {
         if (isWorkerGlow()) { const s = state.glow.getBufferSize?.(); return !!(s && s.width > 0 && s.height > 0); }
@@ -464,7 +472,7 @@
       };
 
       function swapCv() {
-        const next = document.createElement('canvas');
+        const next = (getD() || docRef).createElement('canvas');
         next.className = 'ag-cs-conv-glow';
         if (glowCanvas?.replaceWith) glowCanvas.replaceWith(next);
         else if (glowCanvas?.parentNode?.replaceChild) glowCanvas.parentNode.replaceChild(next, glowCanvas);
@@ -492,7 +500,7 @@
         let g = null;
         if (wm?.mountManagedGlow) {
           g = wm.mountManagedGlow({
-            getCanvas: () => glowCanvas, swapCanvas: swapCv, rippleCore, doc: document,
+            getCanvas: () => glowCanvas, swapCanvas: swapCv, rippleCore, doc: getD() || docRef,
             prefer2D: !!p2d, allowWorker: !workerFailed, onContextLost: onLost,
             onFallbackDone: () => { workerFailed = true; if (isDestroyed() || convAura !== state) return; try { state.glow?.dispose?.(); } catch {} mountGlow(0, 1); resyncGlow(); },
             onUpgradeReady: () => { if (!isDestroyed() && convAura === state && !workerFailed && state.glow?.mode === 'webgl2') { mountGlow(0, 1); resyncGlow(); } },
@@ -571,7 +579,7 @@
         const rawDpr = (typeof window !== 'undefined' && Number(window.devicePixelRatio)) || 1;
         const pm = getPerfMode();
         const dpr = pm
-          ? (rw()?.resolveGlowDpr ? rw().resolveGlowDpr(rawDpr, document) : rippleCore?.resolveHorizonDpr ? rippleCore.resolveHorizonDpr(rawDpr, pm === 'performance' ? 0.55 : pm === 'quality' ? 1 : 0.7, pm) : M.min(rawDpr, 1) * 0.7)
+          ? (rw()?.resolveGlowDpr ? rw().resolveGlowDpr(rawDpr, getD() || docRef) : rippleCore?.resolveHorizonDpr ? rippleCore.resolveHorizonDpr(rawDpr, pm === 'performance' ? 0.55 : pm === 'quality' ? 1 : 0.7, pm) : M.min(rawDpr, 1) * 0.7)
           : (rippleCore?.resolveHorizonDpr ? rippleCore.resolveHorizonDpr(rawDpr, 0.72) : M.min(rawDpr, 1) * 0.72);
         lastPerfKey = pm;
         const need = bkRel || (w > 0 && h > 0 && !hasCvBuf());
@@ -646,7 +654,7 @@
         // drives VSync-paced ~60fps (15ms floor, or 16.67ms under performance mode) for active phases and ~30fps (33ms) for pre-sleep phases.
         const isGpuGlow = !!(state.glow && (state.glow.mode === 'webgl2' || state.glow.mode === 'worker-webgl2'));
         const smoothGpu = isGpuGlow && typeof getMinFrameGapMs === 'function';
-        const perfGap = rw()?.getPerfMinGapMs?.(document) || (getPerfMode() === 'performance' ? 16.67 : 0);
+        const perfGap = rw()?.getPerfMinGapMs?.(getD() || docRef) || (getPerfMode() === 'performance' ? 16.67 : 0);
         const minGap = smoothGpu ? M.max(perfGap, Number(getMinFrameGapMs()) || 0) : perfGap;
         const isPreSleepPhase = !inLiftoffEbb && (phase === 'idle' || phase === 'awaiting-decision' || phase === 'long-task-complete');
         const smoothActiveGpu = smoothGpu && !isPreSleepPhase;
@@ -800,9 +808,9 @@
         if (cv && cv !== preferredView) { preferredView = cv; if (convAura && convAura.convView !== cv) sync(false); }
       };
       const capOpt = { capture: true, passive: true };
-      document.addEventListener('visibilitychange', onVis);
-      document.addEventListener('focusin', onPaneAct, capOpt);
-      document.addEventListener('pointerdown', onPaneAct, capOpt);
+      docRef.addEventListener('visibilitychange', onVis);
+      docRef.addEventListener('focusin', onPaneAct, capOpt);
+      docRef.addEventListener('pointerdown', onPaneAct, capOpt);
       const wRef = typeof window !== 'undefined' ? window : null;
       wRef?.addEventListener?.('blur', onBlur);
       wRef?.addEventListener?.('focus', onFocus);
@@ -810,16 +818,17 @@
       const dBus = wRef && (wRef.__agDomBus || wRef.__agPrismDomBus), aF = [WB, PP_OPEN, PM_A];
       const onAttr = () => { if (!isAB()) wb = false; onVis(); };
       if (dBus?.subscribe) {
-        try { unBus = dBus.subscribe('conv-aura-root', onAttr, { priority: 'high', attributes: true, attributeFilter: aF, filter: (m) => m?.type === 'attributes' && m.target === document.documentElement && aF.includes(m.attributeName), observeOptions: { childList: false, subtree: false, attributes: true, attributeFilter: aF } }); } catch { unBus = null; }
+        try { unBus = dBus.subscribe('conv-aura-root', onAttr, { priority: 'high', attributes: true, attributeFilter: aF, filter: (m) => m?.type === 'attributes' && m.target === getHtml() && aF.includes(m.attributeName), observeOptions: { childList: false, subtree: false, attributes: true, attributeFilter: aF } }); } catch { unBus = null; }
       }
-      if (!unBus && typeof MutationObserver === 'function' && document.documentElement) {
-        try { bMo = new MutationObserver(onAttr); bMo.observe(document.documentElement, { attributes: true, attributeFilter: aF }); } catch {}
+      if (!unBus && typeof MutationObserver === 'function' && getHtml()) {
+        try { bMo = new MutationObserver(onAttr); bMo.observe(getHtml(), { attributes: true, attributeFilter: aF }); } catch {}
       }
       state.uW = () => {
-        if (typeof document !== 'undefined') {
-          document.removeEventListener('visibilitychange', onVis);
-          document.removeEventListener('focusin', onPaneAct, capOpt);
-          document.removeEventListener('pointerdown', onPaneAct, capOpt);
+        const d = getD();
+        if (d) {
+          d.removeEventListener('visibilitychange', onVis);
+          d.removeEventListener('focusin', onPaneAct, capOpt);
+          d.removeEventListener('pointerdown', onPaneAct, capOpt);
         }
         wRef?.removeEventListener?.('blur', onBlur);
         wRef?.removeEventListener?.('focus', onFocus);
