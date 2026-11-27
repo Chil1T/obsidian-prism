@@ -122,8 +122,8 @@ const HIDE_PROPS='position:fixed|left:-9999px|top:-9999px|width:1px|height:1px|o
 const FTC=[440,360],BRC=[680,620,530,440,360],BRB=[720,650,560,440,360],WDC=1080,FT_S='.agy-composer-footer,'+TI('input-box-bottom-toolbar'),HC_A='data-hover-card-popup',QMA='data-ag-cs-telemetry-quota';
 const stpT=(c,w,cs)=>{let t=c;while(t<cs.length&&w<cs[t])t++;while(t>0&&w>=cs[t-1]+12)t--;return t;};
 const SB_S='aside,'+TI('sidebar-split')+'>div:first-child,'+TIs('conversation-row-sidebar|project-header')+',['+HC_A+']';
-const IGN_S=TIs('autoscroll-viewport|planner-response-text|agent-response|background-task-command|running-items-card')+',[data-markdown-root],'+SB_S+',[data-op-thought="1"],.ag-prism-thought-overlay,.ag-cs-conv-aura-host,.ag-cs-crab,.ag-cs-prism-rim-cv,.ag-anim-icon,.ag-cs-thinking-spark,[data-agy-hans-ui],#agy-theme-switcher,#agy-theme-menu,#antigravity-quota-widget,#antigravity-translation-audit';
-const BST=[450,700,900,1100,1400,1800,2200,2500],BSY_S=TIs('input-cancel-button|stop-button|cancel-button|stop-generation-button'),SND_S=TIs('input-send-button|send-button')+','+IB_S+' button[type="submit"]',SLO_S='[id^="typeahead-item-"][role="option"],'+TI('slash-command-menu')+' [role="option"],[role="listbox"] [role="option"]',PT_S=TIs('agy-context-ring-trigger|agy-speed-stats-trigger'),CMP_RE=/^\/compact(?:\s|$)/i;
+const IGN_S=TIs('autoscroll-viewport|planner-response-text|agent-response|background-task-command|running-items-card')+',[data-markdown-root],'+SB_S+',[data-op-thought="1"],.ag-prism-thought-overlay,.ag-cs-conv-aura-host,.ag-cs-crab,.ag-cs-prism-rim-cv,.ag-anim-icon,.ag-cs-thinking-spark,[data-agy-hans-ui],#agy-theme-switcher,#agy-theme-menu,#antigravity-quota-widget,#antigravity-translation-audit,#ag-usage-monitor-capsule,#ag-usage-monitor-portal';
+const BST=[450,700,900,1100,1400,1800,2200,2500],BSY_S=TIs('input-cancel-button|stop-button|cancel-button|stop-generation-button'),SND_S=TIs('input-send-button|send-button')+','+IB_S+' button[type="submit"]',SLO_S='[id^="typeahead-item-"][role="option"],'+TI('slash-command-menu')+' [role="option"],[role="listbox"] [role="option"]',PT_S=TIs('agy-context-ring-trigger|agy-speed-stats-trigger'),UM_S='#ag-usage-monitor-capsule',CMP_RE=/^\/compact(?:\s|$)/i;
 let reqSeq=0;
 
 function createTelemetryController(envOpts){
@@ -341,7 +341,7 @@ const pOr=d=>{
 const lv=new Set();for(const it of IS.values())lv.add(it.host);
 for(const e of qA(d,`[${FA}="1"],#${PI},[${PA}]`)||[])if(!lv.has(e))try{e.remove();}catch{}
 };
-const uEx=(d,b)=>!!(b&&gA(b,FA)!=='1'&&iC(d,b)&&gA(b,HA)!=='1'&&gA(b,'data-layout')!=='blocked'&&b.hidden!==true&&b.style?.display!=='none'&&(!d?.body||(b.parentElement!==d.body&&b.parentNode!==d.body))&&!b.closest?.('.agy-home'));
+const uEx=(d,b,aB=false)=>!!(b&&gA(b,FA)!=='1'&&iC(d,b)&&gA(b,HA)!=='1'&&gA(b,'data-layout')!=='blocked'&&b.hidden!==true&&b.style?.display!=='none'&&(aB||!d?.body||(b.parentElement!==d.body&&b.parentNode!==d.body))&&!b.closest?.('.agy-home'));
 const hEx=(bs,kC=false)=>{
 const w=gW(),d=gD();if(!w||!d||(!kC&&!isConv(d,w)))return false;
 let sD=false;
@@ -351,6 +351,7 @@ if(uEx(d,b)){dAt=0;return true;}
 sD=true;
 }
 for(const e of qAll(d,PT_S))if(uEx(d,e)){dAt=0;return true;}
+for(const e of qAll(d,UM_S))if(uEx(d,e,true)){dAt=0;return true;}
 if(sD)return false;
 const sg=[w.__agPulseRuntimeOwner?String(w.__agPulseRuntimeOwner):'',w.__agPulseRuntimeBridge?'b':'',w.__agPulseInlineInstalled&&!eGH?'1':'',w.agPulseHost&&!w.agPulseHost.__prismFallback?'h':''].join('|');
 if(sg!=='|||'){const nw=N0();if(sg!==lSg){lSg=sg;dAt=nw;return true;}if(!dAt)dAt=nw;return nw-dAt<GM;}

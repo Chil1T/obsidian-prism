@@ -102,14 +102,7 @@
     '.code-block',
     '.ag-prism-thought-overlay',
     '.ag-prism-thought-chunk',
-    '.ag-omni-autolink',
-    '.ag-omni-menu',
-    '.ag-omni-aux-bar',
-    '[data-agy-hans-ui]',
-    '#agy-theme-switcher',
-    '#agy-theme-menu',
-    '#antigravity-quota-widget',
-    '#antigravity-translation-audit',
+  '.ag-omni-autolink','.ag-omni-menu','.ag-omni-aux-bar','[data-agy-hans-ui]','#agy-theme-switcher','#agy-theme-menu','#antigravity-quota-widget','#antigravity-translation-audit','#ag-usage-monitor-capsule','#ag-usage-monitor-portal',
   ].join(', ');
   const STREAMING_EXCLUDED_SELECTOR = '[data-ag-cs-spark-streaming="1"], [data-ag-cs-thought-streaming="1"]';
   const EXCLUDED_ANCESTOR_SELECTOR = `${STATIC_EXCLUDED_SELECTOR}, ${STREAMING_EXCLUDED_SELECTOR}`;
@@ -2708,7 +2701,7 @@ const scanAttr = cur.getAttribute?.('data-omni-scan');
 if (scanAttr !== null && scanAttr !== undefined && scanAttr !== 'false' && scanAttr !== '0') sawExplicitScan = true;
 if (!sawExplicitScan && cur.hasAttribute?.('data-ag-owned')) return finish(true);
 const id = cur.id;
-if (id === 'ag-prism-pulse-bar' || id === 'ag-pulse-status-bar' || id === 'ag-cs-settings-sec' || id === 'agy-theme-switcher' || id === 'agy-theme-menu' || id === 'antigravity-quota-widget' || id === 'antigravity-translation-audit') return finish(true);
+if (id === 'ag-prism-pulse-bar' || id === 'ag-pulse-status-bar' || id === 'ag-cs-settings-sec' || id === 'agy-theme-switcher' || id === 'agy-theme-menu' || id === 'antigravity-quota-widget' || id === 'antigravity-translation-audit' || id === 'ag-usage-monitor-capsule' || id === 'ag-usage-monitor-portal') return finish(true);
 if (cur.hasAttribute?.('data-agy-hans-ui')) return finish(true);
 if (!sawExplicitScan && cur.getAttribute?.('role') === 'dialog') return finish(true);
 if (cur.hasAttribute?.('data-hover-card-popup') || cur.tagName === 'ASIDE') return finish(true);
