@@ -1,4 +1,5 @@
 // Obsidian Prism Swarm 汉化独立生命周期管理器（OOPIF + 同进程子 Frame + 隔离世界 host-i18n 协调，独立组合类，无原型 Mixin）
+import { serializeJsonForEval } from './fs-atomic.mjs';
 
 export class SwarmSessionManager {
   constructor({
@@ -41,7 +42,7 @@ export class SwarmSessionManager {
   }
 
   _buildPresenceProbeExpr(expectedHash) {
-    const h = JSON.stringify(String(expectedHash || ''));
+    const h = serializeJsonForEval(String(expectedHash || ''));
     return `(()=>{try{const s=window.__agPrismSwarmI18n;const st=s&&typeof s.getStatus==='function'?s.getStatus():null;return{mounted:Boolean(s&&s.__prismCodeHash===${h}&&st&&(st.status==='active'||st.status==='yielded'))};}catch{return{mounted:false};}})()`;
   }
 

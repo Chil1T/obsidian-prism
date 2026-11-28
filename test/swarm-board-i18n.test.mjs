@@ -1363,3 +1363,45 @@ test('Wave P3-D: Swarm OOPIF skips 34KB re-injection when presence probe confirm
   handleBrowserTargetEvent(reg, { targetInfo: { ...target, url: 'plugin://swarm--swarm_board-4808/?token=t1&conversationId=c2' } });
   assert.equal(discoveredCalls, 2, 'Changed Swarm iframe URL must trigger onSwarmTargetEvent');
 });
+
+test('Security regression (CodeQL #44): SwarmSessionManager._buildPresenceProbeExpr escapes script/line-separator chars via serializeJsonForEval', async () => {
+  const { SwarmSessionManager } = await import('../src/daemon/swarm-session-manager.mjs');
+  const src = fs.readFileSync(path.join(ROOT, 'src', 'daemon', 'swarm-session-manager.mjs'), 'utf8');
+
+  assert.equal(/serializeJsonForEval/.test(src), true, 'swarm-session-manager.mjs must sanitize eval literals via serializeJsonForEval');
+  assert.equal(/JSON\.stringify\(/.test(src), false, 'swarm-session-manager.mjs must not interpolate raw JSON.stringify into eval expressions');
+
+  const mgr = new SwarmSessionManager();
+  const hostile = '</script><img/src=x onerror=1>\u2028\u2029"\\;window.__pwn=1;//';
+  const expr = mgr._buildPresenceProbeExpr(hostile);
+
+  assert.equal(expr.includes('</script>'), false, 'Probe expression must escape </script>');
+  assert.equal(expr.includes('<'), false, 'Probe expression must escape < characters');
+  assert.equal(expr.includes('\u2028'), false, 'Probe expression must escape U+2028 line separator');
+  assert.equal(expr.includes('\u2029'), false, 'Probe expression must escape U+2029 paragraph separator');
+  assert.ok(expr.includes('\\u003c\\u002fscript\\u003e'), 'Probe expression must unicode-escape </script>');
+  assert.ok(expr.includes('\\u2028\\u2029'), 'Probe expression must unicode-escape U+2028/U+2029');
+
+  const sandboxHit = {
+    window: {
+      __agPrismSwarmI18n: {
+        __prismCodeHash: hostile,
+        getStatus: () => ({ status: 'active' }),
+      },
+    },
+  };
+  const hitRes = vm.runInNewContext(expr, sandboxHit);
+  assert.equal(hitRes?.mounted, true, 'Escaped hostile hash literal must still evaluate and match exact hash');
+  assert.equal(sandboxHit.window.__pwn, undefined, 'Hostile hash must not break out of string literal');
+
+  const sandboxMiss = {
+    window: {
+      __agPrismSwarmI18n: {
+        __prismCodeHash: 'other-hash',
+        getStatus: () => ({ status: 'active' }),
+      },
+    },
+  };
+  assert.equal(vm.runInNewContext(expr, sandboxMiss)?.mounted, false);
+  assert.equal(vm.runInNewContext(mgr._buildPresenceProbeExpr(null), { window: {} })?.mounted, false);
+});

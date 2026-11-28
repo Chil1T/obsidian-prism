@@ -105,7 +105,7 @@ export function computeMetricsSnapshotSig(snap, { includeConversations = true } 
     s: pickSpeedSig(snap.speed),
     cv: pickConversationsSig(snap.conversations, includeConversations),
   };
-  return crypto.createHash('sha1').update(JSON.stringify(core)).digest('hex').slice(0, 16);
+  return crypto.createHash('sha256').update(JSON.stringify(core)).digest('hex').slice(0, 16);
 }
 
 /**

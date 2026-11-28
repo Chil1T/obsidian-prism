@@ -1196,3 +1196,42 @@ test('8. Wave P3-D: Metrics delta {unchanged:true} protocol, client.mjs incremen
     if (prevDoc !== undefined) globalThis.document = prevDoc;
   }
 });
+
+test('9. Security regression (CodeQL #45): metrics-delta uses SHA-256 instead of SHA-1 and keeps stable 16-hex signature', async () => {
+  const crypto = await import('node:crypto');
+  const { computeMetricsSnapshotSig } = await import('../src/daemon/metrics-delta.mjs');
+  const src = fs.readFileSync(path.join(ROOT, 'src', 'daemon', 'metrics-delta.mjs'), 'utf8');
+
+  assert.equal(/createHash\(\s*['"]sha1['"]\s*\)/i.test(src), false, 'metrics-delta.mjs must not use weak SHA-1 hash');
+  assert.equal(/createHash\(\s*['"]sha256['"]\s*\)/.test(src), true, 'metrics-delta.mjs must use SHA-256 hash');
+
+  const snap = {
+    connection: 'live',
+    transport: 'renderer-proxy',
+    serverTime: 123456,
+    groups: [],
+    speed: null,
+    conversations: [{ id: 'c1', modifiedAt: '2026-11-28T00:00:00Z', stepCount: 3, status: 'done', title: 'Test' }],
+  };
+  const sigWithConv = computeMetricsSnapshotSig(snap, { includeConversations: true });
+  const sigNoConv = computeMetricsSnapshotSig(snap, { includeConversations: false });
+  assert.match(sigWithConv, /^[0-9a-f]{16}$/);
+  assert.match(sigNoConv, /^[0-9a-f]{16}$/);
+  assert.notEqual(sigWithConv, sigNoConv, 'includeConversations toggle must isolate snapshot signature');
+
+  const expectedCore = {
+    c: 'live',
+    tr: 'renderer-proxy',
+    e: null,
+    se: null,
+    pe: null,
+    qAt: null,
+    col: null,
+    g: [],
+    s: null,
+    cv: 0,
+  };
+  const expectedSha256 = crypto.createHash('sha256').update(JSON.stringify(expectedCore)).digest('hex').slice(0, 16);
+  assert.equal(sigNoConv, expectedSha256, 'computeMetricsSnapshotSig must match SHA-256 16-hex digest');
+  assert.equal(computeMetricsSnapshotSig(null), '');
+});
