@@ -15,6 +15,11 @@
   const UI_FONT_MODES = Object.freeze(['default', 'system-sans', 'noto-sans', 'inter', 'harmony', 'custom']);
   const CHAT_FONT_MODES = Object.freeze(['default', 'system-sans', 'noto-sans', 'inter', 'harmony', 'custom']);
   const CODE_FONT_MODES = Object.freeze(['default', 'jetbrains', 'cascadia', 'sfmono', 'custom']);
+  const OVERRIDE_BADGE_SPECS = Object.freeze([
+    Object.freeze({ rowKey: 'uiFont', cssVar: '--ag-prism-ui-font' }),
+    Object.freeze({ rowKey: 'chatFont', cssVar: '--ag-prism-chat-font' }),
+    Object.freeze({ rowKey: 'codeFont', cssVar: '--ag-prism-code-font' }),
+  ]);
   const REJECTED_STATUSES = new Set(['rejected-symlink', 'rejected-non-file', 'rejected-too-large']);
 
   const EXTRA_CSS = [
@@ -28,12 +33,20 @@
     '.ag-cs-css-action-btn:hover:not(:disabled){border-color:var(--primary,#669DF6);}',
     '.ag-cs-css-action-btn:disabled,.ag-cs-css-action-btn[aria-disabled="true"]{opacity:.48;cursor:not-allowed;}',
     'html[data-ag-cs-theme="light"] .ag-cs-css-action-btn{background:#F1F5F9;color:#0F172A;border-color:rgba(15,23,42,.16);}',
+    '.ag-cs-css-override-badge{display:inline-flex;align-items:center;justify-content:center;height:18px;box-sizing:border-box;padding:0 6px;border-radius:999px;border:1px solid color-mix(in srgb,var(--primary,#669DF6) 34%,transparent);background:color-mix(in srgb,var(--primary,#669DF6) 13%,transparent);color:color-mix(in srgb,var(--primary,#669DF6) 86%,#FFFFFF);font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:10.5px;font-weight:500;line-height:1;letter-spacing:.01em;vertical-align:middle;white-space:nowrap;flex-shrink:0;cursor:help;user-select:none;transition:border-color .14s ease,background-color .14s ease;}',
+    '.ag-cs-css-override-badge:hover{border-color:color-mix(in srgb,var(--primary,#669DF6) 56%,transparent);background:color-mix(in srgb,var(--primary,#669DF6) 19%,transparent);}',
+    'html[data-ag-cs-theme="light"] .ag-cs-css-override-badge{border-color:color-mix(in srgb,var(--primary,#2563EB) 32%,transparent);background:color-mix(in srgb,var(--primary,#2563EB) 10%,transparent);color:color-mix(in srgb,var(--primary,#2563EB) 60%,#0F172A);}',
+    'html[data-ag-cs-theme="light"] .ag-cs-css-override-badge:hover{border-color:color-mix(in srgb,var(--primary,#2563EB) 48%,transparent);background:color-mix(in srgb,var(--primary,#2563EB) 15%,transparent);}',
+    '.ag-cs-css-override-badge[hidden]{display:none !important;}',
   ].join('\n');
 
   let hookedBeta4 = false;
   let hookedBeta4Ext = null;
   let origBeta4Sync = null;
   let lastCustomCssMeta = null;
+  let lastMetaClientSig = '';
+  let lastDoc = null;
+  let lastWin = null;
   const trappedTargets = [];
 
   const sa = (el, k, v = '') => el && el.setAttribute && el.setAttribute(k, String(v));
@@ -364,10 +377,11 @@
       const s = row.__csStrings || {};
       if (!st || st === 'missing') {
         sendSettingPayload(nextCtx.win, { action: 'custom-css-create-template' });
-        lastCustomCssMeta = Object.assign({}, lastCustomCssMeta || {}, { status: 'empty' });
+        storeCustomCssMeta({ status: 'empty' }, nextCtx.win);
         syncActionButtonState(row.__csCssUi, s, 'empty');
         statusEl.textContent = s.cssTemplateRequested || 'Created and opening custom.css; saves auto hot-reload';
         sa(statusEl, 'data-tone', 'ok');
+        syncAllOverrideBadges(rootEl, doc, nextCtx.win, s, false, lastCustomCssMeta || {});
       } else if (st === 'active' || st === 'empty') {
         sendSettingPayload(nextCtx.win, { action: 'custom-css-open' });
       }
@@ -385,6 +399,112 @@
     return row;
   }
 
+  function getClientCssState(win) {
+    try {
+      return ((win && win.__agPrismCustomStyle) || G.__agPrismCustomStyle)?.getState?.()?.customCss || null;
+    } catch {
+      return null;
+    }
+  }
+
+  function getClientCssSig(win) {
+    const st = getClientCssState(win);
+    if (!st || !st.status) return '';
+    return `${st.status}|${st.sha256 || ''}|${Number(st.bytes) || 0}|${Number(st.blockedImports) || 0}`;
+  }
+
+  function storeCustomCssMeta(meta, win) {
+    if (meta && typeof meta === 'object') {
+      lastCustomCssMeta = Object.assign({}, lastCustomCssMeta || {}, meta);
+      lastMetaClientSig = getClientCssSig(win);
+    }
+  }
+
+  function resolveEffectiveCssState(mergedRawCtx, win) {
+    if (mergedRawCtx && mergedRawCtx.customCssMeta && typeof mergedRawCtx.customCssMeta === 'object') {
+      return mergedRawCtx.customCssMeta;
+    }
+    const clientState = getClientCssState(win);
+    if (lastCustomCssMeta && lastCustomCssMeta.status) {
+      const curSig = getClientCssSig(win);
+      if (clientState && clientState.status && curSig !== lastMetaClientSig) return clientState;
+      return lastCustomCssMeta;
+    }
+    return (clientState && clientState.status ? clientState : null) || lastCustomCssMeta || {};
+  }
+
+  function getRootComputedStyle(doc, win) {
+    const de = doc && doc.documentElement;
+    if (!de) return null;
+    try {
+      let cs = null;
+      if (win && typeof win.getComputedStyle === 'function') cs = win.getComputedStyle(de);
+      else if (doc.defaultView && typeof doc.defaultView.getComputedStyle === 'function') cs = doc.defaultView.getComputedStyle(de);
+      else if (typeof getComputedStyle === 'function') cs = getComputedStyle(de);
+      else if (G && typeof G.getComputedStyle === 'function') cs = G.getComputedStyle(de);
+      return cs && typeof cs.getPropertyValue === 'function' ? cs : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function readCssVarFromStyle(rootStyle, cssVar) {
+    if (!rootStyle) return '';
+    try {
+      const raw = rootStyle.getPropertyValue(cssVar);
+      return typeof raw === 'string' ? raw.trim() : '';
+    } catch {
+      return '';
+    }
+  }
+
+  function syncRowOverrideBadge(row, doc, ui, spec, isOverridden) {
+    if (!row) return;
+    let badge = qs(row, `[data-ag-cs-override-badge="${spec.rowKey}"]`);
+    if (!isOverridden) {
+      if (badge) {
+        badge.hidden = true;
+        sa(badge, 'hidden', '');
+        if (badge.style) badge.style.display = 'none';
+      }
+      return;
+    }
+    const titleLine = qs(row, '.ag-cs-settings-title-line');
+    const titleEl = qs(row, '[data-k="t"]');
+    const host = titleLine || (titleEl && titleEl.parentElement) || null;
+    if (!host) return;
+    if (!badge) {
+      badge = mk(doc, 'span', 'ag-cs-css-override-badge', 'custom.css');
+      sa(badge, 'data-ag-cs-custom-style-owned', '1');
+      sa(badge, 'data-ag-cs-override-badge', spec.rowKey);
+      if (titleEl && titleEl.parentElement === host && titleEl.nextSibling && typeof host.insertBefore === 'function') {
+        host.insertBefore(badge, titleEl.nextSibling);
+      } else {
+        host.appendChild(badge);
+      }
+    }
+    const tip = (ui && ui.cssFontOverrideTooltip) || 'Overridden by custom.css — remove the matching variable to restore panel control';
+    if (badge.textContent !== 'custom.css') badge.textContent = 'custom.css';
+    if (ga(badge, 'title') !== tip) sa(badge, 'title', tip);
+    if (ga(badge, 'aria-label') !== tip) sa(badge, 'aria-label', tip);
+    badge.hidden = false;
+    ra(badge, 'hidden');
+    if (badge.style) badge.style.display = '';
+  }
+
+  function syncAllOverrideBadges(rootEl, doc, win, ui, customCssOn, csState) {
+    if (!rootEl) return;
+    const canOverride = Boolean(customCssOn && csState && csState.status === 'active');
+    const rootStyle = canOverride ? getRootComputedStyle(doc, win) : null;
+    for (let i = 0; i < OVERRIDE_BADGE_SPECS.length; i++) {
+      const spec = OVERRIDE_BADGE_SPECS[i];
+      const row = qs(rootEl, `[data-ag-cs-row="${spec.rowKey}"]`);
+      if (!row) continue;
+      const overridden = Boolean(rootStyle && readCssVarFromStyle(rootStyle, spec.cssVar));
+      syncRowOverrideBadge(row, doc, ui, spec, overridden);
+    }
+  }
+
   function sync(rootEl, rawCtx) {
     if (!rootEl || ga(rootEl, 'data-body-built') !== '1') return false;
     const baseCtx = rootEl.__csLastBaseCtx && typeof rootEl.__csLastBaseCtx === 'object' ? rootEl.__csLastBaseCtx : null;
@@ -398,6 +518,8 @@
     const doc = mergedRawCtx.doc || rootEl.ownerDocument || (typeof document !== 'undefined' ? document : null);
     if (!doc) return false;
     const win = mergedRawCtx.win || doc.defaultView || (typeof window !== 'undefined' ? window : G);
+    lastDoc = doc;
+    lastWin = win;
     const rawLang = (rawCtx && rawCtx.lang) || ga(rootEl, 'data-ag-cs-lang') || (doc.documentElement && ga(doc.documentElement, 'data-ag-cs-lang')) || mergedRawCtx.lang || (mergedRawCtx.cfgOverride && mergedRawCtx.cfgOverride.language) || 'en';
     const lang = rawLang === 'auto' ? 'en' : rawLang;
     const ui = getStrings(lang, mergedRawCtx.ui, win);
@@ -412,8 +534,8 @@
     const codeFontCustom = String(readLiveCfg(ctx, 'codeFontCustom', '') || '');
     const customCssRaw = readLiveCfg(ctx, 'customCss', 'on');
     const customCssOn = customCssRaw !== 'off' && customCssRaw !== false;
-    const clientState = (win.__agPrismCustomStyle || G.__agPrismCustomStyle)?.getState?.()?.customCss || null;
-    const csState = (mergedRawCtx.customCssMeta && typeof mergedRawCtx.customCssMeta === 'object' ? mergedRawCtx.customCssMeta : null) || (clientState && clientState.status ? clientState : null) || lastCustomCssMeta || {};
+    rootEl.__csLastCustomCssOn = customCssOn;
+    const csState = resolveEffectiveCssState(mergedRawCtx, win);
 
     const resyncNow = (patch) => {
       rootEl.__csOptimistic = patch && typeof patch === 'object' ? Object.assign({}, rootEl.__csOptimistic || {}, patch) : null;
@@ -449,6 +571,8 @@
         codeRow.__csStrings = ui; codeRow.__csCtx = ctx; codeRow.__csResync = resyncNow;
         bindFontPickerToRow(rootEl, codeRow, doc, ctx, { tier: 'code', modeKey: 'codeFont', customKey: 'codeFontCustom', modes: CODE_FONT_MODES, modeVal: codeFont, customVal: codeFontCustom, presets: codePresets, enhanceExisting: true });
       }
+
+      syncAllOverrideBadges(rootEl, doc, win, ui, customCssOn, csState);
 
       const cssRow = ensureCustomCssRow(rootEl, doc, ctx);
       if (cssRow) {
@@ -496,14 +620,36 @@
     return true;
   }
 
-  function setCustomCssMeta(meta) {
-    if (meta && typeof meta === 'object') lastCustomCssMeta = Object.assign({}, lastCustomCssMeta || {}, meta);
+  function setCustomCssMeta(meta, docOverride, winOverride) {
+    const doc = docOverride || (typeof document !== 'undefined' ? document : lastDoc);
+    const win = winOverride || (doc && doc.defaultView) || (typeof window !== 'undefined' ? window : lastWin || G);
+    storeCustomCssMeta(meta, win);
+    if (!doc) return;
+    const sec = typeof doc.getElementById === 'function' ? doc.getElementById('ag-cs-settings-sec') : null;
+    if (!sec || ga(sec, 'data-body-built') !== '1') return;
+    const baseCtx = sec.__csLastBaseCtx && typeof sec.__csLastBaseCtx === 'object' ? sec.__csLastBaseCtx : {};
+    const langRaw = ga(sec, 'data-ag-cs-lang') || (doc.documentElement && ga(doc.documentElement, 'data-ag-cs-lang')) || baseCtx.lang || 'en';
+    const lang = langRaw === 'auto' ? 'en' : langRaw;
+    const ui = getStrings(lang, baseCtx.ui, win);
+    const ctx = Object.assign({}, baseCtx, { doc, win, lang, ui });
+    if (sec.__csOptimistic && typeof sec.__csOptimistic === 'object') {
+      ctx.cfgOverride = Object.assign({}, sec.__csOptimistic);
+    }
+    const fallbackCss = typeof sec.__csLastCustomCssOn === 'boolean' ? (sec.__csLastCustomCssOn ? 'on' : 'off') : 'on';
+    const customCssRaw = readLiveCfg(ctx, 'customCss', fallbackCss);
+    const customCssOn = customCssRaw !== 'off' && customCssRaw !== false;
+    const runMut = typeof ctx.runGuardedMut === 'function' ? ctx.runGuardedMut : (fn) => fn();
+    runMut(() => {
+      syncAllOverrideBadges(sec, doc, win, ui, customCssOn, lastCustomCssMeta || {});
+    });
   }
 
   function syncIfPresent(docOverride, winOverride, cfgOverride, customCssMetaOverride) {
     const doc = docOverride || (typeof document !== 'undefined' ? document : null);
     const win = winOverride || (doc && doc.defaultView) || (typeof window !== 'undefined' ? window : G);
-    if (customCssMetaOverride && typeof customCssMetaOverride === 'object') setCustomCssMeta(customCssMetaOverride);
+    if (doc) lastDoc = doc;
+    if (win) lastWin = win;
+    if (customCssMetaOverride && typeof customCssMetaOverride === 'object') storeCustomCssMeta(customCssMetaOverride, win);
     hookBeta4Ext(win);
     if (!doc) return false;
     const sec = typeof doc.getElementById === 'function' ? doc.getElementById('ag-cs-settings-sec') : null;
@@ -547,6 +693,8 @@
   function install(docOverride, winOverride) {
     const doc = docOverride || (typeof document !== 'undefined' ? document : null);
     const win = winOverride || (doc && doc.defaultView) || (typeof window !== 'undefined' ? window : G);
+    if (doc) lastDoc = doc;
+    if (win) lastWin = win;
     hookBeta4Ext(win);
     installBeta4Trap(win, doc);
     syncIfPresent(doc, win);
@@ -569,16 +717,24 @@
         if (curVal !== undefined) target.__agPrismSettingsExtBeta4 = curVal;
       } catch {}
     }
-    const doc = docOverride || (typeof document !== 'undefined' ? document : null);
+    const doc = docOverride || (typeof document !== 'undefined' ? document : lastDoc);
+    lastCustomCssMeta = null;
+    lastMetaClientSig = '';
+    lastDoc = null;
+    lastWin = null;
     if (!doc) return;
     try { doc.getElementById?.(UI_STYLE_ID)?.remove?.(); } catch {}
+    try {
+      const sec = typeof doc.getElementById === 'function' ? doc.getElementById('ag-cs-settings-sec') : null;
+      if (sec) delete sec.__csLastCustomCssOn;
+    } catch {}
     try {
       doc.querySelectorAll?.('[data-ag-cs-fp-enhanced="1"]')?.forEach?.((n) => {
         try { delete n.__csFontPicker; } catch {}
         n.removeAttribute?.('data-ag-cs-fp-enhanced');
       });
     } catch {}
-    try { doc.querySelectorAll?.('[data-ag-cs-custom-style-owned="1"]')?.forEach?.((n) => n.remove?.()); } catch {}
+    try { doc.querySelectorAll?.('[data-ag-cs-custom-style-owned="1"], [data-ag-cs-override-badge]')?.forEach?.((n) => n.remove?.()); } catch {}
   }
 
   return { UI_STYLE_ID, UI_FONT_MODES, CHAT_FONT_MODES, CODE_FONT_MODES, setCustomCssMeta, sync, syncIfPresent, install, dispose };

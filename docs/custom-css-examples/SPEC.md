@@ -12,10 +12,9 @@ This guide documents how to author safe, high-craft, 300Hz-friendly stylesheets 
 | Property | Behavior |
 | --- | --- |
 | **File location** | `<pluginRoot>/custom.css` (inside the Obsidian Prism plugin directory, alongside `config.json`) |
-| **Create from UI** | Open Obsidian Prism Settings -> **Custom CSS (`custom.css`)** -> **Create Template** (uses atomic `wx` create; never overwrites an existing file) |
+| **Create / Open from UI** | Open Obsidian Prism Settings -> **Custom CSS (`custom.css`)** -> click the single action button: **Create Template** when missing (atomic `wx` create without overwriting, then opens in your default editor) or **Open** once the file exists |
 | **Use a preset** | Copy any `.css` file from this folder to `<pluginRoot>/custom.css` and save |
-| **Live hot-reload** | Automatically detected via the daemon's existing directory `fs.watch` (~120 ms debounce) -> rebuilds and syncs **only Channel 18** without rebuilding Channel 1 or restarting Antigravity |
-| **Manual reload** | Click **Reload** in Settings to force an immediate Channel 18 sync |
+| **Live hot-reload** | Save `custom.css` to auto hot-reload via the daemon's existing directory `fs.watch` (~120 ms debounce) -> rebuilds and syncs **only Channel 18** without rebuilding Channel 1 or restarting Antigravity |
 | **Upgrade safety** | `custom.css` is a protected user asset in `install-manifest.cjs` and is preserved across plugin upgrades and reinstalls |
 | **Disable cleanly** | Switch `customCss` to `"off"` in Settings (or `config.json`) -> 0 injection overhead while keeping your local file untouched on disk |
 

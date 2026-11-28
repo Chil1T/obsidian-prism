@@ -236,6 +236,17 @@
       'Vorlage erstellt und custom.css wird geöffnet; Hot-Reload beim Speichern',
       'custom.css oluşturuldu ve açılıyor; kaydetmede otomatik yenilenir',
     ],
+    cssFontOverrideTooltip: [
+      '当前由 custom.css 覆写，删除对应变量即可恢复面板控制',
+      '目前由 custom.css 覆寫，刪除對應變數即可恢復面板控制',
+      'Overridden by custom.css — remove the matching variable to restore panel control',
+      'custom.css で上書きされています。該当する変数を削除するとパネル設定に戻ります',
+      'custom.css에서 재정의됨 — 해당 변수를 삭제하면 패널 제어로 복원됩니다',
+      'Anulado por custom.css — elimina la variable correspondiente para restaurar el control del panel',
+      'Remplacé par custom.css — supprimez la variable correspondante pour rétablir le contrôle du panneau',
+      'Von custom.css überschrieben — entferne die entsprechende Variable, um die Steuerung wiederherzustellen',
+      'custom.css tarafından geçersiz kılındı — panel kontrolünü geri yüklemek için ilgili değişkeni kaldırın',
+    ],
     fontPickerSearchPlaceholder: [
       '搜索字体或输入字体栈...',
       '搜尋字型或輸入字型...',

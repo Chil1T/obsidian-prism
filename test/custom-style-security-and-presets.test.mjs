@@ -7,6 +7,7 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { createRequire } from 'node:module';
 import { assertCssHygiene, assertFileHygiene } from './helpers/mini-dom.mjs';
+import { createInteractiveDom, mountSettingsScaffold } from './helpers/custom-style-dom.mjs';
 import { PrismDaemon } from '../src/daemon/index.mjs';
 
 const require = createRequire(import.meta.url);
@@ -14,8 +15,15 @@ const ROOT = path.resolve(import.meta.dirname, '..');
 
 const cdp = require(path.join(ROOT, 'cdp.js'));
 const customCssLoader = require(path.join(ROOT, 'src', 'channels', 'custom-css-loader.cjs'));
+const fontCustomizer = require(path.join(ROOT, 'src', 'runtime', 'font-customizer.js'));
+const customStyleI18n = require(path.join(ROOT, 'vendor', 'custom-style', 'custom-style-i18n.js'));
 const customStyleClient = require(path.join(ROOT, 'vendor', 'custom-style', 'custom-style-client.js'));
+const fontPickerUi = require(path.join(ROOT, 'vendor', 'custom-style', 'font-picker-ui.js'));
+const customStyleSettingsUi = require(path.join(ROOT, 'vendor', 'custom-style', 'custom-style-settings-ui.js'));
 
+const CANONICAL_9_LOCALES = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de', 'tr'];
+const NON_CJK_LOCALES = ['en', 'ko', 'es', 'fr', 'de', 'tr'];
+const CJK_RE = /[\u3400-\u9FFF\uF900-\uFAFF]/;
 const FORBIDDEN_TERM_RE = /八方旅人|octopath/i;
 const PRESET_FILES = [
   '01-coding-minimal.css',
@@ -482,6 +490,244 @@ test('P1 #5 regression: all 4 CSS presets satisfy hygiene, (0,6,1)/(0,6,2) Light
         const ratio = wcagContrast(fg, bg);
         assert.ok(ratio >= 4.5, `${name} [${mode}] ${label} (${fg} on ${bg}) contrast ${ratio.toFixed(2)}:1 < 4.5:1 AA`);
       }
+    }
+  }
+});
+
+test('Upgraded DEFAULT_CUSTOM_CSS_TEMPLATE & SPEC.md regression: ASCII/LF 60-80L skeleton, constraints, dual-theme selectors, uncomment activation & 0 stale Reload refs', () => {
+  const tpl = customCssLoader.DEFAULT_CUSTOM_CSS_TEMPLATE;
+  assert.equal(/[^\x00-\x7F]/.test(tpl), false, 'DEFAULT_CUSTOM_CSS_TEMPLATE must be 100% ASCII');
+  assert.equal(tpl.includes('\r'), false, 'DEFAULT_CUSTOM_CSS_TEMPLATE must be LF-only');
+  assert.equal(tpl.startsWith('\uFEFF'), false, 'DEFAULT_CUSTOM_CSS_TEMPLATE must have 0 BOM');
+  const lineCount = tpl.trimEnd().split('\n').length;
+  assert.ok(lineCount >= 60 && lineCount <= 80, `Template line count must stay ~60-80 lines, got ${lineCount}`);
+
+  // Top-5 hard constraints, 3-tier font vars, exact Dark (0,4,1)/(0,4,2) & Light (0,6,1)/(0,6,2), core tokens & stable data-testid containers
+  const darkSel = 'html:root[data-ag-cs-style][data-ag-cs-style][data-ag-cs-theme="dark"]';
+  for (const required of [
+    '<= 256 KB', '@import', 'http(s)://', 'base64', 'data:', ':has()',
+    '.codicon', '[class*="codicon-"]', '.octicon',
+    '[data-has-browser-hole="true"]', 'overflow:hidden', 'content-visibility:auto',
+    '--ag-prism-ui-font', '--ag-prism-chat-font', '--ag-prism-code-font',
+    `${darkSel},`, `${darkSel} > body`,
+    `${LIGHT_SELECTOR_061},`, `${LIGHT_SELECTOR_061} > body`,
+    '--background:', '--content:', '--shell:', '--body-background:', '--sidebar:', '--card:',
+    '--foreground:', '--muted-foreground:', '--border:', '--primary:', '--link:', '--ag-cs-accent:',
+    '--ag-cs-r-sm:', '--ag-cs-r-md:', '--ag-cs-r-lg:',
+    '[data-testid="planner-response-text"]', '[data-testid="agent-response"]',
+    '[data-testid="artifact-view"]', '[data-testid="artifact-card"]',
+    '[data-testid="sidebar-split"]', '[data-testid="conversation-row-sidebar"]',
+    '[data-testid="agent-input-box"]', '[data-testid="thinking-collapsible-trigger"]',
+    '[data-testid="user-message-bubble"]',
+  ]) {
+    assert.ok(tpl.includes(required), `DEFAULT_CUSTOM_CSS_TEMPLATE missing required content: ${required}`);
+  }
+
+  // Sanitizer passes template cleanly with 0 blockedImports
+  const sanTpl = customCssLoader.sanitizeCustomCssContent(tpl);
+  assert.equal(sanTpl.blockedImports, 0);
+  assert.equal(sanTpl.css, tpl);
+
+  // Disk write unchanged -> readCustomCssSafe().status === 'empty'; uncommenting Example blocks -> status === 'active', blockedImports === 0, balanced braces
+  const tmpDir = mkTempDir('prism-template-reg-');
+  try {
+    const created = customCssLoader.createDefaultCustomCssTemplate(tmpDir);
+    assert.equal(created.ok, true);
+    assert.equal(created.created, true);
+    const unchanged = customCssLoader.readCustomCssSafe(tmpDir);
+    assert.equal(unchanged.status, 'empty');
+    assert.equal(unchanged.bytes, 0);
+    assert.equal(unchanged.blockedImports, 0);
+
+    const blocks = [...tpl.matchAll(/\/\* (Example [^\n]+)\n([\s\S]*?)\n\*\//g)];
+    assert.equal(blocks.length, 4, 'Template must provide 4 uncommentable example blocks (fonts, Dark, Light, prose)');
+    const cssPath = path.join(tmpDir, 'custom.css');
+    for (const [, label, body] of blocks) {
+      assertCssHygiene(body, `template:${label}`);
+      assertBalancedDelimiters(body, `template:${label}`);
+      fs.writeFileSync(cssPath, `${body}\n`, 'utf8');
+      const res = customCssLoader.readCustomCssSafe(tmpDir);
+      assert.equal(res.status, 'active', `${label} uncommented must activate`);
+      assert.equal(res.blockedImports, 0, `${label} must have 0 blockedImports`);
+      assert.ok(res.bytes > 0);
+    }
+
+    const allUncommented = blocks.map((b) => b[2]).join('\n\n') + '\n';
+    assertCssHygiene(allUncommented, 'template:all-examples');
+    assertBalancedDelimiters(allUncommented, 'template:all-examples');
+    fs.writeFileSync(cssPath, allUncommented, 'utf8');
+    const allRes = customCssLoader.readCustomCssSafe(tmpDir);
+    assert.equal(allRes.status, 'active');
+    assert.equal(allRes.blockedImports, 0);
+    assert.ok(allRes.bytes > 0);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+
+  // SPEC.md hygiene: 0 stale Manual reload / Click Reload in Settings references
+  const specText = fs.readFileSync(path.join(ROOT, 'docs', 'custom-css-examples', 'SPEC.md'), 'utf8');
+  assert.equal(/manual\s+reload/i.test(specText), false, 'SPEC.md must not contain stale Manual reload reference');
+  assert.equal(/click\s+reload\s+in\s+settings/i.test(specText), false, 'SPEC.md must not contain stale Click Reload in Settings reference');
+  assert.ok(specText.includes('Create Template') && specText.includes('Open') && /auto hot-reload/i.test(specText));
+});
+
+test('3-tier font custom.css override pill badges: zero false positives, per-tier isolation, Appearance untouched, hot-reload/off hide, 9-locale tooltips & clean dispose', () => {
+  // 1) Verify neither custom-style-client nor font-customizer declares --ag-prism-{ui,chat,code}-font: (prevents getComputedStyle false positives)
+  const probeDoc = createInteractiveDom({ 'data-ag-cs-style': '1' }).doc;
+  const fullCfg = { uiFont: 'inter', uiFontCustom: '', chatFont: 'noto-sans', chatFontCustom: '', codeFont: 'jetbrains', codeFontCustom: '', customCss: 'on' };
+  customStyleClient.sync(fullCfg, { status: 'missing', css: '', bytes: 0, blockedImports: 0 }, probeDoc);
+  fontCustomizer.applyCustomFonts(fullCfg, probeDoc);
+  const generatedCss = [
+    probeDoc.getElementById(customStyleClient.UI_FONT_STYLE_ID)?.textContent || '',
+    probeDoc.getElementById(fontCustomizer.STYLE_ID)?.textContent || '',
+  ].join('\n');
+  assert.equal(/--ag-prism-(?:ui|chat|code)-font\s*:/.test(generatedCss), false, 'Internal font modules must never define --ag-prism-{ui,chat,code}-font:');
+  customStyleClient.destroy(probeDoc);
+
+  // 2) Ch9 scaffold with .ag-cs-settings-title-line on font rows + Appearance-tab rows
+  const dom = createInteractiveDom({ 'data-ag-cs-style': '1', 'data-ag-cs-lang': 'en' });
+  const { doc, body, win } = dom;
+  const { sec, groupBody, chatRow, codeRow, ligRow } = mountSettingsScaffold(doc, body);
+  const addTitle = (row, txt) => {
+    const col = doc.createElement('div'); col.className = 'flex-1';
+    const tl = doc.createElement('div'); tl.className = 'ag-cs-settings-title-line';
+    const t = doc.createElement('span'); t.setAttribute('data-k', 't'); t.textContent = txt;
+    const d = doc.createElement('span'); d.setAttribute('data-k', 'd');
+    tl.appendChild(t); col.appendChild(tl); col.appendChild(d);
+    const inner = row.querySelector('.py-2');
+    inner.insertBefore(col, inner.firstChild);
+  };
+  addTitle(chatRow, 'Chat Font'); addTitle(codeRow, 'Code Font'); addTitle(ligRow, 'Code Ligatures');
+  const appearanceRows = ['themeMode', 'darkPreset', 'lightPreset', 'accentTone', 'motionLevel'].map((key) => {
+    const row = doc.createElement('div'); row.setAttribute('data-ag-cs-row', key);
+    const inner = doc.createElement('div'); inner.className = 'py-2';
+    const ctrl = doc.createElement('div'); ctrl.className = 'shrink-0';
+    inner.appendChild(ctrl); row.appendChild(inner); addTitle(row, key);
+    groupBody.insertBefore(row, chatRow);
+    return row;
+  });
+
+  let vars = {}; let failCs = false;
+  win.getComputedStyle = (el) => {
+    if (failCs) throw new Error('boom');
+    return { getPropertyValue: (p) => (el === doc.documentElement ? String(vars[p] || '') : '') };
+  };
+  Object.assign(win, {
+    __agPrismCustomStyle: customStyleClient, __agPrismCustomStyleI18n: customStyleI18n,
+    __agPrismFontPickerUi: fontPickerUi, __agPrismFontCustomizer: fontCustomizer, __agPrismSetting: () => {},
+  });
+
+  const meta = (status, bytes = 120, sha256 = status) => ({ status, bytes, sha256, blockedImports: 0 });
+  const syncUi = (cfg, m) => customStyleSettingsUi.syncIfPresent(doc, win, cfg, m);
+  const visBadges = (r = sec) => r.querySelectorAll('[data-ag-cs-override-badge]').filter((b) => !b.hidden && !b.hasAttribute('hidden') && b.style.display !== 'none');
+  const visKeys = (r = sec) => visBadges(r).map((b) => b.getAttribute('data-ag-cs-override-badge'));
+
+  try {
+    customStyleSettingsUi.install(doc, win);
+    const uiRow = sec.querySelector('[data-ag-cs-row="uiFont"]');
+    const cssRow = sec.querySelector('[data-ag-cs-row="customCss"]');
+    assert.ok(uiRow && cssRow);
+
+    // Zero false positives: off, non-active statuses, empty/whitespace font vars, and throwing getComputedStyle
+    vars = { '--ag-prism-ui-font': '"Inter"', '--ag-prism-chat-font': '"Charter"', '--ag-prism-code-font': '"JetBrains Mono"' };
+    syncUi({ customCss: 'off' }, meta('active', 180, 'off'));
+    assert.deepEqual(visKeys(), []);
+    for (const st of ['missing', 'empty', 'rejected-symlink', 'rejected-non-file', 'rejected-too-large', 'error']) {
+      syncUi({ customCss: 'on' }, meta(st, 0, `s-${st}`));
+      assert.deepEqual(visKeys(), [], `status=${st} must show 0 badges`);
+    }
+    vars = { '--ag-prism-ui-font': '', '--ag-prism-chat-font': '   ', '--ag-prism-code-font': '', '--background': '#0c0d10' };
+    syncUi({ customCss: 'on' }, meta('active', 96, 'empty-vars'));
+    assert.deepEqual(visKeys(), []);
+    failCs = true;
+    syncUi({ customCss: 'on' }, meta('active', 96, 'throw-cs'));
+    assert.deepEqual(visKeys(), []);
+    failCs = false;
+
+    // Selective per-tier: ONLY --ag-prism-chat-font -> ONLY chatFont badge with localized title & aria-label
+    vars = { '--ag-prism-chat-font': '"Charter", serif' };
+    syncUi({ customCss: 'on' }, meta('active', 110, 'chat-only'));
+    assert.deepEqual(visKeys(), ['chatFont']);
+    const chatBadge = chatRow.querySelector('[data-ag-cs-override-badge="chatFont"]');
+    const enTip = customStyleI18n.getStrings('en').cssFontOverrideTooltip;
+    assert.ok(chatBadge && chatBadge.parentElement === chatRow.querySelector('.ag-cs-settings-title-line'));
+    assert.equal(chatBadge.getAttribute('data-ag-cs-custom-style-owned'), '1');
+    assert.equal(chatBadge.textContent, 'custom.css');
+    assert.deepEqual([chatBadge.getAttribute('title'), chatBadge.getAttribute('aria-label')], [enTip, enTip]);
+
+    // All 3 vars -> all 3 badges; Appearance rows & ligatures stay completely untouched
+    vars = {
+      '--ag-prism-ui-font': '"Inter", sans-serif', '--ag-prism-chat-font': '"Charter", serif',
+      '--ag-prism-code-font': '"JetBrains Mono", monospace', '--background': '#0c0d10', '--primary': '#669df6',
+    };
+    syncUi({ customCss: 'on' }, meta('active', 240, 'all-3'));
+    assert.deepEqual(visKeys(), ['uiFont', 'chatFont', 'codeFont']);
+    for (const [row, key] of [[uiRow, 'uiFont'], [chatRow, 'chatFont'], [codeRow, 'codeFont']]) {
+      const b = row.querySelector(`[data-ag-cs-override-badge="${key}"]`);
+      assert.ok(b && b.parentElement === row.querySelector('.ag-cs-settings-title-line'));
+      assert.equal(b.getAttribute('data-ag-cs-custom-style-owned'), '1');
+      assert.deepEqual([b.getAttribute('title'), b.getAttribute('aria-label')], [enTip, enTip]);
+    }
+    for (const aRow of [...appearanceRows, ligRow]) {
+      assert.equal(aRow.querySelectorAll('[data-ag-cs-override-badge], [data-ag-cs-custom-style-owned="1"]').length, 0);
+      assert.equal(aRow.querySelector('.ag-cs-settings-title-line').children.length, 1);
+    }
+
+    // Locale switches update title & aria-label via both syncIfPresent and setCustomCssMeta
+    sec.setAttribute('data-ag-cs-lang', 'zh-CN');
+    syncUi({ customCss: 'on' }, meta('active', 240, 'all-3-zh'));
+    const zhTip = customStyleI18n.getStrings('zh-CN').cssFontOverrideTooltip;
+    for (const b of visBadges()) assert.deepEqual([b.getAttribute('title'), b.getAttribute('aria-label')], [zhTip, zhTip]);
+    sec.setAttribute('data-ag-cs-lang', 'ja');
+    customStyleSettingsUi.setCustomCssMeta(meta('active', 240, 'all-3-ja'), doc, win);
+    const jaTip = customStyleI18n.getStrings('ja').cssFontOverrideTooltip;
+    for (const b of visBadges()) assert.deepEqual([b.getAttribute('title'), b.getAttribute('aria-label')], [jaTip, jaTip]);
+
+    // Toggling customCss off hides badges immediately; toggling on restores them
+    cssRow.querySelector('button[data-ag-cs-ext-role="off"]').click();
+    assert.deepEqual(visKeys(), []);
+    for (const b of sec.querySelectorAll('[data-ag-cs-override-badge]')) assert.ok(b.hidden && b.hasAttribute('hidden') && b.style.display === 'none');
+    cssRow.querySelector('button[data-ag-cs-ext-role="on"]').click();
+    assert.deepEqual(visKeys(), ['uiFont', 'chatFont', 'codeFont']);
+
+    // Hot-reload clearing vars or emptying custom.css immediately hides badges
+    vars = { '--ag-prism-code-font': '"Cascadia Code", monospace' };
+    customStyleSettingsUi.setCustomCssMeta(meta('active', 80, 'hr-code'), doc, win);
+    assert.deepEqual(visKeys(), ['codeFont']);
+    vars = {};
+    customStyleSettingsUi.setCustomCssMeta(meta('active', 48, 'hr-none'), doc, win);
+    assert.deepEqual(visKeys(), []);
+    vars = { '--ag-prism-ui-font': '"Inter"', '--ag-prism-chat-font': '"Charter"', '--ag-prism-code-font': '"JetBrains Mono"' };
+    customStyleSettingsUi.setCustomCssMeta(meta('active', 240, 'hr-back'), doc, win);
+    assert.deepEqual(visKeys(), ['uiFont', 'chatFont', 'codeFont']);
+    customStyleSettingsUi.setCustomCssMeta(meta('empty', 0, 'hr-empty'), doc, win);
+    assert.deepEqual(visKeys(), []);
+
+    // Re-show all 3 badges, then dispose() -> 0 owned / badge residue in Ch9 rows while Ch9 rows stay intact
+    customStyleSettingsUi.setCustomCssMeta(meta('active', 240, 'pre-dispose'), doc, win);
+    assert.deepEqual(visKeys(), ['uiFont', 'chatFont', 'codeFont']);
+    customStyleSettingsUi.dispose(doc);
+    assert.equal(sec.querySelectorAll('[data-ag-cs-custom-style-owned="1"], [data-ag-cs-override-badge]').length, 0);
+    assert.equal(chatRow.querySelectorAll('[data-ag-cs-custom-style-owned="1"], [data-ag-cs-override-badge]').length, 0);
+    assert.equal(codeRow.querySelectorAll('[data-ag-cs-custom-style-owned="1"], [data-ag-cs-override-badge]').length, 0);
+    assert.equal(chatRow.querySelector('[data-k="t"]')?.textContent, 'Chat Font');
+    assert.equal(codeRow.querySelector('[data-k="t"]')?.textContent, 'Code Font');
+    assert.equal(dom.getInnerHtmlWrites(), 0);
+  } finally {
+    customStyleSettingsUi.dispose(doc);
+    customStyleClient.destroy(doc);
+  }
+
+  // 3) All 9 canonical locales include cssFontOverrideTooltip with 0 CJK in non-CJK locales & 0 yue
+  assert.deepEqual([...customStyleI18n.LOCALES], CANONICAL_9_LOCALES);
+  assert.equal(customStyleI18n.LOCALES.includes('yue'), false);
+  assert.ok(Array.isArray(customStyleI18n.TABLE.cssFontOverrideTooltip) && customStyleI18n.TABLE.cssFontOverrideTooltip.length === 9);
+  for (const loc of CANONICAL_9_LOCALES) {
+    const tip = customStyleI18n.getStrings(loc).cssFontOverrideTooltip;
+    assert.ok(typeof tip === 'string' && tip.trim().length > 0 && tip.includes('custom.css'), `Invalid ${loc}.cssFontOverrideTooltip`);
+    assert.equal(FORBIDDEN_TERM_RE.test(tip), false, `Forbidden term in ${loc}.cssFontOverrideTooltip`);
+    if (NON_CJK_LOCALES.includes(loc)) {
+      assert.equal(CJK_RE.test(tip), false, `CJK leaked into ${loc}.cssFontOverrideTooltip: ${tip}`);
     }
   }
 });
