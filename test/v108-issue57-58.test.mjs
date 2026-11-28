@@ -330,13 +330,13 @@ test('Issue #58 Bugs 3 & 5: focus outline suppression on conversation-view/autos
   );
   assert.equal(css.includes(',[data-testid="autoscroll-viewport"],'), false, 'must keep Issue #8 autoscroll-viewport scrollbar guard intact');
 
-  // Subtle motion mode: exclude .ag-v2-mascot-actor from [role="button"] transform:none override (prevents mascot teleport on hover/drag)
+  // Subtle motion mode: exclude .agy-scroll-bottom (PR #179) and .ag-v2-mascot-actor from transform:none override (prevents scroll-bottom hover jitter & mascot teleport)
   const subtleIdx = css.indexOf('&[data-ag-cs-motion="subtle"]{');
   assert.ok(subtleIdx > 0, 'subtle motion block must exist');
   const subtleSlice = css.slice(subtleIdx, css.indexOf('\n}\n', subtleIdx));
   assert.ok(
-    subtleSlice.includes('& :is(button,[role="button"]:not(.ag-v2-mascot-actor):not([data-no-press-spring="1"])):is(:hover,:active){transform:none !important;}'),
-    'subtle motion mode must exclude .ag-v2-mascot-actor from transform:none !important on :hover/:active'
+    subtleSlice.includes('& :is(button:not(.agy-scroll-bottom),[role="button"]:not(.ag-v2-mascot-actor):not([data-no-press-spring="1"])):is(:hover,:active){transform:none!important}'),
+    'subtle motion mode must exclude .agy-scroll-bottom and .ag-v2-mascot-actor from transform:none!important on :hover/:active'
   );
   assert.ok(
     subtleSlice.includes('[role="button"]:not(.ag-v2-mascot-actor):not([data-no-press-spring="1"])'),
