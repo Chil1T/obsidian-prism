@@ -151,6 +151,14 @@ async function handleSettingBinding(rpc, entry, payload, executionContextId) {
       await deliverPeriodicPickerFullToEntry(rpc.channelOrchestrator, entry, executionContextId);
       return;
     }
+    if (parsed.action === 'custom-css-create-template') {
+      await rpc.channelOrchestrator.createCustomCssTemplateAndSync();
+      return;
+    }
+    if (parsed.action === 'custom-css-reload') {
+      await rpc.channelOrchestrator.refreshCustomStyleChannel({ forceEval: true });
+      return;
+    }
     const updated =
       parsed.action === 'patch-batch' && parsed.entries && typeof parsed.entries === 'object'
         ? rpc.channelOrchestrator.updateConfigBatch(parsed.entries)
