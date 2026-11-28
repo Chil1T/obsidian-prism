@@ -273,7 +273,11 @@ const SETTINGS_REMOVE_EXPRESSION = `(() => {
     sec?.remove?.();
   } catch {}
   try { (window.__agPrismCustomStyleSettingsUi || globalThis.__agPrismCustomStyleSettingsUi)?.dispose?.(document); } catch {}
+  try { (window.__agPrismFontPickerUi || globalThis.__agPrismFontPickerUi)?.dispose?.(document); } catch {}
   try { document.getElementById?.('ag-prism-custom-style-ui-css')?.remove?.(); } catch {}
+  try { document.getElementById?.('ag-prism-font-picker-css')?.remove?.(); } catch {}
+  try { document.querySelectorAll?.('[data-ag-cs-font-picker-portal="1"]')?.forEach?.((n) => n.remove?.()); } catch {}
+  try { document.querySelectorAll?.('[data-ag-cs-fp-enhanced="1"]')?.forEach?.((n) => n.removeAttribute?.('data-ag-cs-fp-enhanced')); } catch {}
   try { document.querySelectorAll?.('[data-ag-cs-custom-style-owned="1"]')?.forEach?.((n) => n.remove?.()); } catch {}
   try { (window.__agPrismSettingsExtBeta4 || globalThis.__agPrismSettingsExtBeta4)?.dispose?.(document); } catch {}
   try { document.getElementById?.('ag-prism-settings-ext-beta4-css')?.remove?.(); } catch {}
@@ -286,6 +290,8 @@ const SETTINGS_REMOVE_EXPRESSION = `(() => {
   try { delete globalThis.__agPrismI18nExtBeta4; } catch {}
   try { delete window.__agPrismCustomStyleI18n; } catch {}
   try { delete globalThis.__agPrismCustomStyleI18n; } catch {}
+  try { delete window.__agPrismFontPickerUi; } catch {}
+  try { delete globalThis.__agPrismFontPickerUi; } catch {}
   try { delete window.__agPrismCustomStyleSettingsUi; } catch {}
   try { delete globalThis.__agPrismCustomStyleSettingsUi; } catch {}
   try { delete window.__agPrismBrandLogoSvg; } catch {}

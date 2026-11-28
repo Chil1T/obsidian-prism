@@ -16,12 +16,11 @@ const { CHANNEL_MAIN_FRAME_HOST_GUARD } = require('./host-guard.cjs');
 const { readCustomCssSafe } = require('./custom-css-loader.cjs');
 
 const CUSTOM_STYLE_FILES = Object.freeze([
-  'vendor/custom-style/custom-style-i18n.js',
   'vendor/custom-style/custom-style-client.js',
-  'vendor/custom-style/custom-style-settings-ui.js',
 ]);
 const CUSTOM_STYLE_SETTINGS_UI_FILES = Object.freeze([
   'vendor/custom-style/custom-style-i18n.js',
+  'vendor/custom-style/font-picker-ui.js',
   'vendor/custom-style/custom-style-settings-ui.js',
 ]);
 
@@ -161,7 +160,6 @@ function createCustomStyleChannelBuilders({ rootDir, readConfig, bundleCache }) 
     const ch18PatchJson = serializeJsonForEval(pickCustomStyleBootPatch(cfg));
     const payloadJson = serializeJsonForEval(customCssPayload);
     const hashJson = serializeJsonForEval(targetHash);
-    const uiRuntimeHashJson = serializeJsonForEval(readCompiledSettingsUiAssets().codeHash || runtimeCodeHash);
 
     return `(() => {
   try {
@@ -187,7 +185,6 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
     const ch18BootPatch = ${ch18PatchJson};
     const customCssPayload = ${payloadJson};
     const targetHash = ${hashJson};
-    const uiRuntimeHash = ${uiRuntimeHashJson};
 
     const mountOrReuse = () => {
       if (needDomMarkerOnReady && !hasDomMarker() && (isPlainHttpLocalhost || !/\\bantigravity\\b/i.test(String(document.title || '')))) {
@@ -208,13 +205,12 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
       const existingUi = window.__agPrismCustomStyleSettingsUi || globalThis.__agPrismCustomStyleSettingsUi;
       if (
         existing &&
-        existingUi &&
         (existingCodeHash === targetHash || existing.__prismRuntimeHash === ${serializeJsonForEval(runtimeCodeHash)})
       ) {
         existing.__prismCodeHash = targetHash;
         try { existing.sync?.(effectiveCfg, customCssPayload, document); } catch {}
-        try { existingUi.setCustomCssMeta?.(customCssPayload); } catch {}
-        try { existingUi.syncIfPresent?.(document, window, effectiveCfg, customCssPayload); } catch {}
+        try { existingUi?.setCustomCssMeta?.(customCssPayload); } catch {}
+        try { existingUi?.syncIfPresent?.(document, window, effectiveCfg, customCssPayload); } catch {}
         return { ok: true, reused: true, codeHash: targetHash };
       }
 
@@ -222,23 +218,16 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
       ;${minRuntime};
 
       const mounted = window.__agPrismCustomStyle || globalThis.__agPrismCustomStyle;
-      const mountedUi = window.__agPrismCustomStyleSettingsUi || globalThis.__agPrismCustomStyleSettingsUi;
       if (mounted && typeof mounted === 'object') {
         mounted.__prismCodeHash = targetHash;
         mounted.__prismRuntimeHash = ${serializeJsonForEval(runtimeCodeHash)};
         try { window.__agPrismCustomStyle = mounted; } catch {}
         try { globalThis.__agPrismCustomStyle = mounted; } catch {}
       }
-      if (mountedUi && typeof mountedUi === 'object') {
-        mountedUi.__prismCodeHash = targetHash;
-        mountedUi.__prismUiRuntimeHash = uiRuntimeHash;
-        try { window.__agPrismCustomStyleSettingsUi = mountedUi; } catch {}
-        try { globalThis.__agPrismCustomStyleSettingsUi = mountedUi; } catch {}
-      }
       try { mounted?.sync?.(effectiveCfg, customCssPayload, document); } catch {}
-      try { mountedUi?.setCustomCssMeta?.(customCssPayload); } catch {}
-      try { mountedUi?.install?.(document, window); } catch {}
-      try { mountedUi?.syncIfPresent?.(document, window, effectiveCfg, customCssPayload); } catch {}
+      const liveUi = window.__agPrismCustomStyleSettingsUi || globalThis.__agPrismCustomStyleSettingsUi;
+      try { liveUi?.setCustomCssMeta?.(customCssPayload); } catch {}
+      try { liveUi?.syncIfPresent?.(document, window, effectiveCfg, customCssPayload); } catch {}
       return { ok: true, status: 'mounted', codeHash: targetHash };
     };
 
@@ -322,8 +311,13 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
 })()`;
   }
 
+  function getCustomStyleSettingsUiRuntimeHash() {
+    return readCompiledSettingsUiAssets().codeHash || '';
+  }
+
   return {
     shouldEnableCustomStyle,
+    getCustomStyleSettingsUiRuntimeHash,
     buildCustomStyleChannelExpression,
     buildCustomStyleSettingsUiExpression,
     buildCustomStyleSettingsMetaSyncExpression,

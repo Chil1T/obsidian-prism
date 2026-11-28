@@ -401,6 +401,7 @@ const CHANNEL_STATIC_SPECS = Object.freeze([
     files: [
       'vendor/custom-style/custom-style-i18n.js',
       'vendor/custom-style/custom-style-client.js',
+      'vendor/custom-style/font-picker-ui.js',
       'vendor/custom-style/custom-style-settings-ui.js',
     ],
     mountGlobal: '__agPrismCustomStyle',
@@ -411,6 +412,7 @@ const CHANNEL_STATIC_SPECS = Object.freeze([
     probeLines: [
       'hasCustomStyle: Boolean(window.__agPrismCustomStyle || globalThis.__agPrismCustomStyle)',
       "customStyleCodeHash: String((window.__agPrismCustomStyle || globalThis.__agPrismCustomStyle)?.__prismCodeHash || '')",
+      "customStyleUiRuntimeHash: String((window.__agPrismCustomStyleSettingsUi || globalThis.__agPrismCustomStyleSettingsUi)?.__prismUiRuntimeHash || '')",
     ],
     defaultShouldEnable: (cfg) => {
       const cssOn = cfg?.customCss !== 'off' && cfg?.customCss !== false;

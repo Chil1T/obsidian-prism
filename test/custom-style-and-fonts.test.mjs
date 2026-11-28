@@ -8,6 +8,7 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { createRequire } from 'node:module';
 import { assertFileHygiene } from './helpers/mini-dom.mjs';
+import { createInteractiveDom as createDomWithTraps } from './helpers/custom-style-dom.mjs';
 import { PrismDaemon } from '../src/daemon/index.mjs';
 
 const require = createRequire(import.meta.url);
@@ -15,11 +16,16 @@ const ROOT = path.resolve(import.meta.dirname, '..');
 
 const cdp = require(path.join(ROOT, 'cdp.js'));
 const customCssLoader = require(path.join(ROOT, 'src', 'channels', 'custom-css-loader.cjs'));
-const { createCustomStyleChannelBuilders } = require(path.join(ROOT, 'src', 'channels', 'builders-custom-style.cjs'));
+const {
+  CUSTOM_STYLE_FILES,
+  CUSTOM_STYLE_SETTINGS_UI_FILES,
+  createCustomStyleChannelBuilders,
+} = require(path.join(ROOT, 'src', 'channels', 'builders-custom-style.cjs'));
 const { PROTECTED_USER_PATHS, USER_OWNED_ASSET_PATHS } = require(path.join(ROOT, 'src', 'platform', 'install-manifest.cjs'));
 const fontCustomizer = require(path.join(ROOT, 'src', 'runtime', 'font-customizer.js'));
 const customStyleI18n = require(path.join(ROOT, 'vendor', 'custom-style', 'custom-style-i18n.js'));
 const customStyleClient = require(path.join(ROOT, 'vendor', 'custom-style', 'custom-style-client.js'));
+const fontPickerUi = require(path.join(ROOT, 'vendor', 'custom-style', 'font-picker-ui.js'));
 const customStyleSettingsUi = require(path.join(ROOT, 'vendor', 'custom-style', 'custom-style-settings-ui.js'));
 
 const CANONICAL_9_LOCALES = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de', 'tr'];
@@ -38,84 +44,6 @@ async function waitUntil(pred, timeoutMs = 3500, stepMs = 35) {
     await new Promise((r) => setTimeout(r, stepMs));
   }
   return Boolean(await pred());
-}
-
-function createDomWithTraps(initialHtmlAttrs = {}) {
-  let innerHtmlWrites = 0;
-  const matches = (n, selList) =>
-    String(selList || '').split(',').some((raw) => {
-      const s = raw.trim();
-      if (!s) return false;
-      if (s.startsWith('#')) return n.id === s.slice(1);
-      let rest = s;
-      const tm = rest.match(/^[a-zA-Z0-9-]+/);
-      if (tm) { if (n.tagName !== tm[0].toUpperCase()) return false; rest = rest.slice(tm[0].length); }
-      for (const m of rest.matchAll(/\.([a-zA-Z0-9_-]+)/g)) if (!n.classList.contains(m[1])) return false;
-      for (const m of rest.matchAll(/\[([^\]=]+)(?:="([^"]*)")?\]/g)) {
-        if (!n.hasAttribute(m[1])) return false;
-        if (m[2] !== undefined && n.getAttribute(m[1]) !== m[2]) return false;
-      }
-      return true;
-    });
-
-  const makeEl = (tag, doc) => {
-    const attrs = new Map(), listeners = new Map(), kids = [];
-    const el = {
-      nodeType: 1, tagName: String(tag).toUpperCase(), id: '', className: '', textContent: '', value: '',
-      hidden: false, disabled: false, tabIndex: 0, ownerDocument: doc, children: kids, parentNode: null, parentElement: null,
-      style: { setProperty(k, v) { this[k] = String(v); }, removeProperty(k) { delete this[k]; } },
-      classList: {
-        add(c) { if (!el.className.split(/\s+/).includes(c)) el.className = `${el.className} ${c}`.trim(); },
-        remove(c) { el.className = el.className.split(/\s+/).filter((x) => x !== c).join(' '); },
-        contains(c) { return el.className.split(/\s+/).includes(c); },
-      },
-      get firstChild() { return kids[0] || null; },
-      get lastElementChild() { return kids[kids.length - 1] || null; },
-      get nextSibling() { const p = el.parentNode, i = p ? p.children.indexOf(el) : -1; return i >= 0 ? p.children[i + 1] || null : null; },
-      setAttribute(k, v) { attrs.set(k, String(v)); if (k === 'id') el.id = String(v); if (k === 'hidden') el.hidden = true; },
-      getAttribute(k) { return attrs.has(k) ? attrs.get(k) : null; },
-      hasAttribute(k) { return attrs.has(k); },
-      removeAttribute(k) { attrs.delete(k); if (k === 'hidden') el.hidden = false; },
-      appendChild(c) {
-        if (c.parentNode) c.parentNode.removeChild(c);
-        c.parentNode = c.parentElement = el; kids.push(c);
-        if (el.tagName === 'SELECT' && c.tagName === 'OPTION' && !el.value) el.value = c.value;
-        return c;
-      },
-      insertBefore(c, ref) {
-        if (c.parentNode) c.parentNode.removeChild(c);
-        const i = ref ? kids.indexOf(ref) : -1;
-        c.parentNode = c.parentElement = el;
-        if (i < 0) kids.push(c); else kids.splice(i, 0, c);
-        return c;
-      },
-      removeChild(c) { const i = kids.indexOf(c); if (i >= 0) kids.splice(i, 1); c.parentNode = c.parentElement = null; return c; },
-      remove() { if (el.parentNode) el.parentNode.removeChild(el); },
-      addEventListener(t, fn) { if (!listeners.has(t)) listeners.set(t, new Set()); listeners.get(t).add(fn); },
-      removeEventListener(t, fn) { listeners.get(t)?.delete(fn); },
-      dispatchEvent(ev) { for (const fn of [...(listeners.get(ev.type) || [])]) fn(ev); return true; },
-      click() { if (!el.disabled) el.dispatchEvent({ type: 'click', preventDefault() {}, stopPropagation() {} }); },
-      querySelectorAll(sel) { const out = []; const w = (n) => { for (const ch of n.children || []) { if (matches(ch, sel)) out.push(ch); w(ch); } }; w(el); return out; },
-      querySelector(sel) { return el.querySelectorAll(sel)[0] || null; },
-    };
-    Object.defineProperty(el, 'innerHTML', { configurable: true, get: () => '', set: () => { innerHtmlWrites += 1; } });
-    return el;
-  };
-
-  const doc = {
-    activeElement: null, defaultView: null, documentElement: null, head: null, body: null,
-    createElement: (t) => makeEl(t, doc),
-    getElementById: (id) => doc.documentElement.querySelector('#' + id),
-    querySelector: (s) => doc.documentElement.querySelector(s),
-    querySelectorAll: (s) => doc.documentElement.querySelectorAll(s),
-  };
-  doc.documentElement = makeEl('html', doc);
-  doc.head = makeEl('head', doc);
-  doc.body = makeEl('body', doc);
-  for (const [k, v] of Object.entries(initialHtmlAttrs)) doc.documentElement.setAttribute(k, v);
-  doc.documentElement.appendChild(doc.head);
-  doc.documentElement.appendChild(doc.body);
-  return { doc, html: doc.documentElement, head: doc.head, body: doc.body, getInnerHtmlWrites: () => innerHtmlWrites };
 }
 
 test('custom-css-loader.cjs: status states, SHA-256, size/symlink guards, @import blocking & wx template', () => {
@@ -246,6 +174,18 @@ test('Channel 18 (customStyle): gating matrix, 64 KB budget, targetHash sensitiv
   const ND = { noDiskCache: true };
   const ch18 = cdp.findChannel('customStyle');
   assert.ok(ch18 && ch18.channelNumber === 18 && ch18.budgetBytes === 64 * 1024);
+  assert.deepEqual([...CUSTOM_STYLE_FILES], ['vendor/custom-style/custom-style-client.js']);
+  assert.deepEqual([...CUSTOM_STYLE_SETTINGS_UI_FILES], [
+    'vendor/custom-style/custom-style-i18n.js',
+    'vendor/custom-style/font-picker-ui.js',
+    'vendor/custom-style/custom-style-settings-ui.js',
+  ]);
+  assert.deepEqual([...ch18.files], [
+    'vendor/custom-style/custom-style-i18n.js',
+    'vendor/custom-style/custom-style-client.js',
+    'vendor/custom-style/font-picker-ui.js',
+    'vendor/custom-style/custom-style-settings-ui.js',
+  ]);
 
   for (const [cfg, expected] of [
     [{ customCss: 'off', uiFont: 'default' }, false],
@@ -267,6 +207,11 @@ test('Channel 18 (customStyle): gating matrix, 64 KB budget, targetHash sensitiv
   const uiCompanionExpr = cdp.buildCustomStyleSettingsUiExpression(offCfg);
   const metaSyncExpr = cdp.buildCustomStyleSettingsMetaSyncExpression(offCfg);
   assert.ok(uiCompanionExpr.length > 0 && metaSyncExpr.length > 0 && Buffer.byteLength(metaSyncExpr, 'utf8') < 2048);
+  assert.ok(
+    uiCompanionExpr.includes('__agPrismCustomStyleI18n') &&
+      uiCompanionExpr.includes('__agPrismFontPickerUi') &&
+      uiCompanionExpr.includes('__agPrismCustomStyleSettingsUi')
+  );
   assert.doesNotThrow(() => new vm.Script(uiCompanionExpr));
   assert.doesNotThrow(() => new vm.Script(metaSyncExpr));
   const refExpr = cdp.buildConfigRefreshExpression({ uiFont: 'inter', customCss: 'on' });
@@ -275,6 +220,8 @@ test('Channel 18 (customStyle): gating matrix, 64 KB budget, targetHash sensitiv
   const enabledExpr = cdp.buildCustomStyleChannelExpression({ ...cdp.DEFAULT_CONFIG, customCss: 'on', uiFont: 'inter' }, ND);
   assert.ok(enabledExpr.length > 0 && Buffer.byteLength(enabledExpr, 'utf8') <= 64 * 1024);
   assert.ok(enabledExpr.includes('ch18BootPatch'));
+  assert.equal(enabledExpr.includes('__agPrismFontPickerUi'), false, 'Ch18 must not bundle font-picker UI');
+  assert.equal(enabledExpr.includes('__agPrismCustomStyleI18n'), false, 'Ch18 must not bundle Settings i18n');
   assert.doesNotThrow(() => new vm.Script(enabledExpr));
 
   // targetHash sensitivity across config keys + on-disk custom.css content/blockedImports
@@ -317,52 +264,67 @@ test('Channel 18 (customStyle): gating matrix, 64 KB budget, targetHash sensitiv
       const { doc, html, head, body } = createDomWithTraps({
         'data-ag-cs-style': '1', 'data-ag-cs-ui-font': 'inter', 'data-ag-prism-custom-css': 'active',
       });
-      for (const sid of ['ag-prism-ui-font-style', 'ag-prism-user-custom-css', 'ag-prism-custom-style-ui-css']) {
+      for (const sid of ['ag-prism-ui-font-style', 'ag-prism-user-custom-css', 'ag-prism-custom-style-ui-css', 'ag-prism-font-picker-css']) {
         const s = doc.createElement('style'); s.id = sid; head.appendChild(s);
       }
       const owned = doc.createElement('div');
       owned.setAttribute('data-ag-cs-custom-style-owned', '1');
+      const portal = doc.createElement('div');
+      portal.setAttribute('data-ag-cs-font-picker-portal', '1');
+      const enhRow = doc.createElement('div');
+      enhRow.setAttribute('data-ag-cs-fp-enhanced', '1');
       body.appendChild(owned);
-      let destroyed = 0; let disposed = 0; let syncedUi = 0;
+      body.appendChild(portal);
+      body.appendChild(enhRow);
+      let destroyed = 0; let disposed = 0; let pickerDisposed = 0; let syncedUi = 0;
       const sandbox = {
         document: doc,
         __agPrismCustomStyle: { destroy() { destroyed += 1; } },
         __agPrismCustomStyleI18n: { LOCALES: CANONICAL_9_LOCALES },
+        __agPrismFontPickerUi: { dispose() { pickerDisposed += 1; } },
         __agPrismCustomStyleSettingsUi: { dispose() { disposed += 1; }, syncIfPresent() { syncedUi += 1; } },
       };
       sandbox.window = sandbox.globalThis = sandbox;
       vm.runInNewContext(expr, sandbox);
-      return { doc, html, sandbox, destroyed, disposed, syncedUi };
+      return { doc, html, sandbox, destroyed, disposed, pickerDisposed, syncedUi, enhRow };
     };
 
     const rtOff = runTeardown(cdp.CUSTOM_STYLE_REMOVE_EXPRESSION);
-    assert.deepEqual({ destroyed: rtOff.destroyed, disposed: rtOff.disposed, syncedUi: rtOff.syncedUi }, { destroyed: 1, disposed: 0, syncedUi: 1 });
+    assert.deepEqual(
+      { destroyed: rtOff.destroyed, disposed: rtOff.disposed, pickerDisposed: rtOff.pickerDisposed, syncedUi: rtOff.syncedUi },
+      { destroyed: 1, disposed: 0, pickerDisposed: 0, syncedUi: 1 }
+    );
     assert.equal(rtOff.doc.getElementById('ag-prism-ui-font-style'), null);
     assert.equal(rtOff.doc.getElementById('ag-prism-user-custom-css'), null);
-    assert.ok(rtOff.doc.getElementById('ag-prism-custom-style-ui-css'), 'Ch17 off must keep Settings UI style alive');
-    assert.ok(rtOff.doc.querySelector('[data-ag-cs-custom-style-owned="1"]'), 'Ch17 off must keep Settings UI rows alive');
+    assert.ok(rtOff.doc.getElementById('ag-prism-custom-style-ui-css') && rtOff.doc.getElementById('ag-prism-font-picker-css'));
+    assert.ok(rtOff.doc.querySelector('[data-ag-cs-custom-style-owned="1"]') && rtOff.enhRow.hasAttribute('data-ag-cs-fp-enhanced'));
     assert.equal(rtOff.html.hasAttribute('data-ag-cs-ui-font'), false);
     assert.equal(rtOff.html.hasAttribute('data-ag-prism-custom-css'), false);
     assert.equal(rtOff.sandbox.__agPrismCustomStyle, undefined);
-    assert.ok(rtOff.sandbox.__agPrismCustomStyleSettingsUi && rtOff.sandbox.__agPrismCustomStyleI18n);
+    assert.ok(rtOff.sandbox.__agPrismCustomStyleSettingsUi && rtOff.sandbox.__agPrismCustomStyleI18n && rtOff.sandbox.__agPrismFontPickerUi);
 
     const setOff = runTeardown(cdp.SETTINGS_REMOVE_EXPRESSION);
-    assert.equal(setOff.disposed, 1);
+    assert.deepEqual({ disposed: setOff.disposed, pickerDisposed: setOff.pickerDisposed }, { disposed: 1, pickerDisposed: 1 });
     assert.equal(setOff.doc.getElementById('ag-prism-custom-style-ui-css'), null);
+    assert.equal(setOff.doc.getElementById('ag-prism-font-picker-css'), null);
+    assert.equal(setOff.doc.querySelector('[data-ag-cs-font-picker-portal="1"]'), null);
     assert.equal(setOff.doc.querySelector('[data-ag-cs-custom-style-owned="1"]'), null);
-    assert.equal(setOff.sandbox.__agPrismCustomStyleSettingsUi, undefined);
-    assert.equal(setOff.sandbox.__agPrismCustomStyleI18n, undefined);
+    assert.equal(setOff.enhRow.hasAttribute('data-ag-cs-fp-enhanced'), false);
+    for (const g of ['__agPrismCustomStyleSettingsUi', '__agPrismCustomStyleI18n', '__agPrismFontPickerUi']) {
+      assert.equal(setOff.sandbox[g], undefined);
+    }
 
     const fullOff = runTeardown(cdp.REMOVE_EXPRESSION);
-    assert.equal(fullOff.destroyed, 1);
-    assert.equal(fullOff.disposed, 1);
-    for (const sid of ['ag-prism-ui-font-style', 'ag-prism-user-custom-css', 'ag-prism-custom-style-ui-css']) {
+    assert.deepEqual({ destroyed: fullOff.destroyed, disposed: fullOff.disposed, pickerDisposed: fullOff.pickerDisposed }, { destroyed: 1, disposed: 1, pickerDisposed: 1 });
+    for (const sid of ['ag-prism-ui-font-style', 'ag-prism-user-custom-css', 'ag-prism-custom-style-ui-css', 'ag-prism-font-picker-css']) {
       assert.equal(fullOff.doc.getElementById(sid), null);
     }
+    assert.equal(fullOff.doc.querySelector('[data-ag-cs-font-picker-portal="1"]'), null);
     assert.equal(fullOff.doc.querySelector('[data-ag-cs-custom-style-owned="1"]'), null);
+    assert.equal(fullOff.enhRow.hasAttribute('data-ag-cs-fp-enhanced'), false);
     assert.equal(fullOff.html.hasAttribute('data-ag-cs-ui-font'), false);
     assert.equal(fullOff.html.hasAttribute('data-ag-prism-custom-css'), false);
-    for (const g of ['__agPrismCustomStyle', '__agPrismCustomStyleI18n', '__agPrismCustomStyleSettingsUi']) {
+    for (const g of ['__agPrismCustomStyle', '__agPrismCustomStyleI18n', '__agPrismFontPickerUi', '__agPrismCustomStyleSettingsUi']) {
       assert.equal(fullOff.sandbox[g], undefined);
     }
     assert.equal(fs.existsSync(diskCss), true, 'Teardown must NEVER delete custom.css on disk');
@@ -437,64 +399,44 @@ test('4-layer typography cascade, icon immunity, pinned-last custom.css & CSS va
   }
 });
 
-test('Ch9 custom-style-settings-ui: 0 innerHTML, zero-timer trap, 0 leaked timers on dispose & valid SETTING_BINDING RPC payloads', () => {
-  for (const name of ['custom-style-i18n.js', 'custom-style-client.js', 'custom-style-settings-ui.js']) {
+test('Ch9 custom-style-settings-ui: 0 innerHTML, 3-tier picker takeover, single-button custom.css & 0 leaked timers on dispose', () => {
+  for (const name of ['custom-style-i18n.js', 'custom-style-client.js', 'font-picker-ui.js', 'custom-style-settings-ui.js']) {
     const fp = path.join(ROOT, 'vendor', 'custom-style', name);
     assertFileHygiene([fp]);
     const clean = stripJsComments(fs.readFileSync(fp, 'utf8'));
-    assert.equal(/\.\s*(?:innerHTML|outerHTML)\s*[+]?=|\.\s*insertAdjacentHTML\s*\(/.test(clean), false, `${name}: 0 HTML sinks`);
-    assert.equal(/:has\(/.test(clean), false, `${name}: 0 :has()`);
-    assert.equal(/\bsetInterval\s*\(/.test(clean), false, `${name}: 0 setInterval`);
+    assert.equal(/\.\s*(?:innerHTML|outerHTML)\s*[+]?=|\.\s*insertAdjacentHTML\s*\(|:has\(|\bsetInterval\s*\(/.test(clean), false, name);
   }
-
   const { doc, head, body, getInnerHtmlWrites } = createDomWithTraps({ 'data-ag-cs-style': '1', 'data-ag-cs-lang': 'en' });
   const sec = doc.createElement('div');
-  sec.id = 'ag-cs-settings-sec';
-  sec.setAttribute('data-body-built', '1');
-  sec.setAttribute('data-ag-cs-lang', 'en');
+  sec.id = 'ag-cs-settings-sec'; sec.setAttribute('data-body-built', '1'); sec.setAttribute('data-ag-cs-lang', 'en');
   const groupBody = doc.createElement('div');
   const rows = {};
   for (const r of ['chatFont', 'codeFont', 'codeLigatures']) {
-    rows[r] = doc.createElement('div');
-    rows[r].setAttribute('data-ag-cs-row', r);
-    groupBody.appendChild(rows[r]);
+    rows[r] = doc.createElement('div'); rows[r].setAttribute('data-ag-cs-row', r);
+    const inner = doc.createElement('div'); inner.className = 'py-2';
+    const ctrl = doc.createElement('div'); ctrl.className = 'shrink-0';
+    inner.appendChild(ctrl); rows[r].appendChild(inner); groupBody.appendChild(rows[r]);
   }
-  sec.appendChild(groupBody);
-  body.appendChild(sec);
+  sec.appendChild(groupBody); body.appendChild(sec);
 
   const rpcPayloads = [];
   const fakeWin = {
-    document: doc,
+    document: doc, innerWidth: 1280, innerHeight: 800,
     __agPrismSetting: (raw) => rpcPayloads.push(JSON.parse(raw)),
-    __agPrismCustomStyle: customStyleClient,
-    __agPrismCustomStyleI18n: customStyleI18n,
-    __agPrismFontCustomizer: fontCustomizer,
+    __agPrismCustomStyle: customStyleClient, __agPrismCustomStyleI18n: customStyleI18n,
+    __agPrismFontPickerUi: fontPickerUi, __agPrismFontCustomizer: fontCustomizer,
   };
   doc.defaultView = fakeWin;
-
-  const origSetTimeout = globalThis.setTimeout;
-  const origClearTimeout = globalThis.clearTimeout;
-  const origSetInterval = globalThis.setInterval;
-  let intervalCalls = 0;
-  const liveTimers = new Set();
+  const origSetTimeout = globalThis.setTimeout, origClearTimeout = globalThis.clearTimeout, origSetInterval = globalThis.setInterval;
+  let intervalCalls = 0; const liveTimers = new Set();
   globalThis.setInterval = (...a) => { intervalCalls += 1; return origSetInterval(...a); };
-  globalThis.setTimeout = (fn, ms, ...r) => {
-    const id = origSetTimeout((...a) => { liveTimers.delete(id); return fn(...a); }, ms, ...r);
-    liveTimers.add(id);
-    return id;
-  };
+  globalThis.setTimeout = (fn, ms, ...r) => { const id = origSetTimeout((...a) => { liveTimers.delete(id); return fn(...a); }, ms, ...r); liveTimers.add(id); return id; };
   globalThis.clearTimeout = (id) => { liveTimers.delete(id); return origClearTimeout(id); };
 
   try {
-    customStyleClient.sync(
-      { uiFont: 'default', uiFontCustom: '', customCss: 'on' },
-      { status: 'active', css: ':root { --ag-prism-ui-font: "Inter"; }\n', bytes: 2048, blockedImports: 1 },
-      doc
-    );
-
+    customStyleClient.sync({ uiFont: 'default', uiFontCustom: '', customCss: 'on' }, { status: 'active', css: ':root { --ag-prism-ui-font: "Inter"; }\n', bytes: 2048, blockedImports: 1 }, doc);
     customStyleSettingsUi.install(doc, fakeWin);
-    assert.equal(intervalCalls, 0);
-    assert.equal(liveTimers.size, 0);
+    assert.equal(intervalCalls, 0); assert.equal(liveTimers.size, 0);
 
     let baseSyncCalls = 0;
     const origSync = () => { baseSyncCalls += 1; return true; };
@@ -504,67 +446,78 @@ test('Ch9 custom-style-settings-ui: 0 innerHTML, zero-timer trap, 0 leaked timer
 
     const uiRow = sec.querySelector('[data-ag-cs-row="uiFont"]');
     const cssRow = sec.querySelector('[data-ag-cs-row="customCss"]');
-    assert.ok(uiRow && cssRow);
-    assert.ok(groupBody.children.indexOf(uiRow) < groupBody.children.indexOf(rows.chatFont));
-    assert.ok(groupBody.children.indexOf(cssRow) > groupBody.children.indexOf(rows.codeLigatures));
+    assert.ok(uiRow && cssRow && groupBody.children.indexOf(uiRow) < groupBody.children.indexOf(rows.chatFont) && groupBody.children.indexOf(cssRow) > groupBody.children.indexOf(rows.codeLigatures));
     assert.equal(head.lastElementChild?.id, customStyleClient.USER_CSS_STYLE_ID);
     assert.equal(getInnerHtmlWrites(), 0);
+
+    const uiTrigger = uiRow.querySelector('button.agy-select-trigger[data-ag-cs-fp-trigger="ui"]');
+    const chatTrigger = rows.chatFont.querySelector('button.agy-select-trigger[data-ag-cs-fp-trigger="chat"]');
+    const codeTrigger = rows.codeFont.querySelector('button.agy-select-trigger[data-ag-cs-fp-trigger="code"]');
+    assert.ok(uiTrigger && chatTrigger && codeTrigger);
+    assert.equal(rows.chatFont.getAttribute('data-ag-cs-fp-enhanced'), '1');
+    assert.equal(rows.codeFont.getAttribute('data-ag-cs-fp-enhanced'), '1');
+    assert.equal(rows.codeLigatures.hasAttribute('data-ag-cs-fp-enhanced') || Boolean(rows.codeLigatures.querySelector('.agy-select-trigger')), false);
 
     const statusEl = cssRow.querySelector('[data-ag-cs-css-status="1"]');
     assert.equal(statusEl.getAttribute('data-tone'), 'warn');
     assert.ok(statusEl.textContent.includes('2.0 KB') && statusEl.textContent.includes('1'));
+    assert.equal(cssRow.querySelector('button[data-ag-cs-ext-action="reload-custom-css"]'), null);
+    assert.equal(cssRow.querySelectorAll('.ag-cs-css-actions button').length, 1);
+    const actionBtn = cssRow.querySelector('.ag-cs-css-actions button');
+    assert.equal(actionBtn.getAttribute('data-ag-cs-ext-action'), 'open-custom-css');
+    actionBtn.click();
+    assert.deepEqual(rpcPayloads.at(-1), { action: 'custom-css-open' });
 
     customStyleSettingsUi.syncIfPresent(doc, fakeWin, { uiFont: 'harmony', customCss: 'off' });
-    const sel = uiRow.querySelector('select[data-ag-cs-ext-select="uiFont"]');
-    assert.equal(sel.value, 'harmony');
+    assert.equal(uiTrigger.getAttribute('data-ag-fp-mode'), 'harmony');
     assert.ok(statusEl.textContent.toLowerCase().includes('disabled'));
 
-    sel.value = 'custom';
-    sel.dispatchEvent({ type: 'change' });
-    assert.deepEqual(rpcPayloads.at(-1), { key: 'uiFont', value: 'custom' });
-    assert.equal(cdp.validateConfigEntry('uiFont', 'custom'), true);
+    uiTrigger.click();
+    const portal = body.querySelector('.agy-overlay[data-ag-cs-font-picker-portal="1"]');
+    assert.equal(portal?.querySelector('.agy-overlay-item[data-ag-fp-val="harmony"]')?.getAttribute('data-selected'), 'true');
+    const searchInp = portal.querySelector('input[data-ag-fp-search="ui"]');
+    searchInp.value = 'MiSans, Inter'; searchInp.dispatchEvent({ type: 'input' });
+    portal.dispatchEvent({ type: 'keydown', key: 'Enter' });
+    assert.deepEqual(rpcPayloads.at(-1), { action: 'patch-batch', entries: { uiFont: 'custom', uiFontCustom: 'MiSans, Inter' } });
+    assert.ok(cdp.validateConfigEntry('uiFont', 'custom') && cdp.validateConfigEntry('uiFontCustom', 'MiSans, Inter'));
 
-    const inp = uiRow.querySelector('input[data-ag-cs-ext-input="uiFontCustom"]');
-    inp.value = 'MiSans, Inter';
-    inp.dispatchEvent({ type: 'change' });
-    assert.deepEqual(rpcPayloads.at(-1), { key: 'uiFontCustom', value: 'MiSans, Inter' });
-    assert.equal(cdp.validateConfigEntry('uiFontCustom', 'MiSans, Inter'), true);
-
-    uiRow.querySelector('button[data-ag-cs-ext-action="reset-ui-font"]').click();
+    uiTrigger.click();
+    body.querySelector('button[data-ag-fp-reset="ui"]').click();
     assert.deepEqual(rpcPayloads.at(-1), { action: 'patch-batch', entries: { uiFont: 'default', uiFontCustom: '' } });
 
     cssRow.querySelector('button[data-ag-cs-ext-role="off"]').click();
     assert.deepEqual(rpcPayloads.at(-1), { key: 'customCss', value: 'off' });
     assert.equal(cdp.validateConfigEntry('customCss', 'off'), true);
 
-    cssRow.querySelector('button[data-ag-cs-ext-action="create-custom-css-template"]').click();
+    customStyleSettingsUi.syncIfPresent(doc, fakeWin, { customCss: 'on' }, { status: 'missing', bytes: 0, blockedImports: 0 });
+    assert.equal(actionBtn.getAttribute('data-ag-cs-ext-action'), 'create-custom-css-template');
+    actionBtn.click();
     assert.deepEqual(rpcPayloads.at(-1), { action: 'custom-css-create-template' });
+    assert.equal(actionBtn.getAttribute('data-ag-cs-ext-action'), 'open-custom-css');
 
-    cssRow.querySelector('button[data-ag-cs-ext-action="reload-custom-css"]').click();
-    assert.deepEqual(rpcPayloads.at(-1), { action: 'custom-css-reload' });
+    customStyleSettingsUi.syncIfPresent(doc, fakeWin, { customCss: 'on' }, { status: 'rejected-symlink', bytes: 0, blockedImports: 0 });
+    assert.equal(actionBtn.disabled, true); assert.equal(actionBtn.getAttribute('aria-disabled'), 'true');
+    const beforeBlocked = rpcPayloads.length;
+    actionBtn.click(); actionBtn.dispatchEvent({ type: 'click' });
+    assert.equal(rpcPayloads.length, beforeBlocked);
 
-    // Schedule debounced timer, then dispose -> 0 leaked timers, hook & trap restored
-    inp.value = 'Inter';
-    inp.dispatchEvent({ type: 'input' });
-    assert.equal(liveTimers.size, 1);
-
+    uiTrigger.click(); fontPickerUi.closeActiveMenu();
+    assert.ok(liveTimers.size >= 1);
     customStyleSettingsUi.dispose(doc);
     assert.equal(liveTimers.size, 0, 'dispose() must leak 0 timers');
     assert.equal(intervalCalls, 0);
     assert.equal(doc.getElementById(customStyleSettingsUi.UI_STYLE_ID), null);
+    assert.equal(doc.getElementById(fontPickerUi.PICKER_STYLE_ID), null);
+    assert.equal(body.querySelector('[data-ag-cs-font-picker-portal="1"]'), null);
     assert.equal(sec.querySelector('[data-ag-cs-custom-style-owned="1"]'), null);
-    assert.equal(mockBeta4.sync, origSync);
-    assert.equal(mockBeta4.__agCustomStyleHooked, undefined);
+    assert.equal(rows.chatFont.hasAttribute('data-ag-cs-fp-enhanced'), false);
+    assert.equal(mockBeta4.sync, origSync); assert.equal(mockBeta4.__agCustomStyleHooked, undefined);
     assert.equal(typeof Object.getOwnPropertyDescriptor(fakeWin, '__agPrismSettingsExtBeta4').get, 'undefined');
     assert.equal(getInnerHtmlWrites(), 0);
-    mockBeta4.sync();
-    assert.equal(baseSyncCalls, 1);
+    mockBeta4.sync(); assert.equal(baseSyncCalls, 1);
   } finally {
-    customStyleSettingsUi.dispose(doc);
-    customStyleClient.destroy(doc);
-    globalThis.setTimeout = origSetTimeout;
-    globalThis.clearTimeout = origClearTimeout;
-    globalThis.setInterval = origSetInterval;
+    customStyleSettingsUi.dispose(doc); customStyleClient.destroy(doc);
+    globalThis.setTimeout = origSetTimeout; globalThis.clearTimeout = origClearTimeout; globalThis.setInterval = origSetInterval;
   }
 });
 
@@ -620,9 +573,11 @@ test('Daemon hot-reload & RPC: create-template (non-overwriting), custom-css-rel
       'utf8'
     );
 
+    const openedPaths = [];
     daemon = new PrismDaemon({
       rootDir: tmpDir, bundleCachePath: false, portFile: path.join(tmpDir, 'nonexistent.port'),
       pollIntervalMs: 60000, enableAutoUpdateTimer: false, enableStorageGuardTimer: false, silent: true,
+      openExternalFile: (fp) => { openedPaths.push(fp); return true; },
     });
     daemon.tick = async () => ({ attached: daemon.sessionRegistry.sessions.size });
 
@@ -658,7 +613,11 @@ test('Daemon hot-reload & RPC: create-template (non-overwriting), custom-css-rel
     const customCssPath = path.join(tmpDir, 'custom.css');
 
     const sendRpc = (action) => daemon.handleBindingCall(mockEntry, { name: cdp.SETTING_BINDING, payload: JSON.stringify({ action }), executionContextId: 1 });
-    await sendRpc('custom-css-create-template');
+    const createRes = await sendRpc('custom-css-create-template');
+    assert.equal(createRes?.ok, true);
+    assert.equal(createRes?.opened, true);
+    assert.equal(openedPaths.length, 1);
+    assert.equal(openedPaths[0], fs.realpathSync(customCssPath));
     assert.equal(fs.readFileSync(customCssPath, 'utf8'), customCssLoader.DEFAULT_CUSTOM_CSS_TEMPLATE);
     assert.equal(counters().ch1Builds, ch1Baseline);
     assert.ok(evalExprs.length >= 1 && addedScripts.length >= 1);
@@ -668,6 +627,11 @@ test('Daemon hot-reload & RPC: create-template (non-overwriting), custom-css-rel
     await sendRpc('custom-css-create-template');
     assert.equal(fs.readFileSync(customCssPath, 'utf8'), userV1);
     assert.equal(counters().ch1Builds, ch1Baseline);
+
+    const openRes = await sendRpc('custom-css-open');
+    assert.equal(openRes?.ok, true);
+    assert.equal(openRes?.status, 'active');
+    assert.equal(openedPaths.at(-1), fs.realpathSync(customCssPath));
 
     fs.writeFileSync(customCssPath, '/* rpc-reload-v2 */\n:root { --ag-prism-chat-font: "Georgia", serif; }\n', 'utf8');
     const evalsBeforeReload = evalExprs.length;
