@@ -683,3 +683,48 @@ test('PR #150: classic obsidian home restores obsidian background and hides host
   assert.ok(wpRule[2].includes('display:none!important'), `expected display:none!important, got ${wpRule[2]}`);
   assert.equal(bgSel.includes('*') || wpSel.includes('*'), false, 'PR #150 rules must never introduce universal * selectors');
 });
+
+test('Sidebar status-loading-spinner rotation regression: explicit 0% rotate(0deg) keyframe and no conflicting translateZ(0)', () => {
+  const rawKf = extractKeyframesBody(styleCss, 'ag-cs-orbit-spin');
+  const flatKf = extractKeyframesBody(flatStyleCss, 'ag-cs-orbit-spin');
+  assert.ok(rawKf, 'style.css must define @keyframes ag-cs-orbit-spin');
+  assert.ok(flatKf, 'flattened style.css must preserve @keyframes ag-cs-orbit-spin');
+  assert.ok(
+    /(?:0%|from)\s*\{\s*transform\s*:\s*rotate\(0(?:deg)?\)\s*;?\s*\}/.test(rawKf) &&
+      /(?:100%|to)\s*\{\s*transform\s*:\s*rotate\(360deg\)\s*;?\s*\}/.test(rawKf),
+    `ag-cs-orbit-spin must explicitly interpolate rotate(0deg) -> rotate(360deg) to prevent 0deg==360deg matrix deadlock: ${rawKf}`
+  );
+  assert.ok(
+    /(?:0%|from)\{transform:rotate\(0(?:deg)?\)\}/.test(flatKf) && /(?:100%|to)\{transform:rotate\(360deg\)\}/.test(flatKf),
+    `flattened ag-cs-orbit-spin must keep explicit 0% -> to rotation frames: ${flatKf}`
+  );
+
+  const flatRules = [...flatStyleCss.matchAll(/([^{}]+)\{([^{}]+)\}/g)];
+  const beforeRule = flatRules.find(
+    (m) => m[1].trim() === 'html[data-ag-cs-style] [data-testid="status-loading-spinner"]::before'
+  );
+  const dotRule = flatRules.find(
+    (m) => m[1].trim() === 'html[data-ag-cs-style] [data-testid="status-loading-spinner"] [data-agent-state-dot]:first-child'
+  );
+  assert.ok(beforeRule, 'flattened CSS must define status-loading-spinner::before rule');
+  assert.ok(dotRule, 'flattened CSS must define status-loading-spinner [data-agent-state-dot]:first-child rule');
+
+  assert.equal(
+    /transform\s*:\s*translateZ\(0\)/i.test(beforeRule[2]),
+    false,
+    `status-loading-spinner::before must not declare conflicting transform:translateZ(0): ${beforeRule[2]}`
+  );
+  assert.equal(
+    /transform\s*:\s*translateZ\(0\)/i.test(dotRule[2]),
+    false,
+    `status-loading-spinner dot must not declare conflicting transform:translateZ(0): ${dotRule[2]}`
+  );
+  assert.ok(
+    beforeRule[2].includes('animation:ag-cs-orbit-spin 2.4s linear infinite'),
+    `status-loading-spinner::before must keep smooth linear infinite spin animation: ${beforeRule[2]}`
+  );
+  assert.ok(
+    dotRule[2].includes('animation:ag-st-p 2.2s ease-in-out infinite!important'),
+    `status-loading-spinner dot must keep smooth ease-in-out pulse animation: ${dotRule[2]}`
+  );
+});
