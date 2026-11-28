@@ -447,7 +447,7 @@
 
       /* ── Controller Runtime State ──────────────────────────────────────── */
 
-      var holdState = null, isReplayingNativeTrigger = false, pendingLongPressReleaseBtn = null, suppressUntilMs = 0, suppressTargetBtn = null, suppressTrailingUntilMs = 0, suppressTrailingBtn = null, suppressTimer = 0;
+      var holdState = null, ringOn = false, isReplayingNativeTrigger = false, pendingLongPressReleaseBtn = null, suppressUntilMs = 0, suppressTargetBtn = null, suppressTrailingUntilMs = 0, suppressTrailingBtn = null, suppressTimer = 0;
       var overlayEl = null, deskmatEl = null, dockTopRimEl = null, dockGripEl = null, spatialDockEl = null, bentoRefs = null, stageEl = null, floorShadowEl = null, canvasEl = null, hitLayerEl = null, hudPillEl = null, swatchesWrapEl = null, activeRenderer = null, standbyRenderer = null, standbyDisposeTimer = 0, dockResizeObserver = null, cachedShell = null, cachedHostTelemetry = null, activeHudElementsKey = '';
       var cachedOverlayWidth = 1280, cachedComposerHeight = 0;
       var cachedDockBounds = { left: 60, top: 220, width: 1280, height: 340 };
@@ -1110,27 +1110,28 @@
       }
 
       function cancelHold(willOpenImmediately) {
-        var prevHold = holdState;
-        if (prevHold) {
-          if (prevHold.ringTimer) clearTimer(prevHold.ringTimer);
-          if (prevHold.prewarmTimer) clearTimer(prevHold.prewarmTimer);
-          if (prevHold.openTimer) clearTimer(prevHold.openTimer);
-          if (prevHold.ring && prevHold.ring.raf && cancelRaf) cancelRaf(prevHold.ring.raf);
-          if (prevHold.ring && prevHold.ring.el) safeRemove(prevHold.ring.el);
+        var p = holdState, chk = ringOn || Boolean(p && p.ring);
+        if (p) {
+          if (p.ringTimer) clearTimer(p.ringTimer);
+          if (p.prewarmTimer) clearTimer(p.prewarmTimer);
+          if (p.openTimer) clearTimer(p.openTimer);
+          if (p.ring && p.ring.raf && cancelRaf) cancelRaf(p.ring.raf);
+          if (p.ring && p.ring.el) safeRemove(p.ring.el);
           holdState = null;
         }
-        if (doc && typeof doc.querySelectorAll === 'function') {
+        ringOn = false;
+        if (chk && doc && typeof doc.querySelectorAll === 'function') {
           try {
-            var strayRings = doc.querySelectorAll('.ag-pp-hold-ring');
-            for (var i = 0; i < strayRings.length; i += 1) safeRemove(strayRings[i]);
+            var rs = doc.querySelectorAll('.ag-pp-hold-ring');
+            for (var i = 0; i < rs.length; i += 1) safeRemove(rs[i]);
           } catch (e) {}
         }
-        if (prevHold) {
+        if (p) {
           if (typeof hostBridge.setHoldTooltipSuppression === 'function') {
-            hostBridge.setHoldTooltipSuppression(doc, false, prevHold.btn);
+            hostBridge.setHoldTooltipSuppression(doc, false, p.btn);
           }
           if (!willOpenImmediately && !overlayEl && typeof hostBridge.suppressNativeTooltip === 'function') {
-            hostBridge.suppressNativeTooltip(doc, prevHold.btn, false);
+            hostBridge.suppressNativeTooltip(doc, p.btn, false);
           }
         }
       }
@@ -5667,6 +5668,7 @@
           }
           state.ringTimer = 0;
           state.ring = bentoUi.spawnHoldRing(doc, root, triggerBtn, reqRaf, HOLD_OPEN_DELAY_MS, HOLD_RING_DELAY_MS);
+          if (state.ring) ringOn = true;
           if (state.ring && state.ring.el) markPeriodicOwnedRoot(state.ring.el);
         }, HOLD_RING_DELAY_MS);
 
@@ -5895,7 +5897,7 @@
         }
 
         if (!suppressUntilMs) {
-          if (ev && ev.type === 'click' && !overlayEl) syncMiniKeycapBadges();
+          if (ev && ev.type === 'click' && !overlayEl) scheduleBadgeSync(60);
           return;
         }
         if (Date.now() > suppressUntilMs) {

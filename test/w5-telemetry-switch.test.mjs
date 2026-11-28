@@ -831,3 +831,53 @@ test('W6-Footer-UX: decoupled footerTier/barTier 6-tier layout, compact vs both 
     ctrl.destroy();
   }
 });
+
+test('Narrow-pane context-card clamping prevents left-edge sidebar clipping and clears overrides on close', async () => {
+  const env = createSwitchMockEnv({ initialCid: CID_A });
+  env.win.innerWidth = 1440;
+  env.convView.getBoundingClientRect = () => ({ left: 260, top: 80, width: 360, height: 600, right: 620, bottom: 680 });
+  env.footer.getBoundingClientRect = () => ({ left: 272, top: 600, width: 336, height: 32, right: 608, bottom: 632 });
+  env.win.__agPrismMetricsCall = (payloadStr) => {
+    const req = JSON.parse(payloadStr);
+    env.win.__agPrismMetricsResolve?.(req.id, makeSnap({ model: 'Gemini 4 Neon', usedFraction: 0.66, tps: 168.7 }));
+  };
+
+  const ctrl = inlineMod.createTelemetryController({ window: env.win, document: env.doc });
+  try {
+    ctrl.sync({ telemetryModule: 'on', language: 'zh-CN' });
+    await ctrl.refresh();
+
+    const bar = env.doc.getElementById('ag-prism-pulse-bar');
+    const sr = bar.shadowRoot;
+    const xCard = sr.getElementById('context-card');
+    const xChip = sr.querySelector('[data-card="context"]');
+
+    // Host bar sits at [430..520]; a 304px right-aligned card overflows left to 216 (< pane minL 268)
+    bar.getBoundingClientRect = () => ({ left: 430, top: 600, width: 90, height: 24, right: 520, bottom: 624 });
+    xCard.getBoundingClientRect = () => {
+      const mr = parseFloat(xCard.style.getPropertyValue('margin-right')) || 0;
+      const maxW = parseFloat(xCard.style.getPropertyValue('max-width')) || 304;
+      const w = Math.min(304, maxW);
+      const right = 520 - mr;
+      return { left: right - w, top: 300, width: w, height: 280, right, bottom: 580 };
+    };
+
+    xChip.dispatchEvent({ type: 'click' });
+    assert.equal(xCard.hidden, false);
+    assert.equal(xCard.style.getPropertyValue('max-width'), '344px');
+    assert.equal(xCard.style.getPropertyValue('left'), '', 'fitCard must avoid inline left so pulse-vial-bridge uses real rect');
+    assert.equal(xCard.style.getPropertyValue('right'), '', 'fitCard must avoid inline right so pulse-vial-bridge uses real rect');
+
+    const clampedRect = xCard.getBoundingClientRect();
+    assert.ok(clampedRect.left >= 268, `Expected clamped left >= 268, got ${clampedRect.left}`);
+    assert.ok(clampedRect.right <= 612, `Expected clamped right <= 612, got ${clampedRect.right}`);
+
+    // Clicking again closes card and clears inline fit overrides
+    xChip.dispatchEvent({ type: 'click' });
+    assert.equal(xCard.hidden, true);
+    assert.equal(xCard.style.getPropertyValue('margin-right'), '');
+    assert.equal(xCard.style.getPropertyValue('max-width'), '');
+  } finally {
+    ctrl.destroy();
+  }
+});
