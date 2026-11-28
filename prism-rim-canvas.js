@@ -582,6 +582,7 @@
       if (canDraw()) { const bus = busOf(); if ((pBoxes.length || orchE) && bus?.measure) bus.measure('rim:rects', syncBusRects); schedRaf(); }
     };
     const onAnimEnd = (ev) => {
+      if (ev?.type === 'transitionend' && /color|opacity|shadow|fill|stroke|filter|outline/i.test(ev.propertyName || '')) return;
       const t = !isDestroyed() && ev?.target, d = getDoc();
       if (isRootT(t, d, null) || (t.nodeType !== undefined && t.nodeType !== 1)) return;
       const hit = (b) => !!(b && (b === t || ancOf(t, b) || ancOf(b, t)));

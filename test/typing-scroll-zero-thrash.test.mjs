@@ -1022,3 +1022,194 @@ test('8) periodic-picker-stub: stays <2048 B, subscribes via dom-bus with precis
   assert.equal(trig.querySelector('.ag-pp-mini-keycap'), null, 'destroy() must remove stub badge');
   assert.equal(env.mos.filter((m) => m.active).length, 0, 'Unsubscribing last dom-bus consumer must disconnect root MO cleanly');
 });
+
+// ── 9: 纯绘制 transitionend 0 强制重排（prism-rim-canvas + ui-runtime）& 非滚动光标 sync 0 读 scrollLeft/Top ──
+test('9) prism-rim-canvas & ui-runtime: paint-only transitionend triggers 0 forced layout/rAF, geometric transform/width refreshes via rAF, and non-scroll caret sync skips scrollLeft/Top reads', () => {
+  // 9a) prism-rim-canvas: 纯绘制属性过滤 + 几何属性保留 pDirty 刷新
+  const rimEnv = createMiniDom();
+  const rimSrc = fs.readFileSync(path.join(ROOT, 'prism-rim-canvas.js'), 'utf8');
+  vm.runInNewContext(rimSrc, rimEnv.win);
+
+  const box = rimEnv.makeEl('div', {
+    className: 'surface-composer-card',
+    attrs: { 'data-ag-cs-prism-box': '1' },
+    rect: { left: 200, top: 700, width: 600, height: 90, right: 800, bottom: 790 },
+  });
+  const btn = rimEnv.makeEl('button', { className: 'composer-btn' });
+  box.appendChild(btn);
+  rimEnv.body.appendChild(box);
+
+  let rimRectReads = 0;
+  const origBoxRect = box.getBoundingClientRect.bind(box);
+  box.getBoundingClientRect = () => { rimRectReads += 1; return origBoxRect(); };
+
+  const rimCtl = rimEnv.win.__agPrismRimCanvas.createPrismRimCanvasController({
+    isDestroyed: () => false,
+    isDarkTheme: () => true,
+    motionReduced: () => false,
+    getMinFrameGapMs: () => 0,
+    canMountRealCanvas: () => true,
+    setAttrIfChanged: (e, k, v) => e.setAttribute(k, v),
+    runGuardedMut: (fn) => fn(),
+  });
+  rimEnv.html.setAttribute('data-ag-cs-ambient', '1');
+  rimCtl.onPointerMove({ clientX: 400, clientY: 740, target: box });
+  rimEnv.flushRafs(16);
+  rimEnv.flushRafs(16);
+
+  rimRectReads = 0;
+  rimEnv.rafs.clear();
+
+  for (const prop of ['color', 'background-color', 'border-color', 'opacity', 'box-shadow', 'filter', 'outline-color', 'fill', 'stroke']) {
+    rimEnv.doc.dispatch('transitionend', { target: btn, propertyName: prop });
+    rimEnv.doc.dispatch('transitionend', { target: box, propertyName: prop });
+  }
+  assert.equal(rimEnv.rafs.size, 0, 'Paint-only transitionend must schedule 0 prism-rim-canvas rAFs');
+  assert.equal(rimRectReads, 0, 'Paint-only transitionend must trigger 0 getBoundingClientRect calls');
+
+  for (const prop of ['transform', 'width']) {
+    rimRectReads = 0;
+    rimEnv.rafs.clear();
+    rimEnv.doc.dispatch('transitionend', { target: box, propertyName: prop });
+    assert.ok(rimEnv.rafs.size > 0, `Geometric transitionend (${prop}) must wake prism-rim-canvas`);
+    rimEnv.flushRafs(16);
+    assert.ok(rimRectReads > 0, `Geometric transitionend (${prop}) must refresh box rect on rAF`);
+  }
+  rimCtl.teardown();
+
+  // 9b) ui-runtime + smooth-caret: 纯绘制 transitionend 0 布局/rAF，transform/width 走 rAF 异步刷新，非滚动 sync 0 读 scrollLeft/Top
+  const env = createMiniDom();
+  const cdp = require(path.join(ROOT, 'cdp.js'));
+  const scSrc = fs.readFileSync(path.join(ROOT, 'smooth-caret.js'), 'utf8');
+  const uiSrc = fs.readFileSync(path.join(ROOT, 'ui-runtime.js'), 'utf8');
+  vm.runInNewContext(scSrc, env.win);
+
+  const syncCalls = [];
+  const origCreateCaret = env.win.__agPrismSmoothCaret.createSmoothCaretController;
+  env.win.__agPrismSmoothCaret.createSmoothCaretController = (opts) => {
+    const ctl = origCreateCaret(opts);
+    const origSync = ctl.sync;
+    ctl.sync = (...args) => { syncCalls.push(args); return origSync(...args); };
+    return ctl;
+  };
+
+  const conv = env.makeEl('div', { attrs: { 'data-testid': 'conversation-view' } });
+  const ib = env.makeEl('div', { attrs: { 'data-testid': 'agent-input-box' } });
+  const card = env.makeEl('div', { className: 'surface-composer-card', rect: { left: 100, top: 400, width: 500, height: 80, right: 600, bottom: 480 } });
+  const ed = env.makeEl('div', { attrs: { contenteditable: 'true' }, rect: { left: 112, top: 412, width: 476, height: 40, right: 588, bottom: 452 } });
+  const hoverBtn = env.makeEl('button', { className: 'composer-action-btn' });
+  const p = env.makeEl('p');
+  const tn = env.makeText('hello');
+  p.appendChild(tn);
+  ed.appendChild(p);
+  card.appendChild(ed);
+  card.appendChild(hoverBtn);
+  ib.appendChild(card);
+  conv.appendChild(ib);
+  env.body.appendChild(conv);
+
+  let caretRectReads = 0;
+  let scrollReads = 0;
+  const origCardRect = card.getBoundingClientRect.bind(card);
+  const origEdRect = ed.getBoundingClientRect.bind(ed);
+  card.getBoundingClientRect = () => { caretRectReads += 1; return origCardRect(); };
+  ed.getBoundingClientRect = () => { caretRectReads += 1; return origEdRect(); };
+
+  let edSL = 0, edST = 0, cardSL = 0, cardST = 0;
+  Object.defineProperties(ed, {
+    scrollLeft: { configurable: true, get() { scrollReads += 1; return edSL; }, set(v) { edSL = v; } },
+    scrollTop: { configurable: true, get() { scrollReads += 1; return edST; }, set(v) { edST = v; } },
+  });
+  Object.defineProperties(card, {
+    scrollLeft: { configurable: true, get() { scrollReads += 1; return cardSL; }, set(v) { cardSL = v; } },
+    scrollTop: { configurable: true, get() { scrollReads += 1; return cardST; }, set(v) { cardST = v; } },
+  });
+
+  env.doc.activeElement = ed;
+  let caretLeft = 140;
+  env.setSelection({
+    rangeCount: 1,
+    anchorNode: tn,
+    anchorOffset: 3,
+    focusNode: tn,
+    focusOffset: 3,
+    getRangeAt: () => ({
+      collapsed: true,
+      startContainer: tn,
+      startOffset: 3,
+      endContainer: tn,
+      endOffset: 3,
+      getClientRects: () => {
+        caretRectReads += 1;
+        return [{ left: caretLeft, top: 416, width: 0, height: 18, right: caretLeft, bottom: 434 }];
+      },
+      getBoundingClientRect: () => {
+        caretRectReads += 1;
+        return { left: caretLeft, top: 416, width: 0, height: 18, right: caretLeft, bottom: 434 };
+      },
+    }),
+  });
+
+  vm.runInNewContext(uiSrc, env.win);
+  env.win.__agCsUiMain({ ...cdp.DEFAULT_CONFIG, mascot: 'off', smoothCaret: true, language: 'zh-CN' });
+  env.flushRafs(16);
+
+  // 语言切换走 refreshOpenUiForLanguage() -> syncComposers(null) -> smoothCaretCtl.sync(false, false, false)
+  syncCalls.length = 0;
+  scrollReads = 0;
+  env.win.__agPrism.refreshConfig({ language: 'en' });
+  env.flushRafs(16);
+  assert.ok(
+    syncCalls.some((a) => a.length >= 3 && a[0] === false && a[1] === false && a[2] === false),
+    'ui-runtime non-scroll syncComposers fallback must call smoothCaretCtl.sync(false, false, false)'
+  );
+
+  // 建立 sigCache 后清零计数器
+  caretRectReads = 0;
+  scrollReads = 0;
+  env.rafs.clear();
+
+  // 纯绘制 transitionend（color/opacity/box-shadow/filter/outline-color）：0 同步布局、0 rAF
+  for (const prop of ['color', 'background-color', 'opacity', 'box-shadow', 'filter', 'outline-color', 'fill', 'stroke']) {
+    env.doc.dispatch('transitionend', { target: hoverBtn, propertyName: prop });
+  }
+  assert.equal(caretRectReads, 0, 'Paint-only transitionend inside agent-input-box must trigger 0 caret layout reads');
+  assert.equal(scrollReads, 0, 'Paint-only transitionend inside agent-input-box must trigger 0 scrollLeft/Top reads');
+  assert.equal(env.rafs.size, 0, 'Paint-only transitionend inside agent-input-box must schedule 0 rAFs');
+
+  // 几何 transitionend（transform / width）：不触发同步强制布局，改为走 rAF 异步刷新
+  for (const prop of ['transform', 'width']) {
+    caretRectReads = 0;
+    scrollReads = 0;
+    env.rafs.clear();
+    caretLeft += 12;
+    tn.nodeValue = prop === 'transform' ? 'hello!' : 'hello!!';
+    env.doc.dispatch('transitionend', { target: card, propertyName: prop });
+    assert.equal(caretRectReads, 0, `Geometric transitionend (${prop}) must NOT force synchronous layout read`);
+    assert.ok(env.rafs.size > 0, `Geometric transitionend (${prop}) must queue caret refresh on rAF`);
+    env.flushRafs(16);
+    assert.ok(caretRectReads > 0, `Geometric transitionend (${prop}) must refresh caret layout on rAF`);
+  }
+
+  // 非滚动 sync(false, false, false) 在签名未变时 0 读 scrollLeft/scrollTop
+  caretRectReads = 0;
+  scrollReads = 0;
+  const directCaretCtl = origCreateCaret({
+    isDestroyed: () => false,
+    isEnabled: () => true,
+    setAttrIfChanged: (el, k, v) => el.setAttribute(k, v),
+    runGuardedMut: (fn) => fn(),
+  });
+  directCaretCtl.sync(false, false, false);
+  scrollReads = 0;
+  caretRectReads = 0;
+  directCaretCtl.sync(false, false, false);
+  assert.equal(scrollReads, 0, 'Non-scroll smoothCaretCtl.sync(false, false, false) with unchanged signature must read 0 scrollLeft/Top');
+  assert.equal(caretRectReads, 0, 'Non-scroll smoothCaretCtl.sync(false, false, false) with unchanged signature must read 0 rects');
+  edST = 24;
+  directCaretCtl.sync(false, false, true);
+  assert.ok(scrollReads > 0, 'Scroll-checked smoothCaretCtl.sync(false, false, true) must still inspect scrollLeft/Top');
+
+  directCaretCtl.teardown();
+  env.win.__agPrism.destroy();
+});
