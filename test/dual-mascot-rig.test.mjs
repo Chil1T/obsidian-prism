@@ -3455,3 +3455,106 @@ test('PR #152: continuous write animation on user typing extends smoothly across
     hPunct.stage.dispose();
   }
 });
+
+test('Issue #175: leftReserveWidth / rightReserveWidth keep main mascots, patrol, drag, and mini crabs inside unobstructed runway', () => {
+  const { doc } = createRigMockDom(680);
+  const hostEl = doc.createElement('div');
+  doc.body.appendChild(hostEl);
+  const stage = rig.mountDualMascotStage(hostEl, {
+    mascot: 'quad-minis',
+    camp: 'claude',
+    reducedMotion: false,
+    leftReserveWidth: 320,
+  });
+  try {
+    const snap0 = stage.getLayoutSnapshot();
+    assert.equal(snap0.leftReserveWidth, 320);
+    assert.equal(snap0.rightReserveWidth, 0);
+    for (const a of snap0.actors) {
+      assert.ok(a.worldCx - 22 >= 320, `actor ${a.id} visual left (${a.worldCx - 22}) must stay clear of leftReserveWidth=320`);
+    }
+    for (const mc of snap0.minis) {
+      assert.ok(mc.worldCx - 13 >= 320, `mini ${mc.id} visual left (${mc.worldCx - 13}) must spawn clear of leftReserveWidth=320`);
+    }
+
+    // Patrol ticks must turn around at leftReserveWidth instead of walking into the reserved toolbar zone
+    stage.triggerDemo('walk');
+    for (let i = 0; i < 60; i++) stage.stepTick(1);
+    const snapWalk = stage.getLayoutSnapshot();
+    for (const a of snapWalk.actors) {
+      assert.ok(a.worldCx - 22 >= 320, `patrolling actor ${a.id} visual left (${a.worldCx - 22}) must stay >= 320`);
+    }
+    for (const mc of snapWalk.minis) {
+      assert.ok(mc.worldCx - 13 >= 320, `patrolling mini ${mc.id} visual left (${mc.worldCx - 13}) must stay >= 320`);
+    }
+
+    // Expanding leftReserveWidth dynamically pushes actors & minis right out of newly occupied zone
+    stage.setState({ leftReserveWidth: 420 });
+    const snapExpanded = stage.getLayoutSnapshot();
+    assert.equal(snapExpanded.leftReserveWidth, 420);
+    for (const a of snapExpanded.actors) {
+      assert.ok(a.worldCx - 22 >= 420, `actor ${a.id} visual left (${a.worldCx - 22}) must shift clear of leftReserveWidth=420`);
+    }
+    for (const mc of snapExpanded.minis) {
+      assert.ok(mc.worldCx - 13 >= 420, `mini ${mc.id} visual left (${mc.worldCx - 13}) must shift clear of leftReserveWidth=420`);
+    }
+
+    // Dual-sided reserve constrains all actors & minis into the middle open runway [200, 680 - 180]
+    stage.setState({ leftReserveWidth: 200, rightReserveWidth: 180 });
+    const snapMid = stage.getLayoutSnapshot();
+    assert.equal(snapMid.leftReserveWidth, 200);
+    assert.equal(snapMid.rightReserveWidth, 180);
+    for (const a of snapMid.actors) {
+      assert.ok(a.worldCx - 22 >= 200 && a.worldCx + 22 <= 500, `actor ${a.id} [${a.worldCx - 22}, ${a.worldCx + 22}] must stay inside [200, 500]`);
+    }
+    for (const mc of snapMid.minis) {
+      assert.ok(mc.worldCx - 13 >= 200 && mc.worldCx + 13 <= 500, `mini ${mc.id} [${mc.worldCx - 13}, ${mc.worldCx + 13}] must stay inside [200, 500]`);
+    }
+
+    // Malformed / negative values normalize safely to 0 without NaN corruption
+    stage.setState({ leftReserveWidth: Number.NaN, rightReserveWidth: -40 });
+    const snapCleared = stage.getLayoutSnapshot();
+    assert.equal(snapCleared.leftReserveWidth, 0);
+    assert.equal(snapCleared.rightReserveWidth, 0);
+  } finally {
+    stage.dispose();
+  }
+
+  // Interactive drag clamping respects leftReserveWidth and rightReserveWidth for both main actors and mini crabs
+  const hDrag = createInteractiveStageHarness({ mascot: 'dual-minis', camp: 'claude', reducedMotion: false });
+  try {
+    hDrag.stage.setState({ leftReserveWidth: 320, rightReserveWidth: 0 });
+    const c0 = hDrag.stage.getLayoutSnapshot().actors.find((a) => a.id === 'clawd');
+    const clawdEl = hDrag.findActorEl('clawd');
+    clawdEl.dispatch('pointerdown', { clientX: c0.worldCx, clientY: 100 });
+    clawdEl.dispatch('pointermove', { clientX: c0.worldCx - 900, clientY: 100 });
+    const cLeft = hDrag.stage.getLayoutSnapshot().actors.find((a) => a.id === 'clawd');
+    assert.equal(cLeft.worldCx - 22, 320, 'Dragging main actor left must clamp visual left to leftReserveWidth=320');
+    clawdEl.dispatch('pointerup', { clientX: c0.worldCx - 900, clientY: 100 });
+
+    const m0 = hDrag.stage.getLayoutSnapshot().minis.find((m) => m.id === 'cowboy');
+    const miniEl = hDrag.findMiniEl('cowboy');
+    miniEl.dispatch('pointerdown', { clientX: m0.worldCx, clientY: 100 });
+    miniEl.dispatch('pointermove', { clientX: m0.worldCx - 900, clientY: 100 });
+    const mLeft = hDrag.stage.getLayoutSnapshot().minis.find((m) => m.id === 'cowboy');
+    assert.equal(mLeft.worldCx - 13, 320, 'Dragging mini crab left must clamp visual left to leftReserveWidth=320');
+    miniEl.dispatch('pointerup', { clientX: m0.worldCx - 900, clientY: 100 });
+
+    hDrag.stage.setState({ leftReserveWidth: 0, rightReserveWidth: 300 });
+    const c1 = hDrag.stage.getLayoutSnapshot().actors.find((a) => a.id === 'clawd');
+    clawdEl.dispatch('pointerdown', { clientX: c1.worldCx, clientY: 100 });
+    clawdEl.dispatch('pointermove', { clientX: c1.worldCx + 900, clientY: 100 });
+    const cRight = hDrag.stage.getLayoutSnapshot().actors.find((a) => a.id === 'clawd');
+    assert.equal(cRight.worldCx + 22, 420, 'Dragging main actor right must clamp visual right to w-rightReserveWidth=420');
+    clawdEl.dispatch('pointerup', { clientX: c1.worldCx + 900, clientY: 100 });
+
+    const m1 = hDrag.stage.getLayoutSnapshot().minis.find((m) => m.id === 'cowboy');
+    miniEl.dispatch('pointerdown', { clientX: m1.worldCx, clientY: 100 });
+    miniEl.dispatch('pointermove', { clientX: m1.worldCx + 900, clientY: 100 });
+    const mRight = hDrag.stage.getLayoutSnapshot().minis.find((m) => m.id === 'cowboy');
+    assert.equal(mRight.worldCx + 13, 420, 'Dragging mini crab right must clamp visual right to w-rightReserveWidth=420');
+    miniEl.dispatch('pointerup', { clientX: m1.worldCx + 900, clientY: 100 });
+  } finally {
+    hDrag.stage.dispose();
+  }
+});

@@ -1487,7 +1487,8 @@
     let hasError = !!options.hasError;
     let yieldMode = options.yieldMode || 'none';
     let leapOffsetY = Number(options.leapOffsetY || 0);
-    let popoverRightWidth = Number(options.popoverRightWidth || 0);
+    const nR = (v) => (isFin(Number(v)) ? max(0, Number(v)) : 0);
+    let popoverRightWidth = nR(options.popoverRightWidth), leftReserveWidth = nR(options.leftReserveWidth), rightReserveWidth = nR(options.rightReserveWidth);
     let miniPileEnabled = !!roster.minis;
     let orchestrator = !!options.orchestrator;
     let prismaticCoat = readChromaSaved();
@@ -1573,12 +1574,15 @@
       try { e._pointerCleanup(); } catch {}
       e._pointerCleanup = null;
     };
+    const clrDomRef = (e) => {
+      e._ctx = e.el = e.canvas = e.lastDomX = e.lastDomY = e.lastDomZ = null;
+      e.lastDomRot = 0; e.lastDomDirect = e.lastDomDrag = undefined;
+    };
     const unmountMiniDom = (mc) => {
       if (!mc.canvas && !mc.el) return;
       dropPtrCleanup(mc);
       zeroCv(mc.canvas, true); rmNode(mc.canvas || mc.el);
-      mc.canvas = mc._ctx = mc.el = mc.lastFrameKey = mc.lastDomX = mc.lastDomY = mc.lastDomZ = null;
-      mc.lastDomRot = 0; mc.lastDomDirect = mc.lastDomDrag = undefined;
+      mc.lastFrameKey = null; clrDomRef(mc);
     };
     const syncMiniDom = (bindPtr = true) => {
       for (const mc of miniCrabs) {
@@ -1992,8 +1996,9 @@
     };
 
     const stageBoundsX = (w = readStageWidth()) => {
-      const r = popoverRightWidth > 0 ? min(w - 150, popoverRightWidth + 16) : 0;
-      return { minX: 14, maxX: max(96, w - 14 - r) };
+      const r = max(14 + (popoverRightWidth > 0 ? min(w - 150, popoverRightWidth + 16) : 0), rightReserveWidth > 0 ? min(max(14, w - 96), rightReserveWidth) : 14);
+      const minX = max(14, leftReserveWidth > 0 ? min(max(14, w - r - 82), leftReserveWidth) : 14);
+      return { minX, maxX: max(minX + 82, w - r) };
     };
     const entBounds = (mini, w = readStageWidth()) => {
       const { minX, maxX } = stageBoundsX(w), hw = mini ? 13 : 22, off = mini ? 32 : 48, lo = minX + hw - off;
@@ -2142,12 +2147,17 @@
       }
     };
 
+    const clampMinis = () => {
+      const { minPx, maxPx } = crabBoundsPx();
+      for (const m of miniCrabs) if (!m.dragging && !m.stackedOn && !m.act && !m.leap) { const c = isFin(m.px) ? m.px : m.x; if (c < minPx || c > maxPx) m.px = m.lastX = round(clamp(c, minPx, maxPx)); }
+    };
+
     const getRestPositions = () => {
       const mains = activeMainActors();
       const n = mains.length;
       if (n === 0) return {};
-      const w = readStageWidth();
-      const safeRight = popoverRightWidth > 0 ? max(185, w - popoverRightWidth - 18) : w - 12;
+      const w = readStageWidth(), { maxX } = stageBoundsX(w), { minAx } = actorBoundsX(w);
+      const safeRight = popoverRightWidth > 0 ? max(185, w - popoverRightWidth - 18) : rightReserveWidth > 0 ? maxX + 2 : w - 12;
       const leaderX = clampActorX(safeRight - 82);
       if (n === 1) return { [mains[0].id]: leaderX };
       if (n === 2 && roster.c === 1 && roster.k === 1 && !roster.d && !roster.w) {
@@ -2155,7 +2165,7 @@
         return camp === 'claude' ? { clawd: leaderX, cat: partnerX } : { cat: leaderX, clawd: partnerX };
       }
       const lead = leaderActor() || mains[0];
-      const step = min(62, max(34, floor((leaderX - 16) / max(1, n - 1))));
+      const step = min(62, max(28, floor((leaderX - max(16, minAx)) / max(1, n - 1))));
       const restOrder = mains.filter((a) => a !== lead);
       const pos = { [lead.id]: leaderX };
       restOrder.forEach((a, idx) => {
@@ -2177,6 +2187,7 @@
         a.x = target;
         if (a.y > 0) a.y = 0;
       }
+      clampMinis();
       enforceGroundSeparation();
     };
 
@@ -3201,11 +3212,8 @@
 
     const canTheater = () => !disposed && !dozing && !parked && !isHostDetached() && !isDocHidden() && !isHostSleeping() && !isWindowBlurred() && !isPpOpen();
     const pickNextTheater = () => {
-      if (disposed || isHostDetached() || parked) {
-        theaterTimer = 0;
-        return;
-      }
-      if (!stageBusy() && !reducedMotion && !dozing && !isHostSleeping() && !isWindowBlurred() && !isPpOpen()) {
+      if (disposed || isHostDetached() || parked) { theaterTimer = 0; return; }
+      if (!stageBusy() && !reducedMotion && canTheater()) {
         const now = nowMs();
         const mains = activeMainActors();
         const allIdle = mains.every((a) => !a.overridePose || now >= a.overrideUntil);
@@ -3669,22 +3677,14 @@
       ent._pointerCleanup = unbind; cleanups.push(unbind);
     };
 
-    const unmountActorDom = (actor) => {
-      if (!actor) return;
-      actor.stackedOn = null;
-      for (const e of [...Object.values(actors), ...miniCrabs]) {
-        if (e?.stackedOn === actor.id) { e.stackedOn = null; e.y = 0; }
-      }
-      resetActorTransient(actor);
-      actor.dragging = false;
-      actor.y = 0;
-      dropPtrCleanup(actor);
-      zeroCv(actor.canvas, 1);
-      rmNode(actor.el);
-      actor._ctx = actor.el = actor.canvas = actor.lastDomX = actor.lastDomY = actor.lastDomZ = null;
-      actor.lastDomRot = 0;
-      actor.lastDomDirect = actor.lastDomDrag = undefined;
-      if (actor.lastRender) { actor.lastRender.poseKey = null; actor.lastRender.cw = actor.lastRender.ch = 0; }
+    const unmountActorDom = (a) => {
+      if (!a) return;
+      a.stackedOn = null;
+      for (const e of [...Object.values(actors), ...miniCrabs]) if (e?.stackedOn === a.id) { e.stackedOn = null; e.y = 0; }
+      resetActorTransient(a); a.dragging = false; a.y = 0;
+      dropPtrCleanup(a); zeroCv(a.canvas, 1); rmNode(a.el);
+      clrDomRef(a);
+      if (a.lastRender) a.lastRender.poseKey = null, a.lastRender.cw = a.lastRender.ch = 0;
     };
 
     const syncRosterActors = () => {
@@ -3731,20 +3731,14 @@
       [...activeMainActors(), ...miniCrabs].some(
         (e) => e.dragging || e.ballisticActive || e.leap || e.y < -0.4 || abs(e.vy) > 0.01
       ) || !!reboundTm;
+    const canDrawNow = () => !isVramSleepState() && !isWindowBlurred() && !isPpOpen();
     const syncPwr = () => {
       if (disposed) return;
-      if (isHostDetached() || parked || isDocHidden() || isHostSleeping()) {
-        syncHeartbeat();
-        reclaimStageVram();
-        return;
-      }
-      if (!isAttrB()) {
-        wb = false;
-        if (dozing && !isDocHidden() && !isHostSleeping()) { wakeUp(); return; }
-      }
+      if (isHostDetached() || parked || isDocHidden() || isHostSleeping()) { syncHeartbeat(); reclaimStageVram(); return; }
+      if (!isAttrB()) { wb = false; if (dozing) { wakeUp(); return; } }
       syncHeartbeat();
       if (!theaterTimer && currentTickMs > 0 && !dozing && !reducedMotion) scheduleTheater();
-      if (!isWindowBlurred() && !isHostSleeping() && !isPpOpen()) renderAllFrames();
+      if (canDrawNow()) renderAllFrames();
     };
     const onWBlur = () => {
       if (disposed) return;
@@ -3770,7 +3764,7 @@
         if (resizeEnded) onStageResizeReleased();
         if (Array.isArray(records) && records.some((r) => r && (r.attributeName === IGN_RM || r.attributeName === MOT_A))) onReducedChange(reducedMq);
         if (!Array.isArray(records) || records.some((r) => !r || !r.attributeName || r.attributeName === WB || r.attributeName === PM || r.attributeName === PP_OPEN || r.attributeName === PERF_M)) syncPwr();
-        else if (records.some((r) => r && HAB_THEME_ATTRS.includes(r.attributeName)) && !isVramSleepState() && !isWindowBlurred() && !isPpOpen()) renderAllFrames();
+        else if (records.some((r) => r && HAB_THEME_ATTRS.includes(r.attributeName)) && canDrawNow()) renderAllFrames();
       };
       const dBus = win && (win.__agDomBus || win.__agPrismDomBus);
       let unBus = null;
@@ -4155,16 +4149,13 @@
         for (const w of workers) startClip(w, 'salute', 900, { sym: 'spark' });
         for (const p of activeMainActors()) if (!workers.includes(p)) startClip(p, 'lookNod', 1200, { face: faceToward(p, leader), param: 2 });
       },
-      'host-sleep'(p) {
-        hostSleep = !!(p?.sleep); syncHeartbeat();
-        if (hostSleep || isVramSleepState()) reclaimStageVram();
-        else if (!isWindowBlurred()) renderAllFrames();
-      },
+      'host-sleep'(p) { hostSleep = !!(p?.sleep); syncVis(); },
       'roof-land'() {
         if (reducedMotion || dozing || yieldMode === 'peek' || isVramSleepState()) return;
         for (const a of activeMainActors()) if (!a.dragging && !a.seq) startClip(a, 'squash', 240);
       },
     };
+    const syncVis = () => { syncHeartbeat(); if (isVramSleepState()) reclaimStageVram(); else if (!isWindowBlurred()) renderAllFrames(); };
     const handleNotify = (event, payload) => {
       if (disposed) return;
       const fn = hasOwn(NOTIFY, event) ? NOTIFY[event] : null;
@@ -4185,11 +4176,7 @@
       hostEl.addEventListener('pointermove', onApproach, { passive: true });
       cleanups.push(() => { hostEl.removeEventListener('pointerenter', onApproach); hostEl.removeEventListener('pointermove', onApproach); });
     }
-    const onVisibilityChange = () => {
-      if (disposed) return;
-      syncHeartbeat();
-      if (isVramSleepState()) reclaimStageVram(); else if (!isWindowBlurred()) renderAllFrames();
-    };
+    const onVisibilityChange = () => { if (!disposed) syncVis(); };
     if (doc && isFn(doc.addEventListener)) {
       doc.addEventListener('visibilitychange', onVisibilityChange);
       cleanups.push(() => { doc.removeEventListener('visibilitychange', onVisibilityChange); });
@@ -4207,25 +4194,19 @@
       syncAllStackedFollowers(); renderAllFrames(); return true;
     };
 
+    const setOptA = (el, k, on, v) => (on ? el?.setAttribute?.(k, v) : el?.removeAttribute?.(k));
     const syncPeekInteractivity = () => {
       const isPeek = yieldMode === 'peek';
       if (hostEl) {
-        if (isPeek) hostEl.setAttribute?.('data-ag-mascot-peek', '1');
-        else hostEl.removeAttribute?.('data-ag-mascot-peek');
-        if (hostEl.style) {
-          hostEl.style.pointerEvents = isPeek ? 'none' : '';
-          hostEl.style.zIndex = isPeek ? '8' : '';
-        }
+        setOptA(hostEl, 'data-ag-mascot-peek', isPeek, '1');
+        if (hostEl.style) { hostEl.style.pointerEvents = isPeek ? 'none' : ''; hostEl.style.zIndex = isPeek ? '8' : ''; }
       }
-      if (isPeek) {
-        dragReleaseHooks.forEach((fn) => { try { fn(); } catch {} });
-      }
+      if (isPeek) dragReleaseHooks.forEach((fn) => { try { fn(); } catch {} });
       for (const a of activeMainActors()) {
         if (!a?.el) continue;
-        if (isPeek && !a.dragging) { a.seq = null; a.overridePose = null; a.overrideUntil = 0; }
+        if (isPeek && !a.dragging) { a.seq = a.overridePose = null; a.overrideUntil = 0; }
         a.el.setAttribute?.('tabindex', '-1');
-        if (isPeek) a.el.setAttribute?.('aria-hidden', 'true');
-        else a.el.removeAttribute?.('aria-hidden');
+        setOptA(a.el, 'aria-hidden', isPeek, 'true');
         if (a.el.style) a.el.style.pointerEvents = isPeek ? 'none' : '';
         applyActorTransform(a, nowMs());
       }
@@ -4247,40 +4228,43 @@
 
     return {
       setState(next = {}) {
-        const prev = [popoverRightWidth, camp, streaming, streamTier, hasError, yieldMode, leapOffsetY, miniPileEnabled, quadEnabled, orchestrator, reducedMotion, mascotSpec];
-        if (next.camp !== undefined) camp = normalizeCamp(next.camp);
-        if (next.streaming !== undefined) streaming = !!next.streaming;
-        if (next.streamTier !== undefined) streamTier = Number(next.streamTier || 2);
-        if (next.hasError !== undefined) hasError = !!next.hasError;
-        if (next.yieldMode !== undefined) yieldMode = next.yieldMode || 'none';
-        if (next.leapOffsetY !== undefined) leapOffsetY = Number(next.leapOffsetY || 0);
-        if (next.popoverRightWidth !== undefined) popoverRightWidth = Number(next.popoverRightWidth || 0);
-        if (next.orchestrator !== undefined) orchestrator = !!next.orchestrator;
-        if (next.reducedMotion !== undefined) {
-          reducedMotion = resolveRm(next.reducedMotion);
+        const prev = [popoverRightWidth, camp, streaming, streamTier, hasError, yieldMode, leapOffsetY, miniPileEnabled, quadEnabled, orchestrator, reducedMotion, mascotSpec, leftReserveWidth, rightReserveWidth];
+        const { camp: c, streaming: st, streamTier: tr, hasError: er, yieldMode: ym, leapOffsetY: ly, popoverRightWidth: pw, leftReserveWidth: lw, rightReserveWidth: rw, orchestrator: or, reducedMotion: rm, mascot: ms, quadEnabled: qe, miniPileEnabled: mp } = next;
+        if (c !== undefined) camp = normalizeCamp(c);
+        if (st !== undefined) streaming = !!st;
+        if (tr !== undefined) streamTier = Number(tr || 2);
+        if (er !== undefined) hasError = !!er;
+        if (ym !== undefined) yieldMode = ym || 'none';
+        if (ly !== undefined) leapOffsetY = Number(ly || 0);
+        if (pw !== undefined) popoverRightWidth = nR(pw);
+        if (lw !== undefined) leftReserveWidth = nR(lw);
+        if (rw !== undefined) rightReserveWidth = nR(rw);
+        if (or !== undefined) orchestrator = !!or;
+        if (rm !== undefined) {
+          reducedMotion = resolveRm(rm);
           if (reducedMotion && !prev[10]) freezeMotion();
           else if (!reducedMotion && prev[10]) lastActivityAt = nowMs();
         }
         let nextRoster = { ...roster }, rosterFromSpec = false;
-        if (next.mascot !== undefined) {
-          const parsed = parseMascotSpec(next.mascot);
+        if (ms !== undefined) {
+          const parsed = parseMascotSpec(ms);
           if (parsed) { nextRoster = parsed; rosterFromSpec = true; }
         }
         if (!rosterFromSpec) {
-          if (next.quadEnabled !== undefined) {
-            if (next.quadEnabled) {
-              if (!nextRoster.c && !nextRoster.k && !nextRoster.d && !nextRoster.w) { nextRoster.c = 1; nextRoster.k = 1; }
-              nextRoster.d = 1; nextRoster.w = 1;
+          if (qe !== undefined) {
+            if (qe) {
+              if (!nextRoster.c && !nextRoster.k && !nextRoster.d && !nextRoster.w) nextRoster.c = nextRoster.k = 1;
+              nextRoster.d = nextRoster.w = 1;
             } else {
-              nextRoster.d = 0; nextRoster.w = 0;
-              if (!nextRoster.c && !nextRoster.k) { nextRoster.c = 1; nextRoster.k = 1; }
+              nextRoster.d = nextRoster.w = 0;
+              if (!nextRoster.c && !nextRoster.k) nextRoster.c = nextRoster.k = 1;
             }
           }
-          if (next.miniPileEnabled !== undefined) nextRoster.minis = !!next.miniPileEnabled;
+          if (mp !== undefined) nextRoster.minis = !!mp;
         }
         roster = nextRoster; mascotSpec = encodeMascotSpec(nextRoster);
         quadEnabled = nextRoster.d > 0 || nextRoster.w > 0; miniPileEnabled = !!nextRoster.minis;
-        const cur = [popoverRightWidth, camp, streaming, streamTier, hasError, yieldMode, leapOffsetY, miniPileEnabled, quadEnabled, orchestrator, reducedMotion, mascotSpec];
+        const cur = [popoverRightWidth, camp, streaming, streamTier, hasError, yieldMode, leapOffsetY, miniPileEnabled, quadEnabled, orchestrator, reducedMotion, mascotSpec, leftReserveWidth, rightReserveWidth];
         if (cur.every((v, i) => v === prev[i])) return;
         if (mascotSpec !== prev[11] || quadEnabled !== prev[8]) {
           if (syncRosterActors()) { resetHomePositions(false); syncPeekInteractivity(); }
@@ -4288,40 +4272,33 @@
           syncMiniDom(true);
           syncPeekInteractivity();
         }
+        const rChg = leftReserveWidth !== prev[12] || rightReserveWidth !== prev[13];
         if (camp !== prev[1]) {
           markActivity(); campHandoff(prev[1]);
-          if (nowMs() - lastHandoffAt > 50) resetHomePositions(popoverRightWidth !== prev[0]);
+          if (nowMs() - lastHandoffAt > 50) resetHomePositions(popoverRightWidth !== prev[0] || rChg);
         } else if (popoverRightWidth !== prev[0] || miniPileEnabled !== prev[7]) {
           resetHomePositions(popoverRightWidth !== prev[0]);
+        } else if (rChg) {
+          const { minAx, maxAx } = actorBoundsX();
+          for (const a of activeMainActors()) if (!a.dragging && !a.stackedOn && (a.x < minAx || a.x > maxAx)) { a.x = clampActorX(a.x); a.sideEdgeSnap = false; a.sidePushOriginX = null; }
+          clampMinis();
+          enforceGroundSeparation();
         }
         if (yieldMode !== prev[5] || leapOffsetY !== prev[6]) syncPeekInteractivity();
         if (reducedMotion !== prev[10] || streaming !== prev[2]) syncHeartbeat();
         renderAllFrames();
       },
-      notify(event, payload = {}) {
-        handleNotify(event, payload);
-      },
-      stackOnto(riderId, holderId) {
-        return mountOntoStack(riderId, holderId);
-      },
+      notify: handleNotify,
+      stackOnto: mountOntoStack,
       pullFromStack(id, mode = 'settle') {
         const ent = getEnt(id);
         if (!ent) return false;
-        if (mode === 'sideHop') {
-          return dismountRidersSideHop(ent.id);
-        }
+        if (mode === 'sideHop') return dismountRidersSideHop(ent.id);
         const origCx = getEntWorldCx(ent);
-        detachWithGravitySettle(ent.id);
-        resetActorTransient(ent);
-        ent.y = 0;
-        setEntWorldCx(ent, origCx - 64);
-        enforceGroundSeparation();
-        renderAllFrames();
-        return true;
+        detachWithGravitySettle(ent.id); resetActorTransient(ent); ent.y = 0;
+        setEntWorldCx(ent, origCx - 64); enforceGroundSeparation(); renderAllFrames(); return true;
       },
-      triggerObstacle(moverId, obstacleId, forcedAction = null) {
-        return triggerObstacleEncounter(moverId, obstacleId, forcedAction);
-      },
+      triggerObstacle: triggerObstacleEncounter,
       triggerDemo(kind) {
         const now = nowMs(), leader = leaderActor(), partner = partnerActor();
         inspectState = null;
@@ -4441,7 +4418,7 @@
       setHabitatPreview(mode = 'auto') {
         habitatPreview = mode === 'auto' || HABITAT_MODES.includes(mode) ? mode : 'auto';
         renderHabitatProp(true);
-        if (!isVramSleepState() && !isWindowBlurred() && !isPpOpen()) renderAllFrames();
+        if (canDrawNow()) renderAllFrames();
         return resolveHabitatMode();
       },
       onUserType(text = '') {
@@ -4485,13 +4462,14 @@
           const nq = evalRimQ(a);
           return `${nq[0]},${nq[1]}` !== prevQ[i] || (nq[0] > 0 && (t !== prevT || d !== prevD));
         });
-        if (!changed || isVramSleepState() || isWindowBlurred() || isPpOpen()) return;
+        if (!changed || !canDrawNow()) return;
         renderAllFrames();
       },
       getLayoutSnapshot() {
         const now = nowMs(), habMode = resolveHabitatMode(), habLight = evalActorHabLight(actors.clawd || activeMainActors()[0] || null, habMode);
         return {
           camp, mascot: mascotSpec, roster: { ...roster }, miniPileEnabled, quadEnabled, reducedMotion, yieldMode, dozing, orchestrator,
+          leftReserveWidth, rightReserveWidth,
           rimLight: { active: rim.on, strength: round(rim.s * 100) / 100, toneKey: rim.t },
           habitat: { mode: habMode, lightKind: HABITAT_LIGHT_KIND[habMode] || null, poolSize: HABITAT_MODES.length, clawdLightStrength: habLight.strength, scheduleActive: getWallNow() < scheduleWatchUntil },
           towers: listAllTowers(),
@@ -4514,8 +4492,8 @@
         };
       },
       getDebugState() { const snap = this.getLayoutSnapshot(); return { ...snap, habitat: { ...snap.habitat, preview: habitatPreview } }; },
-      park(on = true) { if (disposed) return; parked = !!on; syncHeartbeat(); if (parked) reclaimStageVram(); else if (!isVramSleepState() && !isWindowBlurred()) renderAllFrames(); },
-      resume() { if (disposed) return; parked = false; syncHeartbeat(); if (!isVramSleepState() && !isWindowBlurred() && !isPpOpen()) renderAllFrames(); },
+      park(on = true) { if (!disposed) { parked = !!on; syncVis(); } },
+      resume() { if (!disposed) { parked = false; syncHeartbeat(); if (canDrawNow()) renderAllFrames(); } },
       syncPowerState: syncPwr, getHopBridge: getHopApi, destroy() { this.dispose(); },
       dispose() {
         disposed = true; rim.on = false; rim.s = 0; rimSig = '0';
