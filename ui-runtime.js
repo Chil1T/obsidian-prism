@@ -2,7 +2,7 @@
 if (typeof module === 'object' && module.exports) module.exports = factory;
 else root.__agCsUiMain = factory;
 })(typeof globalThis !== 'undefined' ? globalThis : window, function (initialConfig) {
-const VERSION = '1.0.8-beta.5';
+const VERSION = '1.0.8-beta.6';
 const D = document, W = window, GT = globalThis, ST = setTimeout, CT = clearTimeout, O = Object, AF = Array.from, isA = Array.isArray, M = Math, mx = M.max, mn = M.min, rd = M.round, SJ = JSON.stringify, LS = typeof localStorage !== 'undefined' ? localStorage : null;
 const cT = (t) => { if (t) CT(t); return 0; }, dNow = () => Date.now(), pNow = () => performance.now();
 const rAF = (f) => (typeof requestAnimationFrame === 'function' ? requestAnimationFrame(f) : 0), cAF = (id) => { if (id && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(id); return 0; };

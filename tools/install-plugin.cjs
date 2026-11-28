@@ -38,7 +38,7 @@ function resolveDefaultPluginVersion(sourceDir = ROOT_DIR) {
     const pkg = JSON.parse(fs.readFileSync(path.join(sourceDir || ROOT_DIR, "package.json"), "utf8"));
     if (pkg && typeof pkg.version === "string" && pkg.version.trim()) return pkg.version.trim();
   } catch {}
-  return PLUGIN_VERSION || "1.0.8-beta.5";
+  return PLUGIN_VERSION || "1.0.8-beta.6";
 }
 
 function isAutomatedTestRuntime() {
