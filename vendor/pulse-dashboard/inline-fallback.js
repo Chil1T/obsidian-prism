@@ -63,9 +63,11 @@ const n=+(b.remaining??b.remainingFraction);
 return isFin(n)?{r:Math.max(0,Math.min(1,n)),t:b.resetAt??b.resetTime}:null;
 };
 const hasAvailQWin=g=>!!(qWin(g?.windows?.['5h']||g?.fiveHour)||qWin(g?.windows?.weekly||g?.weekly));
+const Q_AR=/argon|wtu/i,Q_CL=/claude|anthropic|gpt|openai/i,Q_GM=/gemini|google/i;
 const qKind=g=>{
-const k=`${g.id||''} ${g.name||''} ${g.description||''} ${g.windows?.['5h']?.id||''} ${g.windows?.weekly?.id||''}`.toLowerCase();
-return /argon|wtu/.test(k)?'argon':/claude|anthropic|gpt|openai/.test(k)?'claude':/gemini|google/.test(k)?'gemini':'other';
+if(!g||typeof g!=='object')return 'other';
+const w=g.windows,m=(s,fb)=>(!fb&&Q_AR.test(s)?'argon':Q_CL.test(s)?'claude':Q_GM.test(s)?'gemini':fb&&Q_AR.test(s)?'argon':'');
+return m([g.id,g.groupId,g.name,g.label,g.displayName,w?.['5h']?.id||g.fiveHour?.id,w?.weekly?.id||g.weekly?.id].join(' '))||(g.description&&m(g.description,1))||'other';
 };
 function chooseQuotaGroupFallback(groups,model){
 const list=Array.isArray(groups)?groups.filter(g=>g&&typeof g==='object'):[];
@@ -844,7 +846,7 @@ yld=false;lSg='';dAt=0;lS=null;lHr='';lUC='';pxM=false;
 }
 
 const notifyCompact=(cid=null,delays=null)=>armB(null,cid,delays);
-const api={BAR_ID:BI,PRISM_BAR_ID:PI,PRISM_BAR_ATTR:PA,FALLBACK_ATTR:FA,METRICS_BINDING:MB,sync,destroy,refresh,notifyCompact,chooseQuotaGroupFallback,getLatestSnapshot:()=>actIn()?.snap||lS,getSnapshotForBar,getBars,getPrimaryBar:()=>gPI()?.host||null,getActiveBar:()=>actIn()?.host||null,setActiveBar,getBarForView:gBV,getState,createTelemetryController};
+const api={BAR_ID:BI,PRISM_BAR_ID:PI,PRISM_BAR_ATTR:PA,FALLBACK_ATTR:FA,METRICS_BINDING:MB,sync,destroy,refresh,notifyCompact,qKind,chooseQuotaGroupFallback,getLatestSnapshot:()=>actIn()?.snap||lS,getSnapshotForBar,getBars,getPrimaryBar:()=>gPI()?.host||null,getActiveBar:()=>actIn()?.host||null,setActiveBar,getBarForView:gBV,getState,createTelemetryController};
 return api;
 }
 

@@ -537,50 +537,48 @@ losttime|1647000|追忆似水年华|追憶似水年華|失われた時を求め�
   }
 
   // ── v0.9.1 Quota Pools, Argon Weekly Allowance & Linear Depletion Forecast ──
-  function quotaGroupKind(group) {
-    if (!group || typeof group !== 'object') return 'other';
-    const w5 = group.windows?.['5h']?.id || group.fiveHour?.id || '';
-    const ww = group.windows?.weekly?.id || group.weekly?.id || '';
-    const hay = `${group.id || ''} ${group.name || ''} ${group.description || ''} ${w5} ${ww}`.toLowerCase();
-    if (/argon|wtu/.test(hay)) return 'gemini-argon';
-    if (/claude|anthropic|gpt|openai/.test(hay)) return 'claude';
-    if (/gemini|google/.test(hay)) return 'gemini';
-    return 'other';
+  const isObj = (v) => !!(v && typeof v === 'object');
+  const Q_AR = /argon|wtu/i, Q_CL = /claude|anthropic|gpt|openai/i, Q_GM = /gemini|google/i;
+  const qKindOf = (s, fb) => (!fb && Q_AR.test(s) ? 'gemini-argon' : Q_CL.test(s) ? 'claude' : Q_GM.test(s) ? 'gemini' : fb && Q_AR.test(s) ? 'gemini-argon' : '');
+  function quotaGroupKind(g) {
+    if (!isObj(g)) return 'other';
+    const w = g.windows;
+    return qKindOf([g.id, g.groupId, g.name, g.label, g.displayName, w?.['5h']?.id || g.fiveHour?.id, w?.weekly?.id || g.weekly?.id].join(' ')) || (g.description && qKindOf(g.description, 1)) || 'other';
   }
 
   const Q_KIND_LBL = { 'gemini-argon': 'Gemini (Argon)', claude: 'Claude / GPT', gemini: 'Gemini' };
   const Q_POOL_FB = '模型配额|模型配額|Quota Pool|クォータ|할당량 풀|Cuota|Quota|Kontingent'.split('|');
-  function quotaGroupLabel(group, langOrZh) {
-    return Q_KIND_LBL[quotaGroupKind(group)] || String(group?.name || group?.id || '').trim() || pick8(Q_POOL_FB, langOrZh);
+  function quotaGroupLabel(g, langOrZh) {
+    return Q_KIND_LBL[quotaGroupKind(g)] || String(g?.name || g?.id || '').trim() || pick8(Q_POOL_FB, langOrZh);
   }
 
-  function quotaRemaining(bucket) {
-    if (!bucket || typeof bucket !== 'object' || bucket.available === false || bucket.disabled === true) return null;
-    if (bucket.expired === true) return 1;
-    const r = numOr(bucket.remaining ?? bucket.remainingFraction);
+  function quotaRemaining(b) {
+    if (!isObj(b) || b.available === false || b.disabled === true) return null;
+    if (b.expired === true) return 1;
+    const r = numOr(b.remaining ?? b.remainingFraction);
     const n = typeof r === 'number' ? r : typeof r === 'string' && r.trim() ? Number(r) : NaN;
     return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : null;
   }
 
-  function quotaWindows(group) {
-    if (!group || typeof group !== 'object') return [];
-    return [['5h', group.windows?.['5h'] || group.fiveHour], ['weekly', group.windows?.weekly || group.weekly]].filter(([, b]) => b && quotaRemaining(b) !== null);
+  function quotaWindows(g) {
+    if (!isObj(g)) return [];
+    return [['5h', g.windows?.['5h'] || g.fiveHour], ['weekly', g.windows?.weekly || g.weekly]].filter(([, b]) => b && quotaRemaining(b) !== null);
   }
 
-  function chooseQuotaGroup(groups, models, selectedId) {
-    const list = Array.isArray(groups) ? groups.filter((g) => g && typeof g === 'object') : [];
+  function chooseQuotaGroup(groups, models, sid) {
+    const list = Array.isArray(groups) ? groups.filter(isObj) : [];
     if (!list.length) return null;
-    if (selectedId) {
-      const hit = list.find((g) => g.id === selectedId || g.name === selectedId);
+    if (sid) {
+      const hit = list.find((g) => g.id === sid || g.name === sid);
       if (hit) return hit;
     }
     const byK = (k) => list.find((g) => quotaGroupKind(g) === k);
-    const modelStr = (Array.isArray(models) ? models.join(' ') : String(models || '')).toLowerCase();
-    const pick = /argon/.test(modelStr)
+    const ms = (Array.isArray(models) ? models.join(' ') : String(models || '')).toLowerCase();
+    const pick = /argon/.test(ms)
       ? byK('gemini-argon') || byK('gemini')
-      : /claude|anthropic|sonnet|opus|haiku|gpt|openai|o1|o3|o4/.test(modelStr)
+      : /claude|anthropic|sonnet|opus|haiku|gpt|openai|o1|o3|o4/.test(ms)
       ? byK('claude')
-      : /gemini|carbon|hydrogen|pro|flash/.test(modelStr)
+      : /gemini|carbon|hydrogen|pro|flash/.test(ms)
       ? byK('gemini') || byK('gemini-argon')
       : null;
     return pick || list.find((g) => quotaWindows(g).length > 0) || list[0];
@@ -608,7 +606,7 @@ losttime|1647000|追忆似水年华|追憶似水年華|失われた時を求め�
     const rem = quotaRemaining(bucket);
     if (rem === null) return null;
     const now = numOr(nowMs);
-    const spanMs = windowKey === 'weekly' ? 7 * 86400 * 1000 : 5 * 3600 * 1000;
+    const spanMs = windowKey === 'weekly' ? 6048e5 : 18e6;
     const r0 = numOr(bucket?.resetAt ?? bucket?.resetTime);
     const resetMs = typeof r0 === 'number' ? (r0 > 1e11 ? r0 : r0 * 1000) : (tsToMs(r0) || NaN);
     const mkFc = (endRemaining, forecastDrop, willExhaust, exhaustInMs, paceRatio, status, resetAtMs, resetInMs) => ({
@@ -622,9 +620,9 @@ losttime|1647000|追忆似水年华|追憶似水年華|失われた時を求め�
     const leftMs = Math.max(0, Math.min(spanMs, resetMs - now));
     const elapsedMs = Math.max(0, spanMs - leftMs);
     const used = Math.max(0, 1 - rem);
-    const minSmoothMs = windowKey === 'weekly' ? 2 * 3600 * 1000 : 15 * 60 * 1000;
+    const minSmoothMs = windowKey === 'weekly' ? 72e5 : 9e5;
 
-    if (used < 0.005 || elapsedMs < 3 * 60 * 1000) {
+    if (used < 0.005 || elapsedMs < 18e4) {
       return mkFc(rem, 0, rem <= 0.005, rem <= 0.005 ? 0 : null, 0, rem <= 0.005 ? 'exhaust' : 'idle', resetMs, leftMs);
     }
 
